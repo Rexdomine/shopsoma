@@ -159,8 +159,9 @@ export default function Checkout() {
   };
   const selectedAddressNeedsPostalCode = dhlDomesticShipping && !isValidDhlPostalCode(selectedAddress?.postal_code);
   const selectedAddressPostalCodeGuidance = selectedAddress?.postal_code?.trim()
-    ? 'Update the selected delivery address with a postal code of 12 characters or fewer before continuing with DHL delivery (coming soon).'
-    : 'Add a postal code to the selected delivery address before continuing with DHL delivery (coming soon).';
+    ? 'Update the selected delivery address with a postal code of 12 characters or fewer before continuing with DHL delivery.'
+    : 'Add a postal code to the selected delivery address before continuing with DHL delivery.';
+
 
   // Shipping state
   const [shippingRates, setShippingRates] = useState<ShippingRate[]>([]);
@@ -629,46 +630,52 @@ export default function Checkout() {
       // Keep the committed currency immutable through close/retry windows;
       // Paystack callbacks may arrive after the iframe is dismissed.
       setCurrentPaymentGateway('paystack');
-      const handler = window.PaystackPop.setup({
-        ...widgetTruth,
-        callback: (response: { reference: string }) => {
-          paymentService.verifyPayment({
-            reference: response.reference,
-            payment_gateway: gateway,
-          }).then(() => {
-            preserveCheckoutCapabilityForReadback(order.id, checkoutCapability);
-            CartService.clearCart();
-            navigate(`${ROUTES.ORDER_SUCCESS}?orderId=${order.id}&payment=success`);
-          }).catch((error) => {
-            console.error('Payment verification error:', error);
-            if (order.checkout_access_mode === 'guest_capability' && checkoutCapability) {
-              const terminalAuthorization = error.response?.status === 404 || error.response?.status === 410;
-              setIsCreatingOrder(false);
-              if (terminalAuthorization) {
-                discardExpiredCheckout();
-                alert('Checkout access expired. Payment recovery is no longer available.');
-              } else {
-                setPaymentRetryAvailable(true);
-                alert('We could not confirm your payment yet. Your saved order is still available; retry payment to reconcile it.');
+      if (typeof window !== 'undefined' && window.PaystackPop?.setup) {
+        const handler = window.PaystackPop.setup({
+          ...widgetTruth,
+          callback: (response: { reference: string }) => {
+            paymentService.verifyPayment({
+              reference: response.reference,
+              payment_gateway: gateway,
+            }).then(() => {
+              preserveCheckoutCapabilityForReadback(order.id, checkoutCapability);
+              CartService.clearCart();
+              navigate(`${ROUTES.ORDER_SUCCESS}?orderId=${order.id}&payment=success`);
+            }).catch((error) => {
+              console.error('Payment verification error:', error);
+              if (order.checkout_access_mode === 'guest_capability' && checkoutCapability) {
+                const terminalAuthorization = error.response?.status === 404 || error.response?.status === 410;
+                setIsCreatingOrder(false);
+                if (terminalAuthorization) {
+                  discardExpiredCheckout();
+                  alert('Checkout access expired. Payment recovery is no longer available.');
+                } else {
+                  setPaymentRetryAvailable(true);
+                  alert('We could not confirm your payment yet. Your saved order is still available; retry payment to reconcile it.');
+                }
+                return;
               }
+              navigate(`${ROUTES.ORDER_SUCCESS}?orderId=${order.id}&payment=verification_failed`);
+            });
+          },
+          onClose: () => {
+            setIsCreatingOrder(false);
+            if (order.checkout_access_mode === 'guest_capability') {
+              setPaymentRetryAvailable(true);
+              alert('Payment cancelled. Your order is saved; retry payment when you are ready.');
               return;
             }
-            navigate(`${ROUTES.ORDER_SUCCESS}?orderId=${order.id}&payment=verification_failed`);
-          });
-        },
-        onClose: () => {
-          setIsCreatingOrder(false);
-          if (order.checkout_access_mode === 'guest_capability') {
-            setPaymentRetryAvailable(true);
-            alert('Payment cancelled. Your order is saved; retry payment when you are ready.');
-            return;
-          }
-          clearCheckoutCapability();
-          alert('Payment cancelled. You can retry payment from your orders page.');
-          navigate(`${ROUTES.ORDER_SUCCESS}?orderId=${order.id}&payment=cancelled`);
-        },
-      });
-      handler.openIframe();
+            clearCheckoutCapability();
+            alert('Payment cancelled. You can retry payment from your orders page.');
+            navigate(`${ROUTES.ORDER_SUCCESS}?orderId=${order.id}&payment=cancelled`);
+          },
+        });
+        handler.openIframe();
+      } else if (payload.authorization_url) {
+        window.location.href = payload.authorization_url;
+      } else {
+        throw new Error('Payment gateway could not be loaded. Please disable ad-blockers and try again.');
+      }
     } else if (gateway === 'stripe') {
       const payload = paymentData.provider_payload;
       if (
@@ -692,6 +699,7 @@ export default function Checkout() {
   };
 
   const initializeOrderPayment = async (order: Order, capability?: string) => {
+    if (isCreatingOrder) return;
     const existingPayment = currentOrderId === order.id && currentPaymentGateway;
     const gateway = existingPayment || paymentMethod;
     if (!commerceFeatures.stripe_enabled && existingPayment === 'stripe' && stripeClientSecret) {
@@ -1426,11 +1434,8 @@ export default function Checkout() {
                                   required={postalCodeRequired}
                                 />
                                 {postalCodeRequired && (
-                                  <p className="mt-1 text-xs text-gray-500 flex items-center gap-1.5">
-                                    <span>Required for DHL delivery estimates.</span>
-                                    <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-semibold bg-amber-100 text-amber-800 border border-amber-200">
-                                      Coming Soon
-                                    </span>
+                                  <p className="mt-1 text-xs text-gray-500">
+                                    Required for DHL delivery estimates.
                                   </p>
                                 )}
                               </div>
@@ -1529,7 +1534,45 @@ export default function Checkout() {
                   {renderStepTitle('Shipping Method', step === 'shipping' || step === 'payment')}
                   {secureShipping ? step === 'shipping' ? (
                     <div className="space-y-3 rounded-sm border border-gray-200 p-4">
-                      <p className="text-sm text-gray-700">We will prepare your order securely, then show the delivery options available for this address before payment.</p>
+                      {shippingProvider === 'combined' ? (
+                        <div>
+                          <div className="flex items-center gap-2 mb-1.5">
+                            <span className="font-semibold text-sm text-gray-900">DHL Express & Live Couriers</span>
+                            <span className="inline-flex items-center px-2 py-0.5 rounded text-[10px] font-semibold bg-emerald-100 text-emerald-800 border border-emerald-200">
+                              Live Rates
+                            </span>
+                          </div>
+                          <p className="text-sm text-gray-600">
+                            We will calculate live rates from DHL Express and Nigerian couriers (GIG Logistics, Topship, etc.) so you can select the best delivery choice.
+                          </p>
+                        </div>
+                      ) : shippingProvider === 'dhl' ? (
+                        <div>
+                          <div className="flex items-center gap-2 mb-1.5">
+                            <span className="font-semibold text-sm text-gray-900">DHL Express</span>
+                            <span className="inline-flex items-center px-2 py-0.5 rounded text-[10px] font-semibold bg-amber-100 text-amber-800 border border-amber-200">
+                              Live Rates
+                            </span>
+                          </div>
+                          <p className="text-sm text-gray-600">
+                            We will calculate live rates and estimated delivery dates directly from DHL Express for this address.
+                          </p>
+                        </div>
+                      ) : shippingProvider === 'shipbubble' ? (
+                        <div>
+                          <div className="flex items-center gap-2 mb-1.5">
+                            <span className="font-semibold text-sm text-gray-900">ShipBubble Couriers</span>
+                            <span className="inline-flex items-center px-2 py-0.5 rounded text-[10px] font-semibold bg-emerald-100 text-emerald-800 border border-emerald-200">
+                              Live Rates
+                            </span>
+                          </div>
+                          <p className="text-sm text-gray-600">
+                            We will calculate live rates from Nigerian couriers (GIG Logistics, Topship, DHL, etc.) for this address.
+                          </p>
+                        </div>
+                      ) : (
+                        <p className="text-sm text-gray-700">We will prepare your order securely, then show the delivery options available for this address before payment.</p>
+                      )}
                       {!enforcedOrder ? (
                         <button
                           type="button"
@@ -1537,7 +1580,11 @@ export default function Checkout() {
                           disabled={isCreatingOrder || !hasEmail || !isEmailConfirmed}
                           className="w-full py-3 rounded-sm bg-primary text-white text-sm font-semibold disabled:opacity-50"
                         >
-                          {isCreatingOrder ? 'Loading delivery options…' : 'Continue to delivery options'}
+                          {shippingProvider === 'combined'
+                            ? (isCreatingOrder ? 'Calculating live delivery rates…' : 'Calculate live delivery rates')
+                            : shippingProvider === 'shipbubble'
+                            ? (isCreatingOrder ? 'Calculating live courier rates…' : 'Calculate live courier rates')
+                            : (isCreatingOrder ? 'Preparing delivery options…' : 'Continue to delivery options')}
                         </button>
                       ) : !checkoutEstimate ? (
                         isCreatingOrder ? (
@@ -1638,7 +1685,9 @@ export default function Checkout() {
                           estimate={checkoutEstimate}
                           selectOption={selectCheckoutOption}
                           refreshEstimate={refreshCheckoutEstimate}
+                          isSubmitting={isCreatingOrder}
                           onSelectionConfirmed={(selectedEstimate) => {
+                            if (isCreatingOrder) return;
                             const selectedOption = selectedEstimate.selected_option;
                             const validSelectedTruth = Boolean(
                               selectedOption
@@ -1788,9 +1837,9 @@ export default function Checkout() {
                       ?? (orderReview ? reviewSummaryCurrency : currency),
                   )}</span>
                 </div>
-                <div className="flex items-center justify-between">
-                  <span>{checkoutEstimate?.selected_option?.service_label ?? 'Shipping cost'}</span>
-                  <span>{checkoutEstimate?.selected_option
+                <div className="flex items-start justify-between gap-3">
+                  <span className="min-w-0 break-words">{checkoutEstimate?.selected_option?.service_label ?? 'Shipping cost'}</span>
+                  <span className="shrink-0 whitespace-nowrap">{checkoutEstimate?.selected_option
                     ? formatServerMoney(checkoutEstimate.selected_option.amount, checkoutEstimate.selected_option.currency)
                     : committedLegacyOrder
                       ? formatPrice(committedLegacyOrder.shipping_cost, committedLegacyOrder.currency)

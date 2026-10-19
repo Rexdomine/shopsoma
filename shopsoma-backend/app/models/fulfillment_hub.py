@@ -3,6 +3,7 @@
 import uuid
 
 from sqlalchemy import (
+    BigInteger,
     Boolean,
     CheckConstraint,
     Column,
@@ -94,6 +95,7 @@ class FulfillmentHub(Base):
         ForeignKey("users.id", ondelete="RESTRICT"),
         nullable=True,
     )
+    shipbubble_address_code = Column(BigInteger, nullable=True)
     version = Column(Integer, nullable=False, default=1, server_default="1")
     created_at = Column(
         DateTime(timezone=True), nullable=False, server_default=func.now()

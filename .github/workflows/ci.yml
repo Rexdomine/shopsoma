@@ -6,6 +6,10 @@ on:
   push:
     branches: [develop, main]
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
 jobs:
   # Backend Tests and Linting
   backend-ci:
@@ -21,9 +25,11 @@ jobs:
           POSTGRES_PASSWORD: test_password
         options: >-
           --health-cmd pg_isready
-          --health-interval 10s
+          --health-interval 5s
           --health-timeout 5s
           --health-retries 5
+          --tmpfs /var/lib/postgresql/data:rw
+          --shm-size=256m
         ports:
           - 5432:5432
 
@@ -46,11 +52,10 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt
-          pip install pytest pytest-asyncio pytest-cov
+          pip install pytest pytest-asyncio pytest-cov pytest-xdist flake8
 
       - name: Run linting (flake8)
         run: |
-          pip install flake8
           flake8 app --count --select=E9,F63,F7,F82 --show-source --statistics
           flake8 app --count --exit-zero --max-complexity=10 --max-line-length=127 --statistics
         continue-on-error: true
@@ -68,7 +73,8 @@ jobs:
           USE_LOCAL_STORAGE: true
           ALLOW_LOCAL_STORAGE_IN_NON_DEV: true
         run: |
-          pytest tests/ -v --cov=app --cov-report=term-missing
+          python -c "import sqlalchemy as sa; e = sa.create_engine('postgresql://test_user:test_password@localhost:5432/postgres', isolation_level='AUTOCOMMIT'); c = e.connect(); c.exec_driver_sql('ALTER SYSTEM SET fsync = off'); c.exec_driver_sql('ALTER SYSTEM SET synchronous_commit = off'); c.exec_driver_sql('ALTER SYSTEM SET full_page_writes = off'); c.exec_driver_sql('SELECT pg_reload_conf()'); c.close(); e.dispose()"
+          pytest tests/ -n auto --dist loadfile -q --tb=short
 
   # Frontend Tests and Build
   frontend-ci:

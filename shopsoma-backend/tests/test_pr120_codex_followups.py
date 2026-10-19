@@ -886,6 +886,11 @@ def test_create_estimate_refresh_supersedes_current_unselected_leaf(monkeypatch)
     monkeypatch.setattr(module, "order_snapshot", lambda _order: ("dest-hash", "snap-hash"))
     monkeypatch.setattr(module, "_hash", lambda payload: "f" * 64)
     monkeypatch.setattr(module, "_estimate_expiry_delta", lambda ttl: timedelta(seconds=ttl))
+    monkeypatch.setattr(
+        module,
+        "domestic_shipping_capabilities",
+        lambda _settings: SimpleNamespace(provider_calls_enabled=False, checkout_enabled=False),
+    )
 
     async def reload_locked_order(_db, order_id, *, for_update=False):
         assert order_id == order.id

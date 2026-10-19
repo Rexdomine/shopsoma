@@ -25,11 +25,55 @@ export interface TrackingHistory {
   occurred_at: string;
 }
 
+export interface ShipbubbleLocationPoint {
+  lat: number;
+  lng: number;
+  name: string;
+  city: string;
+  state: string;
+  address: string;
+}
+
+export interface ShipbubbleCurrentLocation {
+  lat: number;
+  lng: number;
+  progress: number;
+  status_label: string;
+  updated_at: string;
+}
+
+export interface ShipbubbleTrackingData {
+  provider: 'shipbubble' | 'dhl';
+  is_sandbox: boolean;
+  is_booked: boolean;
+  booking_id?: string | null;
+  shipbubble_order_id?: string | null;
+  courier_name: string;
+  courier_image?: string | null;
+  service_code?: string | null;
+  delivery_eta?: string | null;
+  shipment_status: string;
+  tracking_code?: string | null;
+  tracking_url?: string | null;
+  waybill_document_url?: string | null;
+  origin: ShipbubbleLocationPoint;
+  destination: ShipbubbleLocationPoint;
+  current_location: ShipbubbleCurrentLocation;
+  route_waypoints: [number, number][];
+  events?: Array<{
+    status: string;
+    provider_status_code: string;
+    description: string;
+    occurred_at: string;
+  }>;
+}
+
 export interface OrderTracking {
   order_id: string;
   order_number: string;
   tracking_id: string;
   tracking_number?: string | null;
+  delivery_provider?: string | null;
   amount: number;
   currency: string;
   updated_at: string;
@@ -38,11 +82,30 @@ export interface OrderTracking {
   cancellation_reason?: string | null;
   cancelled_at?: string | null;
   history: TrackingHistory[];
+  shipbubble_tracking?: ShipbubbleTrackingData | null;
 }
 
 export const orderService = {
   async getOrderTracking(orderId: string, capability?: string): Promise<OrderTracking> {
     const response = await api.get(`/orders/${orderId}/tracking`, capabilityHeaders(capability));
+    return response.data;
+  },
+
+  async syncOrderTracking(orderId: string, capability?: string): Promise<OrderTracking> {
+    const response = await api.post(`/orders/${orderId}/tracking/sync`, {}, capabilityHeaders(capability));
+    return response.data;
+  },
+
+  async simulateOrderTracking(
+    orderId: string,
+    status: OrderStatus,
+    capability?: string,
+  ): Promise<OrderTracking> {
+    const response = await api.post(
+      `/orders/${orderId}/tracking/simulate`,
+      { status },
+      capabilityHeaders(capability),
+    );
     return response.data;
   },
 };

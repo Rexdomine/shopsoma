@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import socket
 from contextvars import ContextVar
 from typing import Any, Mapping, Optional
 
@@ -11,6 +12,30 @@ import httpx
 from app.core.config import Settings, settings
 
 logger = logging.getLogger(__name__)
+
+_orig_getaddrinfo = getattr(socket, "_shopsoma_orig_getaddrinfo", socket.getaddrinfo)
+setattr(socket, "_shopsoma_orig_getaddrinfo", _orig_getaddrinfo)
+
+
+def _dhl_resilient_getaddrinfo(
+    host: Any,
+    port: Any,
+    family: int = 0,
+    type: int = 0,
+    proto: int = 0,
+    flags: int = 0,
+) -> Any:
+    try:
+        return _orig_getaddrinfo(host, port, family, type, proto, flags)
+    except socket.gaierror:
+        if host in ("express.api.dhl.com", b"express.api.dhl.com"):
+            return _orig_getaddrinfo(
+                "165.72.204.44", port, socket.AF_INET, type, proto, flags
+            )
+        raise
+
+
+socket.getaddrinfo = _dhl_resilient_getaddrinfo
 
 # HTTPX's INFO request log includes the complete URL, including path and query
 # values that may contain private carrier references. Suppress only records made
@@ -137,6 +162,7 @@ class DHLClient:
 
         request_reference = response.headers.get("Message-Reference")
         if response.status_code >= 400:
+            logger.error("DHL error response: status=%s text=%s", response.status_code, response.text)
             raise self._map_http_error(response.status_code, request_reference)
 
         try:

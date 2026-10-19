@@ -125,8 +125,11 @@ async def test_admin_shadow_quote_persists_lawful_evidence_and_floors_planned_sh
         lambda **kwargs: adapter,
     )
 
+    frozen_date = date.today() + timedelta(days=5)
+    while (frozen_date + timedelta(days=1)).weekday() >= 5:
+        frozen_date += timedelta(days=1)
     frozen_now = datetime.combine(
-        date.today() + timedelta(days=5),
+        frozen_date,
         datetime.min.time().replace(hour=13),
         tzinfo=timezone.utc,
     )

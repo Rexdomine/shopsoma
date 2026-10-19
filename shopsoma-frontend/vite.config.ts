@@ -12,7 +12,7 @@ export default defineConfig({
   server: {
     proxy: {
       '/uploads': {
-        target: 'http://localhost:8000',
+        target: 'http://localhost:8050',
         changeOrigin: true,
       },
     },

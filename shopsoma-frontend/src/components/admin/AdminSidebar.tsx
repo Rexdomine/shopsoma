@@ -221,7 +221,7 @@ export default function AdminSidebar({ activeSection, activePrimary, mobileStack
       )}
 
       {/* Desktop sidebar */}
-      <aside className={`hidden md:flex ${isCollapsed ? 'md:w-[80px]' : 'md:w-[280px]'} border-r border-gray-200 min-h-screen sticky top-0 bg-[var(--color-page-bg)] px-4 py-6 flex-col justify-between transition-all duration-300 shrink-0`}>
+      <aside className={`hidden md:flex ${isCollapsed ? 'md:w-[80px]' : 'md:w-[280px]'} border-r border-gray-200 h-screen sticky top-0 overflow-y-auto bg-[var(--color-page-bg)] px-4 py-6 flex-col justify-between transition-all duration-300 shrink-0`}>
         <div className="space-y-6">
           {/* Top brand row */}
           <div className="flex items-center justify-between">

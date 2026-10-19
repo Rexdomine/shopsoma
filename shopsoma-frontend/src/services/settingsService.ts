@@ -22,15 +22,19 @@ export interface ExchangeRateUpdate {
   rate: number;
 }
 
+export type ShippingProviderOption = 'manual' | 'shipbubble' | 'dhl';
+
 export interface ShippingProviderSettings {
-  provider: 'manual' | 'shipbubble' | 'dhl';
+  provider: 'manual' | 'shipbubble' | 'dhl' | 'combined';
+  enabled_providers?: ShippingProviderOption[];
   use_shipbubble: boolean;
-  readiness: Record<'manual' | 'shipbubble' | 'dhl', boolean>;
+  readiness: Record<'manual' | 'shipbubble' | 'dhl' | 'combined', boolean>;
   checkout_estimates_required: boolean;
 }
 
 export interface ShippingProviderUpdate {
-  provider: 'manual' | 'shipbubble' | 'dhl';
+  provider?: 'manual' | 'shipbubble' | 'dhl' | 'combined';
+  enabled_providers?: ShippingProviderOption[];
   use_shipbubble?: boolean;
 }
 
@@ -142,14 +146,28 @@ export const getShippingProviderSettings = async (): Promise<ShippingProviderSet
  * Update shipping provider settings (admin only)
  */
 export const updateShippingProviderSettings = async (
-  providerOrLegacy: 'manual' | 'shipbubble' | 'dhl' | boolean
+  payload:
+    | 'manual'
+    | 'shipbubble'
+    | 'dhl'
+    | 'combined'
+    | boolean
+    | ShippingProviderOption[]
+    | ShippingProviderUpdate
 ): Promise<ShippingProviderSettings> => {
-  const provider = typeof providerOrLegacy === 'boolean'
-    ? (providerOrLegacy ? 'shipbubble' : 'manual')
-    : providerOrLegacy;
+  let body: ShippingProviderUpdate;
+  if (Array.isArray(payload)) {
+    body = { enabled_providers: payload };
+  } else if (typeof payload === 'boolean') {
+    body = { provider: payload ? 'shipbubble' : 'manual' };
+  } else if (typeof payload === 'string') {
+    body = { provider: payload };
+  } else {
+    body = payload;
+  }
   const response = await api.put<ShippingProviderSettings>(
     '/settings/shipping-provider',
-    { provider }
+    body
   );
   return response.data;
 };

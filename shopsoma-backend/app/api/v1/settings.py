@@ -1,4 +1,5 @@
 """Settings API endpoints"""
+import json
 import logging
 import os
 import shutil
@@ -328,22 +329,41 @@ async def update_shipping_provider_settings(
     """
     Update shipping provider settings (Admin only)
 
-    Select one ready provider and atomically maintain the legacy setting.
+    Select one or more ready providers and atomically maintain the settings.
     """
     effective = await shipping_provider_settings(db)
-    if not effective.readiness[settings.provider]:
-        raise HTTPException(status_code=409, detail=f"{settings.provider} is not available for secure checkout")
-    if settings.provider == "dhl" and not effective.checkout_estimates_required:
-        raise HTTPException(
-            status_code=409,
-            detail="DHL requires full secure-checkout cohort routing before admin selection",
-        )
+    if settings.enabled_providers is not None:
+        for p in settings.enabled_providers:
+            if not effective.readiness.get(p, False):
+                raise HTTPException(status_code=409, detail=f"{p} is not available for secure checkout")
+            if p == "dhl" and not effective.checkout_estimates_required:
+                raise HTTPException(
+                    status_code=409,
+                    detail="DHL requires full secure-checkout cohort routing before admin selection",
+                )
+        enabled_list = settings.enabled_providers
+        provider_name = settings.provider
+    else:
+        if not effective.readiness.get(settings.provider, False):
+            raise HTTPException(status_code=409, detail=f"{settings.provider} is not available for secure checkout")
+        if settings.provider == "dhl" and not effective.checkout_estimates_required:
+            raise HTTPException(
+                status_code=409,
+                detail="DHL requires full secure-checkout cohort routing before admin selection",
+            )
+        provider_name = settings.provider
+        if provider_name == "combined":
+            enabled_list = ["dhl", "shipbubble"]
+        else:
+            enabled_list = [provider_name]
+
     # A transaction advisory lock also serializes the first write when neither
-    # setting row exists. Both keys and operator metadata commit together.
+    # setting row exists. All keys and operator metadata commit together.
     await db.execute(text("SELECT pg_advisory_xact_lock(736401, 1)"))
     for key, value, value_type in (
-        ("shipping_provider", settings.provider, "string"),
-        ("shipping_use_shipbubble", "true" if settings.provider == "shipbubble" else "false", "boolean"),
+        ("shipping_provider", provider_name, "string"),
+        ("shipping_enabled_providers", json.dumps(enabled_list), "json"),
+        ("shipping_use_shipbubble", "true" if "shipbubble" in enabled_list else "false", "boolean"),
     ):
         row = await db.scalar(select(AppSetting).where(AppSetting.key == key))
         if row is None:

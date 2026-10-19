@@ -6,7 +6,7 @@ Only explicit safe columns are selected. Never invoke shipment commands from GET
 from datetime import datetime
 from uuid import UUID
 
-from sqlalchemy import and_, func, select
+from sqlalchemy import and_, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.order import Order
@@ -41,8 +41,8 @@ def operations_snapshot_query(order_id: UUID):
     b, g = OutboundShipmentBooking, OutboundIntentShipmentGuard
     package_ids = select(p.id).where(p.order_id == order_id)
     intent_ids = select(i.id).where(i.order_id == order_id)
-    selected_quotes = (
-        select(CustomerShippingQuoteSelection.intent_id)
+    legacy_quotes = (
+        select(CustomerShippingQuoteSelection.intent_id.label("intent_id"))
         .join(
             CustomerShippingQuoteOption,
             and_(
@@ -69,6 +69,25 @@ def operations_snapshot_query(order_id: UUID):
             CustomerShippingQuoteOption.provider == "dhl",
         )
     )
+    estimate_quotes = (
+        select(OutboundShipmentIntent.id.label("intent_id"))
+        .join(Order, Order.id == OutboundShipmentIntent.order_id)
+        .where(
+            OutboundShipmentIntent.id.in_(intent_ids),
+            Order.delivery_provider == "dhl",
+            or_(
+                Order.checkout_estimate_selection_id.is_not(None),
+                select(DomesticRateAttempt.id)
+                .where(
+                    DomesticRateAttempt.intent_id == OutboundShipmentIntent.id,
+                    DomesticRateAttempt.provider == "dhl",
+                    DomesticRateAttempt.classification == "success",
+                )
+                .exists(),
+            ),
+        )
+    )
+    selected_quotes = legacy_quotes.union(estimate_quotes)
     return select(
         func.statement_timestamp().label("read_at"),
         select(Order.fulfillment_status)

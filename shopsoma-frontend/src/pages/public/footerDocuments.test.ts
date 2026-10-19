@@ -7,7 +7,7 @@ describe('footer document contract', () => {
   it('keeps the three groups and ten links in client order', () => {
     expect(FOOTER_SECTIONS.map((section) => section.title)).toEqual(['Customer Care', 'About ShopSoma', 'Policies']);
     expect(FOOTER_SECTIONS.flatMap((section) => section.links.map((link) => [link.label, link.to]))).toEqual([
-      ['Contact Us', '/contact'], ['Track your order', '/track'], ['Shipping', '/shipping'], ['Returns and Refunds', '/returns'], ['FAQ', '/faqs'],
+      ['Contact Us', '/contact'], ['My Orders', '/orders'], ['Track your order', '/track'], ['Shipping', '/shipping'], ['Returns and Refunds', '/returns'], ['FAQ', '/faqs'],
       ['About Us', '/about'], ['Become a ShopSoma partner', '/collaborate'], ['Terms of Use', '/terms'], ['Privacy Policy', '/privacy'], ['Cookie Policy', '/cookies'],
     ]);
   });

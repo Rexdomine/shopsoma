@@ -21,6 +21,7 @@ import {
   processRefund,
   runShadowQuote,
   adminMarkItemReady,
+  bookShipbubblePickup,
 } from '../../services/adminOrderService';
 import type {
   OrderDetail,
@@ -30,6 +31,8 @@ import type {
 import { getStatusBadgeConfig } from '../../utils/orderStatusMessages';
 import { formatPriceWithConversion } from '../../utils/pricing';
 import { normalizeProductImageUrl } from '../../utils/productImages';
+import { orderService } from '../../services/orderService';
+import { ROUTES } from '../../config/constants';
 
 export default function AdminOrderDetail() {
   const { orderId } = useParams<{ orderId: string }>();
@@ -42,6 +45,8 @@ export default function AdminOrderDetail() {
   const [order, setOrder] = useState<OrderDetail | null>(null);
   const [loading, setLoading] = useState(true);
   const [updating, setUpdating] = useState(false);
+  const [syncingShipbubble, setSyncingShipbubble] = useState(false);
+  const [bookingShipbubble, setBookingShipbubble] = useState(false);
 
   // Edit states
   const [editingStatus, setEditingStatus] = useState(false);
@@ -293,6 +298,43 @@ export default function AdminOrderDetail() {
       error('Failed to run DHL sandbox shadow quote');
     } finally {
       setRunningShadowQuote(false);
+    }
+  };
+
+  const isShipbubbleOrder = Boolean(
+    order?.delivery_provider?.toLowerCase().startsWith('shipbubble') ||
+    order?.tracking_number?.startsWith('SB-')
+  );
+  const isShipbubbleBooked = Boolean(order?.tracking_number?.startsWith('SB-'));
+
+  const handleBookShipbubblePickup = async () => {
+    if (!order) return;
+    try {
+      setBookingShipbubble(true);
+      const updated = await bookShipbubblePickup(order.id);
+      setOrder(updated);
+      success('ShipBubble pickup dispatched! Waybill created and courier notified to pick up from Hub.');
+    } catch (err: any) {
+      console.error('Failed to book ShipBubble pickup:', err);
+      const detail = err?.response?.data?.detail || 'Failed to dispatch ShipBubble pickup';
+      error(detail);
+    } finally {
+      setBookingShipbubble(false);
+    }
+  };
+
+  const handleSyncShipbubble = async () => {
+    if (!order) return;
+    try {
+      setSyncingShipbubble(true);
+      await orderService.syncOrderTracking(order.id);
+      await loadOrder();
+      success('Synced latest shipment status from ShipBubble');
+    } catch (err) {
+      console.error('Failed to sync from ShipBubble:', err);
+      error('Failed to sync shipment status from ShipBubble');
+    } finally {
+      setSyncingShipbubble(false);
     }
   };
 
@@ -771,7 +813,7 @@ export default function AdminOrderDetail() {
                       onClick={() => setEditingStatus(true)}
                       className="text-[#105E53] hover:text-[#0d4a41] text-sm"
                     >
-                      Update
+                      {isShipbubbleOrder ? 'Manual Override' : 'Update'}
                     </button>
                   </div>
                   <div className="space-y-2 text-sm">
@@ -786,6 +828,78 @@ export default function AdminOrderDetail() {
                       </div>
                     )}
                   </div>
+
+                  {isShipbubbleOrder && !isShipbubbleBooked && (
+                    <div className="mt-4 rounded-md border border-amber-200 bg-amber-50/60 p-3.5 space-y-2.5">
+                      <div className="flex items-center gap-2">
+                        <span className="inline-flex h-2 w-2 rounded-full bg-amber-500" />
+                        <span className="text-xs font-semibold uppercase tracking-wide text-amber-900">
+                          Awaiting Hub Readiness — ShipBubble Pickup Not Dispatched
+                        </span>
+                      </div>
+                      <p className="text-xs text-gray-700 leading-relaxed">
+                        The customer selected <strong>{order.delivery_provider?.replace(/^shipbubble:/i, '') || 'ShipBubble'}</strong>. Once all items arrive at the <strong>Shopsoma Hub</strong> and pass QC, mark each item ready or click below to create the ShipBubble waybill and dispatch the rider to the Hub.
+                      </p>
+                      <div className="flex flex-wrap items-center gap-2 pt-1">
+                        <button
+                          type="button"
+                          onClick={handleBookShipbubblePickup}
+                          disabled={bookingShipbubble || order.payment_status !== 'paid'}
+                          className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-sm bg-[#105E53] text-white text-xs font-medium hover:bg-[#0d4a41] disabled:opacity-50 transition-colors"
+                        >
+                          {bookingShipbubble ? 'Dispatching Pickup...' : 'Mark Ready & Request ShipBubble Pickup'}
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() =>
+                            navigate(
+                              `${ROUTES.ORDER_MAP_TRACKING.replace(':orderId', order.id)}?from=admin`,
+                              { state: { from: location.pathname, fromLabel: 'Back to Admin Order' } }
+                            )
+                          }
+                          className="inline-flex items-center gap-1 px-3 py-1.5 rounded-sm border border-gray-200 bg-white text-gray-700 text-xs font-medium hover:bg-gray-50 transition-colors"
+                        >
+                          View Live Map →
+                        </button>
+                      </div>
+                    </div>
+                  )}
+
+                  {isShipbubbleOrder && isShipbubbleBooked && (
+                    <div className="mt-4 rounded-md border border-[#105E53]/20 bg-[#f1f8f6] p-3.5 space-y-2.5">
+                      <div className="flex items-center gap-2">
+                        <span className="inline-flex h-2 w-2 rounded-full bg-[#105E53]" />
+                        <span className="text-xs font-semibold uppercase tracking-wide text-[#105E53]">
+                          Dispatched — Managed Automatically by ShipBubble
+                        </span>
+                      </div>
+                      <p className="text-xs text-gray-600 leading-relaxed">
+                        ShipBubble waybill <strong>{order.tracking_number}</strong> has been generated and the courier has been notified to pick up from the <strong>Shopsoma Hub</strong>. Subsequent delivery milestones update automatically via webhooks.
+                      </p>
+                      <div className="flex flex-wrap items-center gap-2 pt-1">
+                        <button
+                          type="button"
+                          onClick={handleSyncShipbubble}
+                          disabled={syncingShipbubble}
+                          className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-sm bg-[#105E53] text-white text-xs font-medium hover:bg-[#0d4a41] disabled:opacity-50 transition-colors"
+                        >
+                          {syncingShipbubble ? 'Syncing...' : 'Sync from ShipBubble'}
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() =>
+                            navigate(
+                              `${ROUTES.ORDER_MAP_TRACKING.replace(':orderId', order.id)}?from=admin`,
+                              { state: { from: location.pathname, fromLabel: 'Back to Admin Order' } }
+                            )
+                          }
+                          className="inline-flex items-center gap-1 px-3 py-1.5 rounded-sm border border-gray-200 bg-white text-gray-700 text-xs font-medium hover:bg-gray-50 transition-colors"
+                        >
+                          View Live Map →
+                        </button>
+                      </div>
+                    </div>
+                  )}
                 </div>
               )}
             </div>
@@ -854,8 +968,20 @@ export default function AdminOrderDetail() {
                 </div>
                 <div>
                   <div className="text-gray-500">Tracking Number</div>
-                  <div className="font-medium text-gray-900">
-                    {order.tracking_number || 'Not available'}
+                  <div className="flex flex-wrap items-center gap-2">
+                    <span className="font-medium text-gray-900">
+                      {order.tracking_number || 'Not available'}
+                    </span>
+                    {order.tracking_number?.startsWith('SB-') && (
+                      <a
+                        href={`https://trackshipment.shipbubble.com/shipment/${order.tracking_number}`}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="inline-flex items-center gap-1 text-xs font-medium text-[#105E53] hover:text-[#0d4a41] underline underline-offset-2"
+                      >
+                        ShipBubble Portal ↗
+                      </a>
+                    )}
                   </div>
                 </div>
                 <div>

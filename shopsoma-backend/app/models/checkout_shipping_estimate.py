@@ -18,7 +18,7 @@ from sqlalchemy import (
     UniqueConstraint,
 )
 from sqlalchemy import event
-from sqlalchemy.dialects.postgresql import UUID
+from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.sql import func
 
 from app.core.base import Base
@@ -73,7 +73,7 @@ class CheckoutShippingEstimate(Base):
             name="ck_checkout_shipping_estimates_lifecycle",
         ),
         CheckConstraint(
-            "source_kind IN ('static_domestic_rate','sandbox_normalized') AND created_by_actor_type IN ('customer','guest_capability','staff')",
+            "source_kind IN ('static_domestic_rate','sandbox_normalized','shipbubble_live') AND created_by_actor_type IN ('customer','guest_capability','staff')",
             name="ck_checkout_shipping_estimates_kinds",
         ),
         CheckConstraint(
@@ -115,6 +115,7 @@ class CheckoutShippingEstimateOption(Base):
     min_delivery_days = Column(Integer)
     max_delivery_days = Column(Integer)
     source_rate_id = Column(_UUID, ForeignKey("shipping_rates.id", ondelete="RESTRICT"))
+    provider_metadata = Column(JSONB, nullable=True)
     created_at = Column(DateTime(timezone=True), nullable=False, server_default=_NOW)
 
     __table_args__ = (

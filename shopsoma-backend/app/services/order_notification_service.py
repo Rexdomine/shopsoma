@@ -3,7 +3,7 @@ from typing import Optional, Dict, Any
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 from sqlalchemy.orm import selectinload
-from datetime import datetime
+from datetime import datetime, timezone
 import logging
 
 from app.models.order import Order, OrderItem, FulfillmentStatus, PaymentStatus
@@ -247,6 +247,7 @@ class OrderNotificationService:
                 notifications_sent += 1
 
             except Exception as e:
+                await self.db.rollback()
                 # Log error but continue with other vendors
                 print(f"Failed to notify vendor {vendor_id}: {str(e)}")
                 continue
@@ -398,11 +399,12 @@ class OrderNotificationService:
                     },
                 },
                 email_sent=True,
-                email_sent_at=datetime.utcnow(),
+                email_sent_at=datetime.now(timezone.utc),
             )
             self.db.add(notification)
             await self.db.commit()
         except Exception as e:
+            await self.db.rollback()
             logger.error(f"Failed to create in-app notification for vendor {vendor.id}: {e}")
 
         return True
@@ -701,7 +703,7 @@ class OrderNotificationService:
             order_id=order.id,
             data=notification_data,
             email_sent=True,
-            email_sent_at=datetime.utcnow()
+            email_sent_at=datetime.now(timezone.utc)
         )
 
         self.db.add(notification)

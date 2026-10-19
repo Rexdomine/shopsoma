@@ -143,6 +143,10 @@ def _planned_ship_date_for_shadow_quote(intent_created_at: datetime | None) -> d
     tender_at = datetime.combine(planned_ship_date, time(hour=12), tzinfo=_LAGOS_TZ)
     if tender_at <= current_time:
         planned_ship_date += timedelta(days=1)
+    if planned_ship_date.weekday() == 5:
+        planned_ship_date += timedelta(days=2)
+    elif planned_ship_date.weekday() == 6:
+        planned_ship_date += timedelta(days=1)
     return planned_ship_date
 
 

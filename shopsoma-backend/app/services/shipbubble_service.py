@@ -2,515 +2,507 @@
 ShipBubble Shipping Integration Service
 
 Official API Docs: https://docs.shipbubble.com
+Base URL: https://api.shipbubble.com/v1
 
-This service handles all interactions with ShipBubble API:
-- Fetching shipping rates
-- Creating shipments
-- Tracking shipments
-- Cancelling shipments
+This service handles all interactions with the ShipBubble API:
+- Validating addresses (returns address_code)
+- Fetching live courier shipping rates (returns request_token and couriers)
+- Booking shipping labels (/shipping/labels)
+- Tracking shipments (/shipping/labels/list/:order_ids)
+- Cancelling scheduled shipments (/shipping/labels/cancel/:order_id)
+- Wallet balance checking
+- Webhook simulation in sandbox
 """
-import httpx
+
+import asyncio
+from dataclasses import dataclass
+from decimal import Decimal, ROUND_HALF_UP
 import logging
-from typing import Dict, List, Optional, Any
-from datetime import datetime
-from decimal import Decimal
+import re
+import socket
+from typing import Any, Dict, List, Optional
+import httpx
 
 from app.core.config import settings
 
 logger = logging.getLogger(__name__)
 
+_CENT = Decimal("0.01")
+
+_ORIG_GETADDRINFO = socket.getaddrinfo
+_DNS_CACHE: Dict[tuple, list] = {}
+_SHIPBUBBLE_FALLBACK_IPS = ("104.21.51.145", "172.67.181.106")
+_ADDRESS_VALIDATION_CACHE: Dict[tuple, Dict[str, Any]] = {}
+
+
+def _resilient_getaddrinfo(host, port, family=0, type=0, proto=0, flags=0):
+    """Resilient getaddrinfo that prefers IPv4 and caches/falls back for api.shipbubble.com
+    when Windows/ISP DNS intermittently fails with WSATRY_AGAIN (Errno 11002).
+    """
+    is_shipbubble = host in ("api.shipbubble.com", b"api.shipbubble.com")
+    p = int(port) if port and str(port).isdigit() else 443
+    cache_key = (str(host), p)
+    try:
+        effective_family = socket.AF_INET if (is_shipbubble and family == 0) else family
+        res = _ORIG_GETADDRINFO(host, port, effective_family, type, proto, flags)
+        if is_shipbubble and res:
+            _DNS_CACHE[cache_key] = res
+        return res
+    except socket.gaierror as exc:
+        if is_shipbubble:
+            logger.warning("[ShipBubble] DNS lookup failed (%s); using cached/Cloudflare IPv4 fallback", exc)
+            if cache_key in _DNS_CACHE:
+                return _DNS_CACHE[cache_key]
+            sock_type = type or socket.SOCK_STREAM
+            sock_proto = proto or socket.IPPROTO_TCP
+            return [
+                (socket.AF_INET, sock_type, sock_proto, "", (ip, p))
+                for ip in _SHIPBUBBLE_FALLBACK_IPS
+            ]
+        raise
+
+
+if getattr(socket.getaddrinfo, "__name__", "") != "_resilient_getaddrinfo":
+    socket.getaddrinfo = _resilient_getaddrinfo
+
 
 class ShipBubbleError(Exception):
     """Custom exception for ShipBubble API errors"""
-    def __init__(self, message: str, status_code: Optional[int] = None, response_data: Optional[Dict] = None):
+
+    def __init__(
+        self,
+        message: str,
+        status_code: Optional[int] = None,
+        response_data: Optional[Dict[str, Any]] = None,
+        errors: Optional[List[str]] = None,
+    ):
         self.message = message
         self.status_code = status_code
-        self.response_data = response_data
+        self.response_data = response_data or {}
+        self.errors = errors or []
         super().__init__(self.message)
+
+
+@dataclass(frozen=True)
+class ShipbubbleRateOption:
+    courier_id: str
+    courier_name: str
+    service_code: str
+    rate_card_amount: Decimal  # Customer-facing charge
+    total_wallet_amount: Decimal  # Debited from shipping wallet
+    currency: str
+    delivery_eta: str
+    min_delivery_days: Optional[int]
+    max_delivery_days: Optional[int]
+    courier_image: Optional[str] = None
+    service_type: str = "pickup"
+
+
+@dataclass(frozen=True)
+class ShipbubbleRatesResult:
+    request_token: str
+    couriers: List[ShipbubbleRateOption]
+    cheapest_courier: Optional[ShipbubbleRateOption] = None
+    fastest_courier: Optional[ShipbubbleRateOption] = None
+
+
+@dataclass(frozen=True)
+class ShipbubbleShipmentResult:
+    order_id: str  # e.g. "SB-2CF48224272"
+    status: str
+    courier_name: str
+    tracking_code: Optional[str] = None
+    tracking_url: Optional[str] = None
+    waybill_document_url: Optional[str] = None
+    shipping_fee: Optional[Decimal] = None
+    currency: str = "NGN"
+    raw_response: Optional[Dict[str, Any]] = None
+
+
+def parse_eta_days(eta_str: Optional[str]) -> tuple[Optional[int], Optional[int]]:
+    """Parse delivery ETA string (e.g. 'Within 1 - 4 working days', 'Same day delivery', 'Within 23 hrs')
+
+    Returns (min_days, max_days)
+    """
+    if not eta_str:
+        return None, None
+    lower = eta_str.lower()
+    if "same day" in lower or "within 24 hr" in lower or "within 23 hr" in lower or "within 12 hr" in lower:
+        return 0, 1
+    # Match pattern like "1 - 4 working days" or "1-4 days"
+    range_match = re.search(r"(\d+)\s*(?:-|to)\s*(\d+)\s*(?:working|business)?\s*days?", lower)
+    if range_match:
+        min_d = int(range_match.group(1))
+        max_d = int(range_match.group(2))
+        return min_d, max_d
+    # Match single day pattern like "within 2 days" or "2 working days"
+    single_match = re.search(r"(\d+)\s*(?:working|business)?\s*days?", lower)
+    if single_match:
+        days = int(single_match.group(1))
+        return 1, max(1, days)
+    return None, None
 
 
 class ShipBubbleService:
     """Service for interacting with ShipBubble shipping API"""
 
-    BASE_URL = "https://api.shipbubble.com/v1"
+    def __init__(
+        self,
+        api_key: Optional[str] = None,
+        base_url: Optional[str] = None,
+        timeout: Optional[float] = None,
+        transport: Optional[httpx.AsyncBaseTransport] = None,
+    ):
+        self.api_key = (api_key or settings.SHIPBUBBLE_API_KEY).strip()
+        self.base_url = (base_url or settings.SHIPBUBBLE_BASE_URL).rstrip("/")
+        self.timeout = timeout if timeout is not None else settings.SHIPBUBBLE_TIMEOUT_SECONDS
+        self.transport = transport
 
-    def __init__(self):
-        self.api_key = settings.SHIPBUBBLE_API_KEY
+    def _get_headers(self) -> Dict[str, str]:
         if not self.api_key:
-            logger.error("❌ [ShipBubble] API key not configured")
-            raise ValueError("ShipBubble API key is required")
-
-        self.headers = {
+            raise ShipBubbleError("ShipBubble API key is not configured", status_code=401)
+        return {
             "Authorization": f"Bearer {self.api_key}",
             "Content-Type": "application/json",
-            "Accept": "application/json"
+            "Accept": "application/json",
         }
-
-        logger.info(f"✅ [ShipBubble] Service initialized with API key: {self.api_key[:20]}...")
 
     async def _make_request(
         self,
         method: str,
         endpoint: str,
-        data: Optional[Dict] = None,
-        params: Optional[Dict] = None
+        data: Optional[Dict[str, Any]] = None,
+        params: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
-        """
-        Make HTTP request to ShipBubble API with comprehensive error handling
+        """Make HTTP request to ShipBubble API with retry logic, strict error handling, and no credential logging."""
+        headers = self._get_headers()
+        url = f"{self.base_url}{endpoint}"
+        max_attempts = 1 if self.transport is not None else 3
 
-        Args:
-            method: HTTP method (GET, POST, PUT, DELETE)
-            endpoint: API endpoint (e.g., "/shipping/fetch_rates")
-            data: Request body for POST/PUT requests
-            params: Query parameters for GET requests
-
-        Returns:
-            Parsed JSON response from ShipBubble API
-
-        Raises:
-            ShipBubbleError: On API errors with detailed logging
-        """
-        url = f"{self.BASE_URL}{endpoint}"
-
-        logger.info(f"📤 [ShipBubble] {method} {endpoint}")
-        if data:
-            logger.debug(f"📝 [ShipBubble] Request data: {data}")
-        if params:
-            logger.debug(f"🔍 [ShipBubble] Query params: {params}")
-
-        try:
-            async with httpx.AsyncClient(timeout=30.0) as client:
-                response = await client.request(
-                    method=method,
-                    url=url,
-                    headers=self.headers,
-                    json=data if method in ["POST", "PUT"] else None,
-                    params=params
+        for attempt in range(1, max_attempts + 1):
+            try:
+                effective_transport = (
+                    self.transport
+                    if self.transport is not None
+                    else httpx.AsyncHTTPTransport(retries=2)
                 )
-
-                logger.info(f"📥 [ShipBubble] Response status: {response.status_code}")
-
-                # Try to parse response JSON
-                try:
-                    response_data = response.json()
-                    logger.debug(f"📄 [ShipBubble] Response data: {response_data}")
-                except Exception as json_error:
-                    logger.error(f"❌ [ShipBubble] Failed to parse response JSON: {json_error}")
-                    logger.error(f"📄 [ShipBubble] Raw response: {response.text[:500]}")
-                    response_data = {"raw_response": response.text}
-
-                # Handle error responses
-                if response.status_code >= 400:
-                    error_message = self._extract_error_message(response_data, response.status_code)
-                    logger.error(f"❌ [ShipBubble] API Error: {error_message}")
-                    logger.error(f"📄 [ShipBubble] Full error response: {response_data}")
-
-                    raise ShipBubbleError(
-                        message=error_message,
-                        status_code=response.status_code,
-                        response_data=response_data
+                async with httpx.AsyncClient(
+                    timeout=self.timeout,
+                    transport=effective_transport,
+                ) as client:
+                    response = await client.request(
+                        method=method,
+                        url=url,
+                        headers=headers,
+                        json=data if method in ["POST", "PUT", "PATCH"] else None,
+                        params=params,
                     )
 
-                logger.info(f"✅ [ShipBubble] Request successful")
-                return response_data
+                    try:
+                        response_json = response.json()
+                    except Exception:
+                        response_json = {"raw_response": response.text}
 
-        except httpx.TimeoutException as e:
-            logger.error(f"⏱️ [ShipBubble] Request timeout: {str(e)}")
-            raise ShipBubbleError("ShipBubble API request timed out after 30 seconds")
+                    if response.status_code >= 400:
+                        errors = response_json.get("errors") if isinstance(response_json.get("errors"), list) else []
+                        msg = response_json.get("message") or response.text or f"HTTP {response.status_code}"
+                        if errors:
+                            msg = f"{msg}: {', '.join(errors)}"
+                        logger.warning("[ShipBubble] API %s %s error: status=%s message=%s", method, endpoint, response.status_code, msg)
+                        raise ShipBubbleError(
+                            message=f"ShipBubble API error ({response.status_code}): {msg}",
+                            status_code=response.status_code,
+                            response_data=response_json,
+                            errors=errors,
+                        )
 
-        except httpx.NetworkError as e:
-            logger.error(f"🌐 [ShipBubble] Network error: {str(e)}")
-            raise ShipBubbleError(f"Network error connecting to ShipBubble: {str(e)}")
+                    if response_json.get("status") == "failed":
+                        msg = response_json.get("message") or "ShipBubble request indicated failure"
+                        errors = response_json.get("errors") or []
+                        logger.warning("[ShipBubble] API %s %s returned failed status: %s", method, endpoint, msg)
+                        raise ShipBubbleError(
+                            message=f"ShipBubble request failed: {msg}",
+                            status_code=response.status_code,
+                            response_data=response_json,
+                            errors=errors,
+                        )
 
-        except ShipBubbleError:
-            # Re-raise our custom errors
-            raise
+                    return response_json
 
-        except Exception as e:
-            logger.error(f"💥 [ShipBubble] Unexpected error: {str(e)}", exc_info=True)
-            raise ShipBubbleError(f"Unexpected error calling ShipBubble API: {str(e)}")
+            except httpx.TimeoutException as exc:
+                if attempt < max_attempts:
+                    logger.warning("[ShipBubble] Timeout on %s %s (attempt %s/%s), retrying...", method, endpoint, attempt, max_attempts)
+                    await asyncio.sleep(0.4 * attempt)
+                    continue
+                logger.error("[ShipBubble] Request timed out on %s %s after %ss", method, endpoint, self.timeout)
+                raise ShipBubbleError(f"ShipBubble API request timed out after {self.timeout}s") from exc
+            except httpx.NetworkError as exc:
+                if attempt < max_attempts:
+                    logger.warning("[ShipBubble] Network error on %s %s (attempt %s/%s): %s, retrying...", method, endpoint, attempt, max_attempts, exc)
+                    await asyncio.sleep(0.4 * attempt)
+                    continue
+                logger.error("[ShipBubble] Network error connecting to ShipBubble on %s %s: %s", method, endpoint, exc)
+                raise ShipBubbleError(f"Network error connecting to ShipBubble: {exc}") from exc
+            except ShipBubbleError:
+                raise
+            except Exception as exc:
+                logger.error("[ShipBubble] Unexpected error on %s %s: %s", method, endpoint, exc, exc_info=True)
+                raise ShipBubbleError(f"Unexpected error communicating with ShipBubble: {exc}") from exc
 
-    def _extract_error_message(self, response_data: Dict, status_code: int) -> str:
-        """Extract error message from ShipBubble API response"""
+        raise ShipBubbleError("ShipBubble API request failed after retries")
 
-        # Common error field names in APIs
-        error_fields = ['message', 'error', 'detail', 'error_message', 'description']
-
-        for field in error_fields:
-            if field in response_data:
-                return f"ShipBubble API Error ({status_code}): {response_data[field]}"
-
-        # If no standard error field, return generic message
-        return f"ShipBubble API Error ({status_code}): {response_data}"
-
-    async def create_address(
+    async def validate_address(
         self,
+        *,
         name: str,
-        phone: str,
         email: str,
+        phone: str,
         address: str,
-        city: str,
-        state: str,
-        country: str = "Nigeria",
-        postal_code: str = ""
-    ) -> str:
+        latitude: Optional[float] = None,
+        longitude: Optional[float] = None,
+    ) -> Dict[str, Any]:
+        """Validate an address via POST /shipping/address/validate.
+
+        Returns data dict including 'address_code' (int).
         """
-        Create an address in ShipBubble and get address code
+        cache_key = (
+            name.strip().lower(),
+            email.strip().lower(),
+            phone.strip(),
+            address.strip().lower(),
+        )
+        if self.transport is None and cache_key in _ADDRESS_VALIDATION_CACHE:
+            return _ADDRESS_VALIDATION_CACHE[cache_key]
 
-        Args:
-            name: Contact name
-            phone: Phone number
-            email: Email address
-            address: Street address
-            city: City
-            state: State/Province
-            country: Country (default: Nigeria)
-            postal_code: Postal/ZIP code
+        payload: Dict[str, Any] = {
+            "name": name.strip(),
+            "email": email.strip(),
+            "phone": phone.strip(),
+            "address": address.strip(),
+        }
+        if latitude is not None and longitude is not None:
+            payload["latitude"] = latitude
+            payload["longitude"] = longitude
 
-        Returns:
-            Address code (string like "SB-ADDR-XXX") to use in rate/shipment requests
-        """
-        logger.info(f"📍 [ShipBubble] Creating address for {name} in {city}, {state}")
+        res = await self._make_request("POST", "/shipping/address/validate", data=payload)
+        data = res.get("data")
+        if not data or "address_code" not in data:
+            raise ShipBubbleError(
+                "Address validation succeeded but no address_code was returned",
+                response_data=res,
+            )
+        if self.transport is None:
+            _ADDRESS_VALIDATION_CACHE[cache_key] = data
+        return data
 
-        try:
-            payload = {
-                "name": name,
-                "phone": phone,
-                "email": email,
-                "address": address,
-                "city": city,
-                "state": state,
-                "country": country,
-                "postal_code": postal_code
-            }
+    async def get_categories(self) -> List[Dict[str, Any]]:
+        """Fetch package categories via GET /shipping/labels/categories."""
+        res = await self._make_request("GET", "/shipping/labels/categories")
+        data = res.get("data")
+        if isinstance(data, list):
+            return data
+        return []
 
-            response = await self._make_request("POST", "/addresses/create", data=payload)
+    async def get_package_dimensions(self) -> List[Dict[str, Any]]:
+        """Fetch preset package dimensions via GET /shipping/labels/boxes."""
+        res = await self._make_request("GET", "/shipping/labels/boxes")
+        data = res.get("data")
+        if isinstance(data, list):
+            return data
+        return []
 
-            # Extract address code from response
-            # ShipBubble returns: {"status": true, "data": {"code": "SB-ADDR-XXX", ...}}
-            data = response.get("data", {})
-            address_code = data.get("code") or data.get("address_code") or response.get("code") or response.get("address_code")
-
-            if not address_code:
-                logger.error(f"❌ [ShipBubble] No address code in response: {response}")
-                raise ShipBubbleError("Failed to get address code from ShipBubble response")
-
-            logger.info(f"✅ [ShipBubble] Address created with code: {address_code}")
-            # Address code is a string like "SB-ADDR-123", not an integer
-            return address_code
-
-        except ShipBubbleError:
-            raise
-        except Exception as e:
-            logger.error(f"💥 [ShipBubble] Error creating address: {str(e)}", exc_info=True)
-            raise ShipBubbleError(f"Failed to create address: {str(e)}")
-
-    async def get_shipping_rates(
+    async def fetch_rates(
         self,
-        sender_address_code: str,
-        receiver_address_code: str,
+        *,
+        sender_address_code: int,
+        receiver_address_code: int,
         pickup_date: str,
         category_id: int,
         package_items: List[Dict[str, Any]],
-        package_dimension: Dict[str, float],
+        package_dimension: Dict[str, Any],
         service_type: Optional[str] = None,
-        delivery_instructions: Optional[str] = None
-    ) -> List[Dict[str, Any]]:
+        delivery_instructions: Optional[str] = None,
+        service_codes: Optional[List[str]] = None,
+    ) -> ShipbubbleRatesResult:
+        """Fetch live shipping rates from ShipBubble.
+
+        Endpoint: POST /shipping/fetch_rates (or /shipping/fetch_rates/:service_codes)
+        Note: The official API spelling is 'reciever_address_code'.
         """
-        Fetch shipping rates from ShipBubble
-
-        Args:
-            sender_address_code: Address code from create_address() for sender (string like "SB-ADDR-XXX")
-            receiver_address_code: Address code from create_address() for receiver (string like "SB-ADDR-XXX")
-            pickup_date: Pickup date in format "YYYY-MM-DD"
-            category_id: Package category ID (get from categories API)
-            package_items: List of items with keys: name, description, unit_weight (kg), unit_amount, quantity
-            package_dimension: Dict with keys: length, width, height (all in CM)
-            service_type: Optional - "dropoff" or "pickup"
-            delivery_instructions: Optional delivery notes
-
-        Returns:
-            List of shipping rate options with courier, price, delivery_time
-
-        Example response:
-            [
-                {
-                    "courier": "DHL",
-                    "service_code": "dhl_express",
-                    "price": 2500.00,
-                    "currency": "NGN",
-                    "estimated_days": 2,
-                    "description": "Express delivery"
-                }
-            ]
-        """
-        logger.info(f"🚚 [ShipBubble] Fetching shipping rates")
-        logger.debug(f"📍 [ShipBubble] Sender address code: {sender_address_code}")
-        logger.debug(f"📍 [ShipBubble] Receiver address code: {receiver_address_code}")
-        logger.debug(f"📦 [ShipBubble] Pickup date: {pickup_date}")
-
-        try:
-            payload = {
-                "sender_address_code": sender_address_code,
-                "reciever_address_code": receiver_address_code,  # Note: ShipBubble API uses "reciever" (sic)
-                "pickup_date": pickup_date,
-                "category_id": category_id,
-                "package_items": package_items,
-                "package_dimension": package_dimension
-            }
-
-            if service_type:
-                payload["service_type"] = service_type
-            if delivery_instructions:
-                payload["delivery_instructions"] = delivery_instructions
-
-            response = await self._make_request("POST", "/shipping/fetch_rates", data=payload)
-
-            # Parse rates from response
-            rates = self._parse_rates_response(response)
-
-            logger.info(f"✅ [ShipBubble] Retrieved {len(rates)} shipping rates")
-            for rate in rates:
-                logger.debug(f"💰 [ShipBubble] {rate['courier']}: ₦{rate['price']} ({rate['estimated_days']} days)")
-
-            return rates
-
-        except ShipBubbleError as e:
-            logger.error(f"❌ [ShipBubble] Failed to fetch rates: {e.message}")
-            # Return empty list on error - caller should handle gracefully
-            return []
-
-        except Exception as e:
-            logger.error(f"💥 [ShipBubble] Unexpected error fetching rates: {str(e)}", exc_info=True)
-            return []
-
-    def _parse_rates_response(self, response: Dict) -> List[Dict[str, Any]]:
-        """Parse ShipBubble rates response into standardized format"""
-
-        # ShipBubble response structure (adjust based on actual API response)
-        rates = []
-
-        # Assuming response has 'rates' or 'data' key with list of rate options
-        rate_data = response.get('rates') or response.get('data') or []
-
-        if not isinstance(rate_data, list):
-            rate_data = [rate_data] if rate_data else []
-
-        for rate in rate_data:
-            rates.append({
-                "courier": rate.get("courier_name") or rate.get("courier"),
-                "service_code": rate.get("service_code") or rate.get("code"),
-                "price": float(rate.get("price") or rate.get("amount") or 0),
-                "currency": rate.get("currency", "NGN"),
-                "estimated_days": int(rate.get("estimated_days") or rate.get("delivery_time") or 3),
-                "description": rate.get("description") or rate.get("service_name") or ""
-            })
-
-        return rates
-
-    async def create_shipment(
-        self,
-        order_number: str,
-        sender: Dict[str, Any],
-        receiver: Dict[str, Any],
-        items: List[Dict[str, Any]],
-        service_code: str,
-        **kwargs
-    ) -> Dict[str, Any]:
-        """
-        Create a shipment in ShipBubble
-
-        Args:
-            order_number: Unique order reference
-            sender: Sender details (name, phone, address, city, state, country)
-            receiver: Receiver details (name, phone, address, city, state, country)
-            items: List of items (name, quantity, value, weight)
-            service_code: Shipping service code from rates response
-            **kwargs: Additional options (insurance, pickup_date, etc.)
-
-        Returns:
-            Shipment details including shipment_id and tracking_number
-
-        Example response:
-            {
-                "shipment_id": "SB123456",
-                "tracking_number": "TRACK123456",
-                "label_url": "https://...",
-                "status": "pending_pickup"
-            }
-        """
-        logger.info(f"📦 [ShipBubble] Creating shipment for order {order_number}")
-        logger.debug(f"🚚 [ShipBubble] Service: {service_code}")
-        logger.debug(f"📍 [ShipBubble] Sender: {sender.get('name')} ({sender.get('city')})")
-        logger.debug(f"📍 [ShipBubble] Receiver: {receiver.get('name')} ({receiver.get('city')})")
-
-        try:
-            payload = {
-                "order_reference": order_number,
-                "service_code": service_code,
-                "sender": {
-                    "name": sender.get("name"),
-                    "phone": sender.get("phone"),
-                    "email": sender.get("email", ""),
-                    "address": sender.get("address"),
-                    "city": sender.get("city"),
-                    "state": sender.get("state"),
-                    "country": sender.get("country", "Nigeria"),
-                    "postal_code": sender.get("postal_code", "")
-                },
-                "receiver": {
-                    "name": receiver.get("name"),
-                    "phone": receiver.get("phone"),
-                    "email": receiver.get("email", ""),
-                    "address": receiver.get("address"),
-                    "city": receiver.get("city"),
-                    "state": receiver.get("state"),
-                    "country": receiver.get("country", "Nigeria"),
-                    "postal_code": receiver.get("postal_code", "")
-                },
-                "items": [
-                    {
-                        "name": item.get("name"),
-                        "quantity": item.get("quantity", 1),
-                        "value": float(item.get("value", 0)),
-                        "weight": float(item.get("weight", 0.5)),
-                        "description": item.get("description", "")
-                    }
-                    for item in items
-                ],
-                **kwargs  # pickup_date, insurance_value, etc.
-            }
-
-            response = await self._make_request("POST", "/shipping/create", data=payload)
-
-            shipment_data = self._parse_shipment_response(response)
-
-            logger.info(f"✅ [ShipBubble] Shipment created: {shipment_data['shipment_id']}")
-            logger.info(f"🔢 [ShipBubble] Tracking: {shipment_data.get('tracking_number')}")
-
-            return shipment_data
-
-        except ShipBubbleError as e:
-            logger.error(f"❌ [ShipBubble] Failed to create shipment: {e.message}")
-            logger.error(f"📄 [ShipBubble] Error details: {e.response_data}")
-            raise
-
-        except Exception as e:
-            logger.error(f"💥 [ShipBubble] Unexpected error creating shipment: {str(e)}", exc_info=True)
-            raise ShipBubbleError(f"Failed to create shipment: {str(e)}")
-
-    def _parse_shipment_response(self, response: Dict) -> Dict[str, Any]:
-        """Parse ShipBubble shipment creation response"""
-
-        # Extract data from response (adjust based on actual API response)
-        data = response.get('data') or response
-
-        return {
-            "shipment_id": data.get("shipment_id") or data.get("id"),
-            "tracking_number": data.get("tracking_number") or data.get("tracking_code"),
-            "label_url": data.get("label_url") or data.get("shipping_label"),
-            "status": data.get("status", "pending"),
-            "courier": data.get("courier_name") or data.get("courier"),
-            "created_at": data.get("created_at"),
-            "raw_response": response  # Store full response for debugging
+        payload: Dict[str, Any] = {
+            "sender_address_code": int(sender_address_code),
+            "reciever_address_code": int(receiver_address_code),
+            "pickup_date": pickup_date,
+            "category_id": int(category_id),
+            "package_items": package_items,
+            "package_dimension": package_dimension,
         }
+        if service_type:
+            payload["service_type"] = service_type
+        if delivery_instructions:
+            payload["delivery_instructions"] = delivery_instructions
 
-    async def track_shipment(self, tracking_number: str) -> Dict[str, Any]:
-        """
-        Track a shipment using tracking number
+        endpoint = "/shipping/fetch_rates"
+        if service_codes:
+            joined = ",".join(s.strip() for s in service_codes if s.strip())
+            if joined:
+                endpoint = f"/shipping/fetch_rates/{joined}"
 
-        Args:
-            tracking_number: ShipBubble tracking number
-
-        Returns:
-            Tracking information with current status and history
-
-        Example response:
-            {
-                "tracking_number": "TRACK123",
-                "status": "in_transit",
-                "current_location": "Lagos",
-                "estimated_delivery": "2025-12-20",
-                "history": [...]
-            }
-        """
-        logger.info(f"🔍 [ShipBubble] Tracking shipment: {tracking_number}")
-
-        try:
-            response = await self._make_request("GET", f"/shipping/track/{tracking_number}")
-
-            tracking_data = self._parse_tracking_response(response)
-
-            logger.info(f"✅ [ShipBubble] Tracking status: {tracking_data['status']}")
-            logger.debug(f"📍 [ShipBubble] Current location: {tracking_data.get('current_location')}")
-
-            return tracking_data
-
-        except ShipBubbleError as e:
-            logger.error(f"❌ [ShipBubble] Failed to track shipment: {e.message}")
-            raise
-
-        except Exception as e:
-            logger.error(f"💥 [ShipBubble] Unexpected error tracking shipment: {str(e)}", exc_info=True)
-            raise ShipBubbleError(f"Failed to track shipment: {str(e)}")
-
-    def _parse_tracking_response(self, response: Dict) -> Dict[str, Any]:
-        """Parse ShipBubble tracking response"""
-
-        data = response.get('data') or response
-
-        return {
-            "tracking_number": data.get("tracking_number"),
-            "status": data.get("status"),
-            "current_location": data.get("current_location") or data.get("location"),
-            "estimated_delivery": data.get("estimated_delivery_date") or data.get("eta"),
-            "last_updated": data.get("last_updated") or data.get("updated_at"),
-            "history": data.get("tracking_history") or data.get("history") or [],
-            "raw_response": response
-        }
-
-    async def cancel_shipment(self, shipment_id: str, reason: Optional[str] = None) -> bool:
-        """
-        Cancel a shipment in ShipBubble
-
-        Args:
-            shipment_id: ShipBubble shipment ID
-            reason: Optional cancellation reason
-
-        Returns:
-            True if successfully cancelled
-        """
-        logger.info(f"❌ [ShipBubble] Cancelling shipment: {shipment_id}")
-        if reason:
-            logger.debug(f"📝 [ShipBubble] Reason: {reason}")
-
-        try:
-            payload = {"reason": reason} if reason else {}
-
-            response = await self._make_request(
-                "POST",
-                f"/shipping/cancel/{shipment_id}",
-                data=payload
+        res = await self._make_request("POST", endpoint, data=payload)
+        data = res.get("data") or {}
+        request_token = data.get("request_token")
+        if not request_token:
+            raise ShipBubbleError(
+                "Rate request returned without request_token",
+                response_data=res,
             )
 
-            logger.info(f"✅ [ShipBubble] Shipment cancelled successfully")
-            return True
+        raw_couriers = data.get("couriers") or []
+        couriers: List[ShipbubbleRateOption] = []
+        for raw in raw_couriers:
+            parsed = self._parse_courier_option(raw)
+            if parsed:
+                couriers.append(parsed)
 
-        except ShipBubbleError as e:
-            logger.error(f"❌ [ShipBubble] Failed to cancel shipment: {e.message}")
-            return False
+        cheapest = self._parse_courier_option(data.get("cheapest_courier")) if data.get("cheapest_courier") else None
+        fastest = self._parse_courier_option(data.get("fastest_courier")) if data.get("fastest_courier") else None
 
-        except Exception as e:
-            logger.error(f"💥 [ShipBubble] Unexpected error cancelling shipment: {str(e)}", exc_info=True)
-            return False
+        return ShipbubbleRatesResult(
+            request_token=request_token,
+            couriers=couriers,
+            cheapest_courier=cheapest,
+            fastest_courier=fastest,
+        )
+
+    def _parse_courier_option(self, raw: Any) -> Optional[ShipbubbleRateOption]:
+        if not isinstance(raw, dict):
+            return None
+        courier_id = str(raw.get("courier_id") or "")
+        courier_name = str(raw.get("courier_name") or "")
+        service_code = str(raw.get("service_code") or "")
+        if not courier_id or not service_code:
+            return None
+
+        # Customer display amount is rate_card_amount; wallet debit is total
+        raw_rate_card = raw.get("rate_card_amount")
+        if raw_rate_card is None:
+            raw_rate_card = raw.get("total") or 0
+        raw_total = raw.get("total")
+        if raw_total is None:
+            raw_total = raw_rate_card
+
+        rate_card = Decimal(str(raw_rate_card)).quantize(_CENT, rounding=ROUND_HALF_UP)
+        total_wallet = Decimal(str(raw_total)).quantize(_CENT, rounding=ROUND_HALF_UP)
+        currency = str(raw.get("currency") or "NGN").replace("₦", "NGN").strip()
+        eta = str(raw.get("delivery_eta") or "")
+        min_days, max_days = parse_eta_days(eta)
+
+        return ShipbubbleRateOption(
+            courier_id=courier_id,
+            courier_name=courier_name,
+            service_code=service_code,
+            rate_card_amount=rate_card,
+            total_wallet_amount=total_wallet,
+            currency=currency,
+            delivery_eta=eta,
+            min_delivery_days=min_days,
+            max_delivery_days=max_days,
+            courier_image=raw.get("courier_image"),
+            service_type=str(raw.get("service_type") or "pickup"),
+        )
+
+    async def create_label(
+        self,
+        *,
+        request_token: str,
+        service_code: str,
+        courier_id: str,
+        insurance_code: Optional[str] = None,
+        is_cod_label: bool = False,
+        duties_paid: bool = False,
+    ) -> ShipbubbleShipmentResult:
+        """Create a shipping label via POST /shipping/labels.
+
+        Debits the account's shipping wallet.
+        """
+        payload: Dict[str, Any] = {
+            "request_token": request_token,
+            "service_code": service_code,
+            "courier_id": str(courier_id),
+        }
+        if insurance_code:
+            payload["insurance_code"] = insurance_code
+        if is_cod_label:
+            payload["is_cod_label"] = True
+        if duties_paid:
+            payload["duties_paid"] = True
+
+        res = await self._make_request("POST", "/shipping/labels", data=payload)
+        data = res.get("data") or {}
+        order_id = data.get("order_id")
+        if not order_id:
+            raise ShipBubbleError(
+                "Label created successfully but no order_id was returned",
+                response_data=res,
+            )
+
+        courier_info = data.get("courier") or {}
+        payment_info = data.get("payment") or {}
+        fee_raw = payment_info.get("shipping_fee")
+        fee = Decimal(str(fee_raw)).quantize(_CENT, rounding=ROUND_HALF_UP) if fee_raw is not None else None
+
+        return ShipbubbleShipmentResult(
+            order_id=order_id,
+            status=str(data.get("status") or "pending"),
+            courier_name=str(courier_info.get("name") or ""),
+            tracking_code=courier_info.get("tracking_code"),
+            tracking_url=data.get("tracking_url"),
+            waybill_document_url=data.get("waybill_document"),
+            shipping_fee=fee,
+            currency=payment_info.get("currency", "NGN"),
+            raw_response=res,
+        )
+
+    async def cancel_shipment(self, order_id: str) -> bool:
+        """Cancel a scheduled shipment via POST /shipping/labels/cancel/:order_id."""
+        res = await self._make_request("POST", f"/shipping/labels/cancel/{order_id}")
+        return res.get("status") == "success"
+
+    async def track_shipments(self, order_ids: List[str]) -> List[Dict[str, Any]]:
+        """Track multiple shipments via GET /shipping/labels/list/:order_ids."""
+        if not order_ids:
+            return []
+        ids_str = ",".join(order_ids[:50])
+        res = await self._make_request("GET", f"/shipping/labels/list/{ids_str}")
+        data = res.get("data")
+        if isinstance(data, list):
+            return data
+        if isinstance(data, dict):
+            return data.get("results") or []
+        return []
+
+    async def get_wallet_balance(self) -> Dict[str, Any]:
+        """Fetch account wallet balance via GET /shipping/wallet/balance."""
+        res = await self._make_request("GET", "/shipping/wallet/balance")
+        return res.get("data") or {}
+
+    async def simulate_webhook(self, order_id: str, status_code: str) -> Dict[str, Any]:
+        """Simulate a webhook event in sandbox via POST /shipping/labels/webhooks/:order_id."""
+        payload = {"status_code": status_code}
+        return await self._make_request("POST", f"/shipping/labels/webhooks/{order_id}", data=payload)
 
 
-# Singleton instance
-_shipbubble_service = None
+# Singleton accessor
+_shipbubble_service: Optional[ShipBubbleService] = None
 
-def get_shipbubble_service() -> ShipBubbleService:
-    """Get or create ShipBubble service instance"""
+
+def get_shipbubble_service(
+    transport: Optional[httpx.AsyncBaseTransport] = None,
+) -> ShipBubbleService:
+    """Get or create ShipBubbleService singleton."""
     global _shipbubble_service
+    if transport is not None:
+        return ShipBubbleService(transport=transport)
     if _shipbubble_service is None:
         _shipbubble_service = ShipBubbleService()
     return _shipbubble_service

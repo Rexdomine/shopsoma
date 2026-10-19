@@ -174,6 +174,7 @@ async def _subject(db_session, vendor_user, customer_user):
 
 def _attempt(graph, package, seal, intent, claimed_at, **overrides):
     from app.models.domestic_rate_quote import DomesticRateAttempt
+    from app.services.admin_shadow_quote import _planned_ship_date_for_shadow_quote
 
     values = {
         "intent_id": intent.id,
@@ -194,7 +195,7 @@ def _attempt(graph, package, seal, intent, claimed_at, **overrides):
         "idempotency_key": f"rate-{uuid.uuid4().hex}",
         "request_fingerprint": "b" * 64,
         "fingerprint_key_version": "rate-fingerprint-v1",
-        "planned_ship_date": date.today() + timedelta(days=1),
+        "planned_ship_date": _planned_ship_date_for_shadow_quote(getattr(intent, "created_at", None)),
         "adapter_version": "mydhl-rates-v1",
         "schema_version": "domestic-rate-v1",
         "canonicalization_version": "rate-c14n-v1",

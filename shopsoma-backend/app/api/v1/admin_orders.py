@@ -611,6 +611,16 @@ async def get_order_detail(
                 detail="Order not found",
             )
 
+        if order.payment_status == PaymentStatus.PAID and not order.delivery_provider:
+            try:
+                from app.services.shipping.shipbubble_booking import record_shipbubble_selection_on_paid_order
+                updated_order = await record_shipbubble_selection_on_paid_order(db, order_id=order.id)
+                if updated_order is not None:
+                    await db.commit()
+                    await db.refresh(order)
+            except Exception as sb_exc:
+                logger.warning("Failed to record ShipBubble selection in get_order_detail: %s", sb_exc)
+
         # Build response with detailed error tracking
         display_currency = resolve_order_currency(order)
         usd_to_ngn_rate = await _get_usd_to_ngn_rate(db)
@@ -773,7 +783,7 @@ async def update_order_status(
 
     # Always refresh delivered_at when status is set to DELIVERED
     if new_status == FulfillmentStatus.DELIVERED:
-        order.delivered_at = datetime.now()
+        order.delivered_at = datetime.now(timezone.utc)
         logger.info(
             "[Order Status] order=%s status=%s delivered_at=%s",
             order.order_number,
@@ -783,7 +793,7 @@ async def update_order_status(
 
     # Set cancelled_at timestamp if status is CANCELLED
     if new_status == FulfillmentStatus.CANCELLED and not order.cancelled_at:
-        order.cancelled_at = datetime.now()
+        order.cancelled_at = datetime.now(timezone.utc)
 
     # Update vendor pickups with pickup window data if provided
     pickups = []
@@ -809,13 +819,30 @@ async def update_order_status(
             ):
                 continue
             if update_data.pickup_window_start:
-                pickup.pickup_window_start = parser.isoparse(update_data.pickup_window_start)
+                parsed_start = parser.isoparse(update_data.pickup_window_start)
+                pickup.pickup_window_start = (
+                    parsed_start if parsed_start.tzinfo is not None else parsed_start.replace(tzinfo=timezone.utc)
+                )
             if update_data.pickup_window_end:
-                pickup.pickup_window_end = parser.isoparse(update_data.pickup_window_end)
+                parsed_end = parser.isoparse(update_data.pickup_window_end)
+                pickup.pickup_window_end = (
+                    parsed_end if parsed_end.tzinfo is not None else parsed_end.replace(tzinfo=timezone.utc)
+                )
             if update_data.courier_name:
                 pickup.courier_name = update_data.courier_name
             if update_data.rider_id:
                 pickup.rider_id = update_data.rider_id
+
+    if new_status in (
+        FulfillmentStatus.PREPARING_FOR_PICKUP,
+        FulfillmentStatus.PICKUP_SCHEDULED,
+        FulfillmentStatus.PICKED_UP,
+    ):
+        try:
+            from app.services.shipping.shipbubble_booking import book_shipbubble_shipment_if_selected
+            await book_shipbubble_shipment_if_selected(db, order_id=order.id)
+        except Exception as sb_exc:
+            logger.warning("Failed to book ShipBubble pickup on status update for order %s: %s", order.id, sb_exc)
 
     await db.commit()
     await db.refresh(order)
@@ -911,6 +938,12 @@ async def update_shipping_info(
     return await get_order_detail(str(order.id), admin, db)
 
 
+def _ensure_tz_aware(dt: Optional[datetime]) -> Optional[datetime]:
+    if dt is None:
+        return None
+    return dt if dt.tzinfo is not None else dt.replace(tzinfo=timezone.utc)
+
+
 @router.patch("/{order_id}/pickup/{pickup_id}", response_model=OrderDetail)
 async def update_pickup_status(
     order_id: str,
@@ -971,23 +1004,25 @@ async def update_pickup_status(
         await db.rollback()
         raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
 
+    now_utc = datetime.now(timezone.utc)
+
     # Update status if provided
     if update_data.pickup_status:
         pickup.status = update_data.pickup_status
 
-        # Update timestamps based on status
+        # Update timestamps based on status (must be timezone-aware for PostgreSQL TIMESTAMPTZ)
         if update_data.pickup_status == PickupStatus.IN_TRANSIT and not pickup.actual_pickup_date:
-            pickup.actual_pickup_date = datetime.now()
+            pickup.actual_pickup_date = now_utc
         elif update_data.pickup_status == PickupStatus.DELIVERED_TO_QC and not pickup.qc_center_arrival_date:
-            pickup.qc_center_arrival_date = datetime.now()
+            pickup.qc_center_arrival_date = now_utc
         elif update_data.pickup_status == PickupStatus.QC_APPROVED and not pickup.qc_approved_date:
-            pickup.qc_approved_date = datetime.now()
+            pickup.qc_approved_date = now_utc
         elif update_data.pickup_status == PickupStatus.QC_REJECTED and not pickup.qc_rejected_date:
-            pickup.qc_rejected_date = datetime.now()
+            pickup.qc_rejected_date = now_utc
         elif update_data.pickup_status == PickupStatus.COMPLETED and not pickup.completed_at:
-            pickup.completed_at = datetime.now()
+            pickup.completed_at = now_utc
         elif update_data.pickup_status == PickupStatus.CANCELLED and not pickup.cancelled_at:
-            pickup.cancelled_at = datetime.now()
+            pickup.cancelled_at = now_utc
 
     # Update other fields if provided
     is_scheduling = (
@@ -996,16 +1031,16 @@ async def update_pickup_status(
     )
 
     if update_data.scheduled_pickup_date is not None:
-        pickup.scheduled_pickup_date = update_data.scheduled_pickup_date
+        pickup.scheduled_pickup_date = _ensure_tz_aware(update_data.scheduled_pickup_date)
 
     if update_data.actual_pickup_date is not None:
-        pickup.actual_pickup_date = update_data.actual_pickup_date
+        pickup.actual_pickup_date = _ensure_tz_aware(update_data.actual_pickup_date)
 
     if update_data.pickup_window_start is not None:
-        pickup.pickup_window_start = update_data.pickup_window_start
+        pickup.pickup_window_start = _ensure_tz_aware(update_data.pickup_window_start)
 
     if update_data.pickup_window_end is not None:
-        pickup.pickup_window_end = update_data.pickup_window_end
+        pickup.pickup_window_end = _ensure_tz_aware(update_data.pickup_window_end)
 
     if update_data.logistics_partner is not None:
         pickup.logistics_partner = update_data.logistics_partner
@@ -1024,14 +1059,28 @@ async def update_pickup_status(
 
     if update_data.admin_notes:
         if pickup.admin_notes:
-            pickup.admin_notes += f"\n\n[{datetime.now().isoformat()}] {update_data.admin_notes}"
+            pickup.admin_notes += f"\n\n[{now_utc.isoformat()}] {update_data.admin_notes}"
         else:
-            pickup.admin_notes = f"[{datetime.now().isoformat()}] {update_data.admin_notes}"
+            pickup.admin_notes = f"[{now_utc.isoformat()}] {update_data.admin_notes}"
 
     if is_scheduling and not update_data.pickup_status:
         pickup.status = PickupStatus.SCHEDULED
-        if order_item and order_item.fulfillment_status != FulfillmentStatus.CANCELLED:
+        # Avoid mutating order_items on paid domestic_checkout_v1 orders because
+        # trg_order_items_checkout_completion enforces active stock_reservations,
+        # whereas paid orders have consumed reservations.
+        if (
+            order_item
+            and order_item.fulfillment_status != FulfillmentStatus.CANCELLED
+            and getattr(order, "workflow_cohort", None) != "domestic_checkout_v1"
+        ):
             order_item.fulfillment_status = FulfillmentStatus.PICKUP_SCHEDULED
+
+    if update_data.pickup_status in (
+        PickupStatus.IN_TRANSIT,
+        PickupStatus.DELIVERED_TO_QC,
+        PickupStatus.QC_APPROVED,
+    ):
+        await _book_shipbubble_if_all_items_ready(db, order_id=order.id)
 
     await db.commit()
 
@@ -1050,6 +1099,54 @@ async def update_pickup_status(
 
     # Return updated order
     return await get_order_detail(order_id, admin, db)
+
+
+async def _book_shipbubble_if_all_items_ready(db: AsyncSession, *, order_id: UUID) -> None:
+    """When all items in an order are marked Ready for Pickup at the Hub, book the ShipBubble pickup."""
+    try:
+        items = (
+            await db.scalars(select(OrderItem).where(OrderItem.order_id == order_id))
+        ).all()
+        if not items:
+            return
+        pickups = (
+            await db.scalars(select(VendorPickup).where(VendorPickup.order_id == order_id))
+        ).all()
+        by_item = pickups_by_order_item(pickups)
+        all_ready = True
+        for it in items:
+            p = by_item.get(it.id)
+            if p is None:
+                all_ready = False
+                break
+            item_ready = (
+                p.ready_for_pickup_at is not None
+                or is_picked_up(p)
+                or p.status in (
+                    PickupStatus.DELIVERED_TO_QC,
+                    PickupStatus.QC_APPROVED,
+                    PickupStatus.SHIPPED_TO_CUSTOMER,
+                    PickupStatus.COMPLETED,
+                )
+            )
+            if not item_ready:
+                all_ready = False
+                break
+        if all_ready:
+            from app.services.shipping.shipbubble_booking import book_shipbubble_shipment_if_selected
+            await book_shipbubble_shipment_if_selected(db, order_id=order_id)
+            from app.services.dhl.dhl_tracking_map import is_dhl_order
+            from app.services.dhl.hub_preparation import prepare_dhl_hub_package_for_order
+            order_row = await db.get(Order, order_id)
+            if (
+                order_row is not None
+                and order_row.payment_status == PaymentStatus.PAID
+                and await is_dhl_order(db, order=order_row)
+            ):
+                await prepare_dhl_hub_package_for_order(db, order_id=order_id)
+                await db.commit()
+    except Exception as exc:
+        logger.warning("Failed checking/booking ShipBubble pickup after item readiness for order %s: %s", order_id, exc)
 
 
 @router.post("/{order_id}/items/{item_id}/ready-for-pickup", response_model=OrderDetail)
@@ -1120,8 +1217,90 @@ async def admin_mark_item_ready_for_pickup(
         elif not is_mto and pickup.order_type != OrderType.RTW:
             pickup.order_type = OrderType.RTW
 
+    await db.flush()
+    await _book_shipbubble_if_all_items_ready(db, order_id=order.id)
     await db.commit()
     await db.refresh(pickup)
+
+    return await get_order_detail(order_id, admin, db)
+
+
+@router.post("/{order_id}/shipbubble/book-pickup", response_model=OrderDetail)
+async def admin_book_shipbubble_pickup(
+    order_id: str,
+    admin: User = Depends(get_current_admin),
+    db: AsyncSession = Depends(get_db),
+):
+    """Mark all items in the order ready for pickup at the Hub and dispatch the ShipBubble courier."""
+    try:
+        order_uuid = UUID(order_id)
+    except ValueError:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Order not found",
+        )
+
+    order = await db.scalar(
+        select(Order)
+        .options(
+            selectinload(Order.customer),
+            selectinload(Order.items).selectinload(OrderItem.product),
+            selectinload(Order.items).selectinload(OrderItem.vendor),
+        )
+        .where(Order.id == order_uuid)
+        .with_for_update()
+    )
+    if not order:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Order not found",
+        )
+
+    if order.payment_status != PaymentStatus.PAID:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Cannot dispatch ShipBubble pickup until order payment is verified",
+        )
+
+    now_utc = datetime.now(timezone.utc)
+    for item in order.items:
+        is_mto = is_made_to_order_item(item)
+        pickups = (
+            await db.scalars(
+                select(VendorPickup).where(VendorPickup.order_item_id == item.id)
+            )
+        ).all()
+        pickup = select_item_pickup(pickups)
+        if pickup is None:
+            pickup = VendorPickup(
+                vendor_id=item.vendor_id,
+                order_id=order.id,
+                order_item_id=item.id,
+                order_type=OrderType.MADE_TO_ORDER if is_mto else OrderType.RTW,
+                scheduled_pickup_date=None,
+                pickup_address=item.vendor.business_address if item.vendor else None,
+                pickup_contact_phone=item.vendor.business_phone if item.vendor else None,
+                status=PickupStatus.SCHEDULED,
+            )
+            db.add(pickup)
+        if pickup.ready_for_pickup_at is None and not is_picked_up(pickup):
+            pickup.ready_for_pickup_at = now_utc
+            pickup.ready_for_pickup_marked_by = admin.id
+
+    await db.flush()
+
+    from app.services.shipping.shipbubble_booking import book_shipbubble_shipment_if_selected
+    shipment = await book_shipbubble_shipment_if_selected(db, order_id=order.id)
+    if shipment is None:
+        await db.commit()
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail="Could not book ShipBubble pickup label. Check order admin notes or ShipBubble wallet balance.",
+        )
+
+    await db.commit()
+    await db.refresh(order)
+    await _broadcast_order_update(order)
 
     return await get_order_detail(order_id, admin, db)
 
@@ -1190,7 +1369,7 @@ async def bulk_update_status(
 
         # Always refresh delivered_at when status is set to DELIVERED
         if update_data.fulfillment_status == FulfillmentStatus.DELIVERED:
-            order.delivered_at = datetime.now()
+            order.delivered_at = datetime.now(timezone.utc)
             logger.info(
                 "[Order Status] order=%s status=%s delivered_at=%s",
                 order.order_number,
@@ -1422,13 +1601,21 @@ async def create_dhl_handoff(
             .where(Order.id == parsed_order_id)
             .with_for_update()
         )
+        from app.services.dhl.hub_preparation import ensure_hub_prep_ready_for_handoff
+        effective_occurred_at = await ensure_hub_prep_ready_for_handoff(
+            db,
+            order_id=parsed_order_id,
+            booking_id=UUID(booking_id),
+            actor_id=str(admin.id),
+            occurred_at=payload.occurred_at,
+        )
         result = await record_collection_handoff(
             db,
             order_id=parsed_order_id,
             admin=admin,
             command=HandoffCommand(
                 booking_id=UUID(booking_id),
-                occurred_at=payload.occurred_at,
+                occurred_at=effective_occurred_at,
                 idempotency_key=payload.idempotency_key,
                 counterparty=payload.counterparty,
                 evidence_ref=payload.evidence_ref,
@@ -1553,7 +1740,7 @@ async def cancel_order(
 
     # Cancel order
     order.fulfillment_status = FulfillmentStatus.CANCELLED
-    order.cancelled_at = datetime.now()
+    order.cancelled_at = datetime.now(timezone.utc)
     order.cancellation_reason = cancel_data.cancellation_reason
 
     # Add admin notes
@@ -1747,3 +1934,39 @@ async def export_orders_csv(
             "Content-Disposition": f"attachment; filename=orders_{raw_status}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv"
         },
     )
+
+
+@router.post("/{order_id}/dhl/prepare-package", response_model=OrderDetail)
+async def prepare_dhl_package(
+    order_id: str,
+    admin: User = Depends(get_current_admin),
+    db: AsyncSession = Depends(get_db),
+):
+    """Idempotently prepare Hub package, seal, custody stream, outbound shipment intent, and selected quote for DHL booking."""
+    try:
+        parsed_order_id = UUID(order_id)
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="Invalid order id",
+        ) from exc
+
+    from app.services.dhl.hub_preparation import prepare_dhl_hub_package_for_order
+
+    try:
+        await prepare_dhl_hub_package_for_order(
+            db,
+            order_id=parsed_order_id,
+            actor_id=admin.id,
+        )
+        await db.commit()
+    except ValueError as exc:
+        detail = str(exc)
+        status_code = (
+            status.HTTP_404_NOT_FOUND
+            if detail == "order not found"
+            else status.HTTP_400_BAD_REQUEST
+        )
+        raise HTTPException(status_code=status_code, detail=detail) from exc
+
+    return await get_order_detail(order_id=order_id, admin=admin, db=db)
