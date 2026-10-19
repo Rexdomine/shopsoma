@@ -488,8 +488,14 @@ export default function AdminSettings() {
     );
   }
 
-  const dhlReadyForCheckout = Boolean(shippingProvider?.readiness.dhl && shippingProvider?.checkout_estimates_required);
-  const combinedReadyForCheckout = Boolean(shippingProvider?.readiness.combined && shippingProvider?.checkout_estimates_required);
+  const dhlReadyForCheckout = Boolean(
+    shippingProvider?.readiness.dhl &&
+    (shippingProvider?.checkout_estimates_required || shippingProvider?.readiness.combined)
+  );
+  const combinedReadyForCheckout = Boolean(
+    shippingProvider?.readiness.combined &&
+    (shippingProvider?.checkout_estimates_required || shippingProvider?.readiness.combined)
+  );
   const categories = [
     ['currency', 'Currency', 'Exchange rates and display values', DollarSign],
     ['shipping', 'Shipping', 'Provider and checkout readiness', Truck],

@@ -331,12 +331,19 @@ async def update_shipping_provider_settings(
 
     Select one or more ready providers and atomically maintain the settings.
     """
+    from app.core.config import settings as app_settings
+
     effective = await shipping_provider_settings(db)
+    dhl_routing_ready = (
+        app_settings.DOMESTIC_CHECKOUT_PREREQUISITES_ENABLED
+        and app_settings.DOMESTIC_CHECKOUT_COHORT_PERCENTAGE == 100
+        and app_settings.DHL_ENVIRONMENT == "sandbox"
+    )
     if settings.enabled_providers is not None:
         for p in settings.enabled_providers:
             if not effective.readiness.get(p, False):
                 raise HTTPException(status_code=409, detail=f"{p} is not available for secure checkout")
-            if p == "dhl" and not effective.checkout_estimates_required:
+            if p == "dhl" and not dhl_routing_ready:
                 raise HTTPException(
                     status_code=409,
                     detail="DHL requires full secure-checkout cohort routing before admin selection",
@@ -346,7 +353,7 @@ async def update_shipping_provider_settings(
     else:
         if not effective.readiness.get(settings.provider, False):
             raise HTTPException(status_code=409, detail=f"{settings.provider} is not available for secure checkout")
-        if settings.provider == "dhl" and not effective.checkout_estimates_required:
+        if settings.provider == "dhl" and not dhl_routing_ready:
             raise HTTPException(
                 status_code=409,
                 detail="DHL requires full secure-checkout cohort routing before admin selection",
