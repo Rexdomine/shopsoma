@@ -98,7 +98,10 @@ def _domestic_checkout_is_enforced(
         return True
     if not settings.DOMESTIC_CHECKOUT_PREREQUISITES_ENABLED:
         return False
-    if settings.ENVIRONMENT == "production" or settings.DHL_ENVIRONMENT != "sandbox":
+    if (
+        (settings.ENVIRONMENT == "production" and shipping_provider not in ("dhl", "combined"))
+        or settings.DHL_ENVIRONMENT != "sandbox"
+    ):
         return False
     if country.strip().casefold() not in {"nigeria", "ng"} or currency not in SUPPORTED_ORDER_CURRENCIES:
         return False

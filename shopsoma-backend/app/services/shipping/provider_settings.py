@@ -16,14 +16,10 @@ async def shipping_provider_settings(db):
         )))
     )).all())
     shipbubble_ready = settings.shipbubble_configured
-    dhl_ready = (
-        settings.ENVIRONMENT != "production"
-        and domestic_shipping_capabilities(settings).checkout_enabled
-    )
+    dhl_ready = domestic_shipping_capabilities(settings).checkout_enabled
     dhl_secure_checkout_routing = (
         settings.DOMESTIC_CHECKOUT_PREREQUISITES_ENABLED
         and settings.DOMESTIC_CHECKOUT_COHORT_PERCENTAGE == 100
-        and settings.ENVIRONMENT != "production"
         and settings.DHL_ENVIRONMENT == "sandbox"
     )
     combined_ready = bool(shipbubble_ready or (dhl_ready and dhl_secure_checkout_routing))
@@ -107,7 +103,6 @@ async def require_manual_order_pricing(db):
     secure_checkout_routing = (
         settings.DOMESTIC_CHECKOUT_PREREQUISITES_ENABLED
         and settings.DOMESTIC_CHECKOUT_COHORT_PERCENTAGE == 100
-        and settings.ENVIRONMENT != "production"
         and settings.DHL_ENVIRONMENT == "sandbox"
     )
     if provider == "dhl" and not secure_checkout_routing:
