@@ -481,6 +481,22 @@ async def test_dhl_full_fulfillment_workflow_webhook_and_live_map_simulator(
     assert label_res.content.startswith(b"%PDF-1.4")
     assert label_res.headers["x-label-sha256"] == hashlib.sha256(fake_pdf).hexdigest()
 
+    sent_emails: list[dict] = []
+
+    async def _capture_send_email(self, *, to_email: str, to_name: str, subject: str, html_content: str, **kwargs):
+        sent_emails.append(
+            {
+                "to_email": to_email,
+                "to_name": to_name,
+                "subject": subject,
+                "html_content": html_content,
+            }
+        )
+        return True
+
+    from app.services.email_service import EmailService
+    monkeypatch.setattr(EmailService, "send_email", _capture_send_email)
+
     # Step 4: Record Hub-to-DHL Handoff on the hub-prepared package
     handoff_res = await client.post(
         f"/api/v1/admin/orders/{order.id}/dhl/bookings/{booking_id}/handoff",
@@ -495,6 +511,10 @@ async def test_dhl_full_fulfillment_workflow_webhook_and_live_map_simulator(
     )
     assert handoff_res.status_code == 200, handoff_res.text
     assert handoff_res.json()["outbound_state"] == "collected"
+
+    customer_email = customer_user["user"].email
+    customer_subjects = [e["subject"] for e in sent_emails if e["to_email"] == customer_email]
+    assert f"Order {order.order_number}: Order Dispatched" in customer_subjects
 
     # Step 5: Verify Live Map Payload via Customer Tracking Endpoint
     track_res = await client.get(
@@ -523,6 +543,10 @@ async def test_dhl_full_fulfillment_workflow_webhook_and_live_map_simulator(
         sim_body = sim_res.json()
         assert sim_body["current_status"] == step_key
         assert sim_body["shipbubble_tracking"]["current_location"]["progress"] == expected_progress
+
+    customer_subjects = [e["subject"] for e in sent_emails if e["to_email"] == customer_email]
+    assert f"Order {order.order_number}: In Transit" in customer_subjects
+    assert f"Order {order.order_number}: Out for Delivery" in customer_subjects
 
     # Step 7: Authenticated DHL Webhook Verification (Unauthorized -> 401, Valid HMAC -> 200, Replay -> 0 new, Out-of-order -> Monotonic)
     unauth_wh = await client.post(
@@ -562,6 +586,10 @@ async def test_dhl_full_fulfillment_workflow_webhook_and_live_map_simulator(
     wh_body = wh_res.json()
     assert wh_body["inserted_observations"] == 1
 
+    customer_subjects = [e["subject"] for e in sent_emails if e["to_email"] == customer_email]
+    assert f"Order {order.order_number}: Delivered Successfully" in customer_subjects
+    email_count_after_delivered = len(sent_emails)
+
     # Duplicate replay of the exact same webhook
     wh_replay = await client.post(
         "/api/v1/shipping/webhooks/dhl",
@@ -574,6 +602,7 @@ async def test_dhl_full_fulfillment_workflow_webhook_and_live_map_simulator(
     assert wh_replay.status_code == 200
     assert wh_replay.json()["inserted_observations"] == 0
     assert wh_replay.json()["replayed_observations"] == 1
+    assert len(sent_emails) == email_count_after_delivered
 
     # Out-of-order older IN_TRANSIT event must NOT regress DELIVERED order status
     stale_payload = {
@@ -602,6 +631,7 @@ async def test_dhl_full_fulfillment_workflow_webhook_and_live_map_simulator(
         },
     )
     assert wh_stale.status_code == 200
+    assert len(sent_emails) == email_count_after_delivered
 
     final_track = await client.get(
         f"/api/v1/orders/{order.id}/tracking",
@@ -850,6 +880,107 @@ async def test_dhl_live_mydhl_sandbox_end_to_end_rates_booking_label_and_trackin
             json.dumps(evidence_payload, indent=2, default=str),
             encoding="utf-8",
         )
+
+
+@pytest.mark.asyncio
+async def test_shipbubble_webhook_and_simulator_dispatch_customer_tracking_emails(
+    client: AsyncClient,
+    db_session: AsyncSession,
+    customer_user: dict,
+    vendor_user: dict,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """Verifies ShipBubble tracking transitions (webhook & simulator) send customer emails."""
+    from app.models.shipbubble_shipment import ShipbubbleShipment
+    from app.services.email_service import EmailService
+
+    sb_api_key = "sb_sandbox_test_secret_key_12345"
+    monkeypatch.setattr(settings, "SHIPBUBBLE_API_KEY", sb_api_key)
+
+    cohort_seed = uuid.UUID("30f204c5-ac27-4719-89fc-cc9208f19032")
+    order = await _create_checkout_order_for_dhl(
+        db_session,
+        customer_user=customer_user,
+        vendor_user=vendor_user,
+        cohort_seed=cohort_seed,
+        currency="NGN",
+        subtotal=Decimal("35000.00"),
+    )
+    order.payment_status = PaymentStatus.PAID
+    order.delivery_provider = "shipbubble:GIG Logistics"
+    order.tracking_number = f"SB-TRK-{order.id.hex[:8].upper()}"
+    sb_order_id = f"SB-ORD-{order.id.hex[:8].upper()}"
+
+    shipment = ShipbubbleShipment(
+        order_id=order.id,
+        request_token=f"req-tok-{order.id.hex[:10]}",
+        shipbubble_order_id=sb_order_id,
+        courier_id="gig",
+        courier_name="GIG Logistics",
+        service_code="gig-std",
+        status="pending",
+        tracking_code=order.tracking_number,
+        currency="NGN",
+    )
+    db_session.add(shipment)
+    await db_session.commit()
+
+    sent_emails: list[dict] = []
+
+    async def _capture_send_email(self, *, to_email: str, to_name: str, subject: str, html_content: str, **kwargs):
+        sent_emails.append(
+            {
+                "to_email": to_email,
+                "to_name": to_name,
+                "subject": subject,
+                "html_content": html_content,
+            }
+        )
+        return True
+
+    monkeypatch.setattr(EmailService, "send_email", _capture_send_email)
+
+    customer_token = customer_user["token"]
+    customer_email = customer_user["user"].email
+
+    # 1. Simulate ShipBubble 'picked_up' and 'in_transit' via Live Map Simulator
+    for step_key in ("picked_up", "in_transit"):
+        sim_res = await client.post(
+            f"/api/v1/orders/{order.id}/tracking/simulate",
+            json={"status": step_key},
+            headers={"Authorization": f"Bearer {customer_token}"},
+        )
+        assert sim_res.status_code == 200, sim_res.text
+        assert sim_res.json()["current_status"] == step_key
+
+    customer_subjects = [e["subject"] for e in sent_emails if e["to_email"] == customer_email]
+    assert f"Order {order.order_number}: Order Dispatched" in customer_subjects
+    assert f"Order {order.order_number}: In Transit" in customer_subjects
+
+    # 2. Send ShipBubble Webhook for 'out_for_delivery' and 'delivered'
+    for wh_status in ("out_for_delivery", "delivered"):
+        wh_payload = {
+            "event": f"shipment.{wh_status}",
+            "order_id": sb_order_id,
+            "status": wh_status,
+            "courier": {"name": "GIG Logistics", "tracking_code": order.tracking_number},
+        }
+        raw_wh = json.dumps(wh_payload).encode("utf-8")
+        wh_sig = hmac.new(sb_api_key.encode("utf-8"), raw_wh, hashlib.sha512).hexdigest()
+        wh_res = await client.post(
+            "/api/v1/shipping/webhooks/shipbubble",
+            content=raw_wh,
+            headers={
+                "Content-Type": "application/json",
+                "x-ship-signature": wh_sig,
+            },
+        )
+        assert wh_res.status_code == 200, wh_res.text
+
+    customer_subjects = [e["subject"] for e in sent_emails if e["to_email"] == customer_email]
+    assert f"Order {order.order_number}: Out for Delivery" in customer_subjects
+    assert f"Order {order.order_number}: Delivered Successfully" in customer_subjects
+
 
 
 

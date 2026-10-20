@@ -84,15 +84,16 @@ async def shipbubble_webhook(
         logger.info("[ShipBubble Webhook] Duplicate event %s ignored", payload_sha256)
         return {"status": "ok", "message": "duplicate event ignored"}
 
-    event_type = payload.get("event") or "unknown"
-    sb_order_id = payload.get("order_id")
+    nested_data = payload.get("data") if isinstance(payload.get("data"), dict) else {}
+    event_type = payload.get("event") or nested_data.get("event") or "unknown"
+    sb_order_id = payload.get("order_id") or nested_data.get("order_id")
 
     webhook_record = ShipbubbleWebhookEvent(
-        event_type=event_type,
-        shipbubble_order_id=sb_order_id,
+        event_id=str(sb_order_id) if sb_order_id else None,
+        event_type=str(event_type),
         payload_sha256=payload_sha256,
         payload=payload,
-        processed=False,
+        status="received",
     )
     db.add(webhook_record)
     await db.flush()
@@ -104,11 +105,15 @@ async def shipbubble_webhook(
             )
         )
         if shipment:
-            status_val = payload.get("status")
-            courier_info = payload.get("courier") or {}
-            tracking_code = courier_info.get("tracking_code")
-            tracking_url = payload.get("tracking_url")
-            waybill_document = payload.get("waybill_document")
+            status_val = payload.get("status") or nested_data.get("status")
+            courier_info = payload.get("courier") or nested_data.get("courier") or {}
+            tracking_code = (
+                courier_info.get("tracking_code")
+                if isinstance(courier_info, dict)
+                else None
+            ) or payload.get("tracking_code") or nested_data.get("tracking_code")
+            tracking_url = payload.get("tracking_url") or nested_data.get("tracking_url")
+            waybill_document = payload.get("waybill_document") or nested_data.get("waybill_document")
 
             if status_val:
                 shipment.status = status_val
@@ -122,13 +127,14 @@ async def shipbubble_webhook(
             order = await db.scalar(
                 select(Order).where(Order.id == shipment.order_id).with_for_update()
             )
+            old_status = order.fulfillment_status if order else None
             if order:
                 if tracking_code and not order.tracking_number:
                     order.tracking_number = tracking_code
                 elif sb_order_id and not order.tracking_number:
                     order.tracking_number = sb_order_id
 
-                status_lower = (status_val or "").lower()
+                status_lower = (status_val or "").lower().strip()
                 if status_lower in ("picked_up", "pickup_completed"):
                     order.fulfillment_status = FulfillmentStatus.PICKED_UP
                 elif status_lower in ("in_transit", "in-transit"):
@@ -137,17 +143,34 @@ async def shipbubble_webhook(
                     order.fulfillment_status = FulfillmentStatus.OUT_FOR_DELIVERY
                 elif status_lower in ("delivered", "completed"):
                     order.fulfillment_status = FulfillmentStatus.DELIVERED
-                    order.delivered_at = datetime.now(timezone.utc)
+                    if order.delivered_at is None:
+                        order.delivered_at = datetime.now(timezone.utc)
                 elif status_lower in ("delivery_failed", "failed"):
                     order.fulfillment_status = FulfillmentStatus.DELIVERY_FAILED
                 elif status_lower in ("returned",):
                     order.fulfillment_status = FulfillmentStatus.RETURNED
+                elif status_lower in ("cancelled", "canceled"):
+                    order.fulfillment_status = FulfillmentStatus.CANCELLED
 
                 db.add(order)
 
-            webhook_record.processed = True
+            webhook_record.status = "processed"
             webhook_record.processed_at = datetime.now(timezone.utc)
             await db.flush()
+
+            await db.commit()
+            if order and old_status != order.fulfillment_status:
+                try:
+                    from app.api.v1.admin_orders import (
+                        _broadcast_order_update,
+                        _notify_order_status_change,
+                    )
+
+                    await _notify_order_status_change(db, order=order, old_status=old_status)
+                    await _broadcast_order_update(order)
+                except Exception as notify_exc:
+                    logger.warning("[ShipBubble Webhook] Notification/broadcast note: %s", notify_exc)
+            return {"status": "ok", "message": "webhook processed"}
 
     await db.commit()
     return {"status": "ok", "message": "webhook processed"}

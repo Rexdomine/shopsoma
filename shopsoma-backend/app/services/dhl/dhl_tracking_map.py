@@ -374,6 +374,7 @@ async def sync_dhl_shipment_status(
     if booking is None or not booking.tracking_number:
         return booking
 
+    old_status = order.fulfillment_status
     try:
         idem_key = f"sync-dhl-{booking.id.hex[:16]}-{int(datetime.now(timezone.utc).timestamp())}"
         await refresh_tracking(
@@ -381,7 +382,6 @@ async def sync_dhl_shipment_status(
             order_id=order.id,
             settings=settings,
             command=TrackingRefreshCommand(
-                order_id=order.id,
                 booking_id=booking.id,
                 idempotency_key=idem_key,
             ),
@@ -389,6 +389,17 @@ async def sync_dhl_shipment_status(
         await db.commit()
         await db.refresh(order)
         await db.refresh(booking)
+        if old_status != order.fulfillment_status:
+            try:
+                from app.api.v1.admin_orders import (
+                    _broadcast_order_update,
+                    _notify_order_status_change,
+                )
+
+                await _notify_order_status_change(db, order=order, old_status=old_status)
+                await _broadcast_order_update(order)
+            except Exception as notify_exc:
+                logger.warning("[DHL] Sync notification note for %s: %s", order.id, notify_exc)
     except Exception as exc:
         logger.warning("[DHL] Live tracking poll note for %s: %s", booking.tracking_number, exc)
         await db.rollback()
@@ -488,6 +499,7 @@ async def simulate_dhl_tracking_step(
         fulfillment_enum,
     ) = step_definitions[target_status]
 
+    old_status = order.fulfillment_status
     admin_user = (
         await db.execute(select(User).where(User.role == UserRole.ADMIN).limit(1))
     ).scalar_one_or_none()
@@ -560,30 +572,34 @@ async def simulate_dhl_tracking_step(
         # Record Hub-to-DHL handoff if not yet recorded
         if booking.handoff_recorded_at is None and admin_user is not None:
             try:
-                handoff_time = await db.scalar(text("SELECT clock_timestamp()"))
-                assert handoff_time is not None
-                evidence_ref = f"dhl-sandbox-handoff-{booking.tracking_number}"
-                await record_collection_handoff(
-                    db,
-                    order_id=order.id,
-                    admin=admin_user,
-                    command=HandoffCommand(
+                async with db.begin_nested():
+                    handoff_time = await db.scalar(text("SELECT clock_timestamp()"))
+                    assert handoff_time is not None
+                    evidence_ref = f"dhl-sandbox-handoff-{booking.tracking_number}"
+                    await record_collection_handoff(
+                        db,
                         order_id=order.id,
-                        booking_id=booking.id,
-                        counterparty="DHL Express Sandbox Courier",
-                        evidence_ref=evidence_ref,
-                        evidence_sha256=hashlib.sha256(
-                            evidence_ref.encode("utf-8")
-                        ).hexdigest(),
-                        occurred_at=handoff_time,
-                        idempotency_key=f"sim-handoff-{booking.id.hex}",
-                    ),
-                )
+                        admin=admin_user,
+                        command=HandoffCommand(
+                            booking_id=booking.id,
+                            counterparty="DHL Express Sandbox Courier",
+                            evidence_ref=evidence_ref,
+                            evidence_sha256=hashlib.sha256(
+                                evidence_ref.encode("utf-8")
+                            ).hexdigest(),
+                            occurred_at=handoff_time,
+                            idempotency_key=f"sim-handoff-{booking.id.hex}",
+                        ),
+                    )
             except Exception as exc:
                 logger.info("[DHL Simulator] Handoff auto-record note: %s", exc)
 
     booking.outbound_state = outbound_state
     booking.last_tracking_refresh_at = await db.scalar(text("SELECT clock_timestamp()"))
+    if booking.tracking_number and not order.tracking_number:
+        order.tracking_number = booking.tracking_number
+    if not order.delivery_provider:
+        order.delivery_provider = "dhl"
     order.fulfillment_status = fulfillment_enum
     if fulfillment_enum == FulfillmentStatus.DELIVERED and order.delivered_at is None:
         order.delivered_at = booking.last_tracking_refresh_at
@@ -592,3 +608,15 @@ async def simulate_dhl_tracking_step(
     db.add(order)
     await db.commit()
     await db.refresh(order)
+
+    if old_status != order.fulfillment_status:
+        try:
+            from app.api.v1.admin_orders import (
+                _broadcast_order_update,
+                _notify_order_status_change,
+            )
+
+            await _notify_order_status_change(db, order=order, old_status=old_status)
+            await _broadcast_order_update(order)
+        except Exception as notify_exc:
+            logger.warning("[DHL Simulator] Notification note for %s: %s", order.id, notify_exc)

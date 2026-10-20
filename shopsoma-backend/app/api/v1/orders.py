@@ -1956,9 +1956,10 @@ async def simulate_order_tracking_step(
     if target_status not in step_map:
         raise HTTPException(status_code=422, detail="Invalid simulation status")
 
+    old_status = order.fulfillment_status
     fulfillment_enum, sb_status = step_map[target_status]
     order.fulfillment_status = fulfillment_enum
-    if fulfillment_enum == FulfillmentStatus.DELIVERED:
+    if fulfillment_enum == FulfillmentStatus.DELIVERED and order.delivered_at is None:
         order.delivered_at = datetime.now(timezone.utc)
 
     from app.models.shipbubble_shipment import ShipbubbleShipment
@@ -1970,6 +1971,8 @@ async def simulate_order_tracking_step(
     if shipment:
         shipment.status = sb_status
         shipment.updated_at = datetime.now(timezone.utc)
+        if (shipment.tracking_code or shipment.shipbubble_order_id) and not order.tracking_number:
+            order.tracking_number = shipment.tracking_code or shipment.shipbubble_order_id
         db.add(shipment)
         if shipment.shipbubble_order_id:
             try:
@@ -1981,6 +1984,18 @@ async def simulate_order_tracking_step(
     db.add(order)
     await db.commit()
     await db.refresh(order)
+
+    if old_status != order.fulfillment_status:
+        try:
+            from app.api.v1.admin_orders import (
+                _broadcast_order_update,
+                _notify_order_status_change,
+            )
+
+            await _notify_order_status_change(db, order=order, old_status=old_status)
+            await _broadcast_order_update(order)
+        except Exception as notify_exc:
+            logger.warning("[ShipBubble Simulator] Notification note for %s: %s", order.id, notify_exc)
 
     return await get_order_tracking(
         order_ref=str(order.id),

@@ -320,36 +320,48 @@ async def dhl_webhook(
                 from app.services.dhl.hub_preparation import ensure_hub_prep_ready_for_handoff
                 from app.services.dhl.shipments import HandoffCommand, record_collection_handoff
 
-                await ensure_hub_prep_ready_for_handoff(
+                effective_occurred_at = await ensure_hub_prep_ready_for_handoff(
                     db,
                     order_id=order.id,
                     booking_id=booking.id,
                     actor_id=booking.initiating_actor_id,
                     occurred_at=chosen.observed_at,
                 )
+                actor = None
                 try:
-                    from app.models.user import User
+                    import uuid as _uuid
+                    from app.models.user import User, UserRole
 
-                    actor = await db.get(User, booking.initiating_actor_id)
+                    actor = await db.get(User, _uuid.UUID(str(booking.initiating_actor_id)))
                 except Exception:
                     actor = None
+                if actor is None:
+                    try:
+                        from app.models.user import User, UserRole
+
+                        actor = (
+                            await db.execute(select(User).where(User.role == UserRole.ADMIN).limit(1))
+                        ).scalar_one_or_none()
+                    except Exception:
+                        actor = None
                 if actor is not None:
                     try:
-                        await record_collection_handoff(
-                            db,
-                            order_id=order.id,
-                            admin=actor,
-                            command=HandoffCommand(
-                                booking_id=booking.id,
-                                occurred_at=chosen.observed_at,
-                                idempotency_key=f"dhl-wh-handoff-{booking.id.hex[:20]}",
-                                counterparty="DHL Express",
-                                evidence_ref=f"evidence/dhl/webhook-{booking.id.hex[:16]}",
-                                evidence_sha256=hashlib.sha256(f"dhl-wh-{booking.id.hex}".encode("utf-8")).hexdigest(),
-                            ),
-                        )
-                    except Exception:
-                        pass
+                        async with db.begin_nested():
+                            await record_collection_handoff(
+                                db,
+                                order_id=order.id,
+                                admin=actor,
+                                command=HandoffCommand(
+                                    booking_id=booking.id,
+                                    occurred_at=effective_occurred_at or chosen.observed_at,
+                                    idempotency_key=f"dhl-wh-handoff-{booking.id.hex[:20]}",
+                                    counterparty="DHL Express",
+                                    evidence_ref=f"evidence/dhl/webhook-{booking.id.hex[:16]}",
+                                    evidence_sha256=hashlib.sha256(f"dhl-wh-{booking.id.hex}".encode("utf-8")).hexdigest(),
+                                ),
+                            )
+                    except Exception as handoff_exc:
+                        logger.info("[DHL Webhook] Auto-handoff note: %s", handoff_exc)
             if chosen.outbound_state == "exception":
                 if booking.handoff_recorded_at is not None:
                     booking.outbound_state = "exception"
