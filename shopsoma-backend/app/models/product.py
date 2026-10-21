@@ -174,9 +174,10 @@ class Product(Base):
     @property
     def category_name(self):
         """Expose the category name for API responses."""
-        if self.category:
-            return self.category.name
-        return None
+        category_attr = inspect(self).attrs.category
+        if category_attr.loaded_value is NO_VALUE or not category_attr.loaded_value:
+            return None
+        return category_attr.loaded_value.name
 
     @property
     def collection_name(self):
@@ -188,10 +189,11 @@ class Product(Base):
     @property
     def category_parent_name(self):
         """Expose the parent category name for API responses."""
-        if not self.category:
+        category_attr = inspect(self).attrs.category
+        if category_attr.loaded_value is NO_VALUE or not category_attr.loaded_value:
             return None
 
-        parent_attr = inspect(self.category).attrs.parent
+        parent_attr = inspect(category_attr.loaded_value).attrs.parent
         if parent_attr.loaded_value is NO_VALUE:
             return None
 
@@ -199,6 +201,46 @@ class Product(Base):
         if parent:
             return parent.name
         return None
+
+    @property
+    def categories(self) -> list[str]:
+        """Expose all category names the product belongs to (lineage from root to leaf, plus curated shop edits)."""
+        names: list[str] = []
+        seen: set[str] = set()
+
+        category_attr = inspect(self).attrs.category
+        curr = category_attr.loaded_value if category_attr.loaded_value is not NO_VALUE else None
+        lineage: list[str] = []
+        visited_ids: set[object] = set()
+        while curr is not None:
+            curr_id = getattr(curr, "id", None) or id(curr)
+            if curr_id in visited_ids:
+                break
+            visited_ids.add(curr_id)
+            if getattr(curr, "name", None):
+                lineage.append(curr.name)
+            parent_attr = inspect(curr).attrs.parent
+            if parent_attr.loaded_value is NO_VALUE:
+                break
+            curr = parent_attr.loaded_value
+
+        for name in reversed(lineage):
+            key = name.casefold()
+            if key not in seen:
+                seen.add(key)
+                names.append(name)
+
+        shop_edits_attr = inspect(self).attrs.shop_edit_categories
+        if shop_edits_attr.loaded_value is not NO_VALUE and shop_edits_attr.loaded_value:
+            for edit_cat in shop_edits_attr.loaded_value:
+                edit_name = getattr(edit_cat, "name", None)
+                if edit_name:
+                    key = edit_name.casefold()
+                    if key not in seen:
+                        seen.add(key)
+                        names.append(edit_name)
+
+        return names
 
     def __repr__(self):
         return f"<Product {self.title}>"

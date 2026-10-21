@@ -191,6 +191,7 @@ class AdminProductResponse(BaseModel):
     vendor_name: Optional[str] = None
     category_name: Optional[str] = None
     category_parent_name: Optional[str] = None
+    categories: List[str] = []
     collection_name: Optional[str] = None
     moderation_status: str
     moderation_notes: Optional[str] = None
@@ -1911,8 +1912,17 @@ async def list_all_products(
 
     Requires admin role
     """
-    # Build query with vendor join
-    query = select(Product, Vendor).join(Vendor, Product.vendor_id == Vendor.id)
+    # Build query with vendor join and category relationships
+    query = (
+        select(Product, Vendor)
+        .join(Vendor, Product.vendor_id == Vendor.id)
+        .options(
+            selectinload(Product.category)
+            .selectinload(Category.parent)
+            .selectinload(Category.parent),
+            selectinload(Product.shop_edit_categories),
+        )
+    )
 
     # Apply filters
     filters = []
@@ -1982,6 +1992,10 @@ async def list_all_products(
                 "title": product.title,
                 "description": product.description,
                 "sku": product.sku,
+                "category_id": str(product.category_id) if product.category_id else None,
+                "category_name": product.category_name,
+                "category_parent_name": product.category_parent_name,
+                "categories": product.categories,
                 "base_price": float(product.base_price),
                 "compare_at_price": float(product.compare_at_price) if product.compare_at_price else None,
                 "currency": product.currency,
