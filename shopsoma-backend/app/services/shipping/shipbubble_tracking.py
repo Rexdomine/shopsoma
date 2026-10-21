@@ -431,14 +431,21 @@ async def sync_shipbubble_shipment_status(
             if latest.get("tracking_url"):
                 shipment.tracking_url = latest.get("tracking_url")
 
+            old_status = order.fulfillment_status
             status_mapping = {
                 "pending": FulfillmentStatus.PREPARING_FOR_PICKUP,
                 "confirmed": FulfillmentStatus.PICKUP_SCHEDULED,
                 "picked_up": FulfillmentStatus.PICKED_UP,
+                "pickup_completed": FulfillmentStatus.PICKED_UP,
                 "in_transit": FulfillmentStatus.IN_TRANSIT,
+                "in-transit": FulfillmentStatus.IN_TRANSIT,
                 "out_for_delivery": FulfillmentStatus.OUT_FOR_DELIVERY,
+                "out-for-delivery": FulfillmentStatus.OUT_FOR_DELIVERY,
                 "completed": FulfillmentStatus.DELIVERED,
                 "delivered": FulfillmentStatus.DELIVERED,
+                "delivery_failed": FulfillmentStatus.DELIVERY_FAILED,
+                "failed": FulfillmentStatus.DELIVERY_FAILED,
+                "returned": FulfillmentStatus.RETURNED,
                 "cancelled": FulfillmentStatus.CANCELLED,
             }
             if sb_status in status_mapping:
@@ -451,6 +458,17 @@ async def sync_shipbubble_shipment_status(
             await db.commit()
             await db.refresh(order)
             await db.refresh(shipment)
+            if old_status != order.fulfillment_status:
+                try:
+                    from app.api.v1.admin_orders import (
+                        _broadcast_order_update,
+                        _notify_order_status_change,
+                    )
+
+                    await _notify_order_status_change(db, order=order, old_status=old_status)
+                    await _broadcast_order_update(order)
+                except Exception as notify_exc:
+                    logger.warning("[ShipBubble] Sync notification note for %s: %s", order.id, notify_exc)
     except ShipBubbleError as exc:
         logger.warning("[ShipBubble] Live tracking poll failed for %s: %s", shipment.shipbubble_order_id, exc)
 

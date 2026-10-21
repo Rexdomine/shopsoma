@@ -58,6 +58,7 @@ export interface Product {
   category_id?: string | null;
   category_name?: string | null;
   category_parent_name?: string | null;
+  categories?: string[];
   collection_id?: string | null;
   collection_name?: string | null;
   inventory_quantity: number;

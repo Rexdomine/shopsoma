@@ -790,10 +790,23 @@ export default function AdminProductDetail() {
                 <div>
                   <span className="text-xs text-gray-500 uppercase tracking-wide">Category</span>
                   <div className="flex items-center gap-2 mt-1">
-                    <Tag className="h-4 w-4 text-gray-400" />
-                    <span className="text-sm font-medium text-gray-900">
-                      {product.category_name || 'Uncategorized'}
-                    </span>
+                    <Tag className="h-4 w-4 text-gray-400 shrink-0" />
+                    {product.categories && product.categories.length > 0 ? (
+                      <div className="flex flex-wrap gap-1">
+                        {product.categories.map((catName, idx) => (
+                          <span
+                            key={`${catName}-${idx}`}
+                            className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-gray-100 text-gray-800"
+                          >
+                            {catName}
+                          </span>
+                        ))}
+                      </div>
+                    ) : (
+                      <span className="text-sm font-medium text-gray-900">
+                        {product.category_name || 'Uncategorized'}
+                      </span>
+                    )}
                   </div>
                 </div>
 

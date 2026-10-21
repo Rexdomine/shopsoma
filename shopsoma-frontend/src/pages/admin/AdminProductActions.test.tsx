@@ -568,6 +568,51 @@ describe('admin product view/edit API boundaries', () => {
     expect(sameTimestamp('2026-09-23T10:00:00.123456Z', '2026-09-23T10:00:00.123457Z')).toBe(false);
     expect(sameTimestamp('2026-09-23T10:00:00.123456Z', '2026-09-23T10:00:00.123456+00:00')).toBe(true);
   });
+  it('renders the Categories column and displays the categories each product belongs to', async () => {
+    mocks.get.mockImplementation(async (url: string) => {
+      if (url.startsWith('/admin/products?')) {
+        return {
+          data: {
+            items: [
+              {
+                ...product,
+                sku: 'SKU-1',
+                categories: ['Women', "Women's Activewear", 'Shorts'],
+                vendor: { id: 'vendor-1', business_name: 'Test Vendor' },
+                moderated_at: null,
+                moderation_notes: null,
+              },
+              {
+                ...product,
+                id: 'product-2',
+                title: 'Uncategorized Top',
+                sku: 'SKU-2',
+                category_id: null,
+                category_name: null,
+                categories: [],
+                vendor: { id: 'vendor-1', business_name: 'Test Vendor' },
+                moderated_at: null,
+                moderation_notes: null,
+              },
+            ],
+            total: 2,
+            page: 1,
+            page_size: 20,
+            total_pages: 1,
+          },
+        };
+      }
+      throw { response: { status: 404, data: { detail: 'Product not found' } } };
+    });
+
+    render(<MemoryRouter><AdminProducts /></MemoryRouter>);
+    await screen.findByText(product.title);
+    expect(screen.getByRole('columnheader', { name: /categories/i })).toBeInTheDocument();
+    expect(screen.getByText('Women')).toBeInTheDocument();
+    expect(screen.getByText("Women's Activewear")).toBeInTheDocument();
+    expect(screen.getByText('Shorts')).toBeInTheDocument();
+    expect(screen.getByText('Uncategorized')).toBeInTheDocument();
+  });
   it('list denial validates the trimmed reason length before sending the trimmed payload', async () => {
     render(<MemoryRouter><AdminProducts /></MemoryRouter>);
     await screen.findByText(product.title);

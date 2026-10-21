@@ -19,6 +19,10 @@ interface Product {
   title: string;
   description: string;
   sku: string;
+  category_id?: string | null;
+  category_name?: string | null;
+  category_parent_name?: string | null;
+  categories?: string[];
   base_price: number;
   compare_at_price: number | null;
   currency?: 'NGN' | 'USD';
@@ -374,6 +378,35 @@ export default function AdminProducts() {
     );
   };
 
+  const getProductCategories = (product: Product): string[] => {
+    if (Array.isArray(product.categories) && product.categories.length > 0) {
+      return product.categories.filter((c): c is string => Boolean(c && c.trim()));
+    }
+    const fallback = [product.category_parent_name, product.category_name].filter(
+      (c): c is string => Boolean(c && c.trim())
+    );
+    return Array.from(new Set(fallback));
+  };
+
+  const renderCategoriesCell = (product: Product) => {
+    const categoryList = getProductCategories(product);
+    if (categoryList.length === 0) {
+      return <span className="text-xs text-gray-400 italic">Uncategorized</span>;
+    }
+    return (
+      <div className="flex flex-wrap gap-1 max-w-xs">
+        {categoryList.map((catName, idx) => (
+          <span
+            key={`${catName}-${idx}`}
+            className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-gray-100 text-gray-800"
+          >
+            {catName}
+          </span>
+        ))}
+      </div>
+    );
+  };
+
   const renderStockCell = (product: Product) => {
     if (product.made_to_order) {
       return (
@@ -572,6 +605,9 @@ export default function AdminProducts() {
                     Vendor
                   </th>
                   <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                    Categories
+                  </th>
+                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
                     Price
                   </th>
                   <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
@@ -597,13 +633,13 @@ export default function AdminProducts() {
               <tbody className="bg-white divide-y divide-gray-200">
                 {loading ? (
                   <tr>
-                    <td colSpan={9} className="px-6 py-12 text-center text-gray-500">
+                    <td colSpan={10} className="px-6 py-12 text-center text-gray-500">
                       Loading products...
                     </td>
                   </tr>
                 ) : products.length === 0 ? (
                   <tr>
-                    <td colSpan={9} className="px-6 py-12 text-center text-gray-500">
+                    <td colSpan={10} className="px-6 py-12 text-center text-gray-500">
                       No products found
                     </td>
                   </tr>
@@ -622,6 +658,9 @@ export default function AdminProducts() {
                       </td>
                       <td className="px-6 py-4">
                         <p className="text-sm text-gray-900">{product.vendor.business_name}</p>
+                      </td>
+                      <td className="px-6 py-4">
+                        {renderCategoriesCell(product)}
                       </td>
                       <td className="px-6 py-4">
                         <p className="text-sm text-gray-900">
