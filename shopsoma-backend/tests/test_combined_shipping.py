@@ -511,3 +511,116 @@ async def test_admin_toggle_shipping_provider_combinations_and_validation(
         json={"enabled_providers": ["manual"]},
     )
 
+
+
+@pytest.mark.asyncio
+async def test_combined_shipping_fallback_to_manual_only_when_live_couriers_fail(
+    client: AsyncClient,
+    db_session: AsyncSession,
+    customer_user: dict,
+    vendor_user: dict,
+    admin_user: dict,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """When both DHL and ShipBubble fail/skip in combined mode, manual fallback options satisfy DB trigger truth."""
+    cohort_seed = uuid.UUID("30f204c5-ac27-4719-89fc-cc9208f19032")
+    monkeypatch.setattr(settings, "SHIPBUBBLE_API_KEY", "sb_live_secret_key_12345")
+    await _enable_dhl_checkout_settings(
+        db_session,
+        monkeypatch,
+        cohort_seed=cohort_seed,
+        actor_id=admin_user["user"].id,
+    )
+
+    from app.models.shipping_rate import ShippingRate
+
+    manual_rate = ShippingRate(
+        id=uuid.uuid4(),
+        name="Standard Shipping",
+        description="3-7 days",
+        base_rate=Decimal("5000.00"),
+        country="Nigeria",
+        state=None,
+        min_delivery_days=3,
+        max_delivery_days=7,
+        is_active=True,
+        is_default=True,
+        priority=1,
+    )
+    db_session.add(manual_rate)
+
+    provider_row = await db_session.scalar(
+        select(AppSetting).where(AppSetting.key == "shipping_provider")
+    )
+    provider_row.value = "combined"
+    enabled_row = await db_session.scalar(
+        select(AppSetting).where(AppSetting.key == "shipping_enabled_providers")
+    )
+    if enabled_row is None:
+        db_session.add(
+            AppSetting(
+                key="shipping_enabled_providers",
+                value=json.dumps(["manual", "dhl", "shipbubble"]),
+                value_type="json",
+            )
+        )
+    else:
+        enabled_row.value = json.dumps(["manual", "dhl", "shipbubble"])
+    await db_session.commit()
+
+    order = await _create_checkout_order_for_dhl(
+        db_session,
+        customer_user=customer_user,
+        vendor_user=vendor_user,
+        cohort_seed=cohort_seed,
+        currency="NGN",
+        subtotal=Decimal("50000.00"),
+    )
+    customer_token = customer_user["token"]
+    idem_key = f"fallback-manual-{order.id.hex[:12]}"
+
+    with patch(
+        "app.services.checkout.estimates._dhl_checkout_options",
+        new=AsyncMock(side_effect=Exception("DHL unavailable for destination")),
+    ), patch(
+        "app.services.checkout.estimates._shipbubble_checkout_options",
+        new=AsyncMock(side_effect=Exception("ShipBubble address validation failed")),
+    ):
+        res = await client.post(
+            f"/api/v1/orders/{order.id}/checkout-estimates",
+            headers={
+                "Authorization": f"Bearer {customer_token}",
+                "X-Idempotency-Key": idem_key,
+            },
+        )
+        assert res.status_code == 201, res.text
+        body = res.json()
+        assert len(body["options"]) >= 1
+        assert all(
+            o["provider_metadata"]["provider"] == "manual" for o in body["options"]
+        )
+
+        # Idempotent replay with the same key must also succeed without 409 conflict
+        replay_res = await client.post(
+            f"/api/v1/orders/{order.id}/checkout-estimates",
+            headers={
+                "Authorization": f"Bearer {customer_token}",
+                "X-Idempotency-Key": idem_key,
+            },
+        )
+        assert replay_res.status_code == 201, replay_res.text
+        assert replay_res.json()["id"] == body["id"]
+        assert len(replay_res.json()["options"]) == len(body["options"])
+
+        # Selecting a fallback manual option succeeds
+        chosen_opt = body["options"][0]
+        sel_res = await client.post(
+            f"/api/v1/orders/{order.id}/checkout-estimates/{body['id']}/options/{chosen_opt['id']}/select",
+            headers={
+                "Authorization": f"Bearer {customer_token}",
+                "X-Idempotency-Key": f"sel-fallback-manual-{order.id.hex[:12]}",
+            },
+        )
+        assert sel_res.status_code == 200, sel_res.text
+        await db_session.refresh(order)
+        assert order.delivery_provider == "manual"

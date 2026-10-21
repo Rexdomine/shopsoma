@@ -354,3 +354,102 @@ def test_package_items_title_resolution():
     assert package_item["unit_amount"] == 15000.0
     assert package_item["quantity"] == 2
 
+
+@pytest.mark.asyncio
+async def test_shipbubble_checkout_options_revalidates_stale_sender_address_code():
+    """Verify _shipbubble_checkout_options re-validates hub sender_address_code on 422 Invalid sender address code."""
+    from app.services.checkout.estimates import _shipbubble_checkout_options
+    from app.services.shipbubble_service import ShipbubbleRateOption, ShipbubbleRatesResult
+
+    hub = MagicMock()
+    hub.shipbubble_address_code = 441105450  # stale sender code
+    hub.address_line1 = "1 Admiralty Way, Lekki Phase 1"
+    hub.address_line2 = None
+    hub.city = "Lekki"
+    hub.state = "Lagos"
+    hub.contact_name = "Shopsoma Lagos Central Hub"
+    hub.contact_phone = "+2348000000000"
+
+    address = MagicMock()
+    address.address_line1 = "1 Ladi Kwali Street"
+    address.address_line2 = None
+    address.city = "Abuja"
+    address.state = "Federal Capital Territory"
+    address.country = "Nigeria"
+    address.full_name = "Ada Customer"
+    address.phone_number = "08012345678"
+
+    order = MagicMock()
+    order.customer_id = uuid4()
+    order.shipping_address = address
+
+    db = AsyncMock()
+    db.add = MagicMock()
+    exec_result = MagicMock()
+    exec_result.scalars.return_value.all.return_value = [hub]
+    db.execute.return_value = exec_result
+    db.get.return_value = None
+
+    service = AsyncMock()
+
+    async def validate_side_effect(**kwargs):
+        if "Admiralty Way" in kwargs["address"]:
+            assert kwargs.get("force_refresh") is True
+            return {"address_code": 671363858}
+        return {"address_code": 161892642}
+
+    service.validate_address.side_effect = validate_side_effect
+
+    expected_rates = ShipbubbleRatesResult(
+        request_token="tok_fresh_123",
+        couriers=[
+            ShipbubbleRateOption(
+                courier_id="fez",
+                courier_name="Fez (Self Pick-up)",
+                courier_image=None,
+                service_code="fez_pickup",
+                service_type="pickup",
+                rate_card_amount=Decimal("3655.00"),
+                total_wallet_amount=Decimal("3655.00"),
+                currency="NGN",
+                delivery_eta="Within 1 - 3 working days",
+                min_delivery_days=1,
+                max_delivery_days=3,
+            )
+        ],
+    )
+
+    call_count = 0
+
+    async def fetch_rates_side_effect(**kwargs):
+        nonlocal call_count
+        call_count += 1
+        if call_count == 1:
+            assert kwargs["sender_address_code"] == 441105450
+            raise ShipBubbleError(
+                "ShipBubble API error (422): Invalid sender address code: Invalid sender address code",
+                status_code=422,
+            )
+        assert kwargs["sender_address_code"] == 671363858
+        assert kwargs["receiver_address_code"] == 161892642
+        return expected_rates
+
+    service.fetch_rates.side_effect = fetch_rates_side_effect
+
+    dummy_item = MagicMock(quantity=1, unit_price=Decimal("10000.00"))
+    dummy_product = MagicMock(title="Silk Dress", description="Silk Dress")
+
+    with (
+        patch("app.services.checkout.estimates.get_shipbubble_service", return_value=service),
+        patch(
+            "app.services.checkout.estimates._authoritative_parcel_measurements",
+            new=AsyncMock(return_value=[(dummy_item, dummy_product, None, (Decimal("0.5"), Decimal("10"), Decimal("10"), Decimal("10")))]),
+        ),
+    ):
+        result = await _shipbubble_checkout_options(db, order=order)
+
+    assert result.request_token == "tok_fresh_123"
+    assert len(result.couriers) == 1
+    assert hub.shipbubble_address_code == 671363858
+    assert call_count == 2
+

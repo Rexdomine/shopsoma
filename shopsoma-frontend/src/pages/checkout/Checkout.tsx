@@ -1,5 +1,5 @@
 import { getShippingProviderSettings, type ShippingProviderSettings } from '../../services/settingsService';
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { flushSync } from 'react-dom';
 import { buildPaystackWidgetConfig, type PaymentGateway, type InitializePaymentResponse } from '../../services/paymentService';
 import { Link, useLocation, useNavigate } from 'react-router-dom';
@@ -7,6 +7,14 @@ import Layout from '../../components/layout/Layout';
 import { ROUTES } from '../../config/constants';
 import { NIGERIA_STATES } from '../../config/nigeriaStates';
 import { checkoutService, type Address, type ShippingRate, type OrderReview, type CreateAddressData, type CheckoutEstimate, type Order } from '../../services/checkoutService';
+import {
+  fetchAddressSuggestions,
+  resolveAddressSuggestion,
+  normalizeNigerianState,
+  normalizeCountryName,
+  type AddressSuggestion,
+  type NormalizedGoogleAddress,
+} from '../../services/googleMapsAutocomplete';
 import { CartService } from '../../services/cartService';
 import { paymentService } from '../../services/paymentService';
 import { useAuth } from '../../context/AuthContext';
@@ -112,7 +120,135 @@ export default function Checkout() {
     address_type: 'shipping',
     is_default: false,
   });
-  const resetNewAddress = () => setNewAddress({
+  const [addressSuggestions, setAddressSuggestions] = useState<AddressSuggestion[]>([]);
+  const [isSuggestionsOpen, setIsSuggestionsOpen] = useState(false);
+  const [activeSuggestionIndex, setActiveSuggestionIndex] = useState(-1);
+  const [isLoadingSuggestions, setIsLoadingSuggestions] = useState(false);
+  const [isResolvingSuggestion, setIsResolvingSuggestion] = useState(false);
+  const [addressAutocompleteError, setAddressAutocompleteError] = useState('');
+  const [hasSearchedSuggestions, setHasSearchedSuggestions] = useState(false);
+  const [verifiedAddressSelection, setVerifiedAddressSelection] = useState<NormalizedGoogleAddress | null>(null);
+  const autocompleteRequestSeq = useRef(0);
+  const autocompleteDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const resetAutocompleteState = () => {
+    autocompleteRequestSeq.current += 1;
+    if (autocompleteDebounceRef.current) {
+      clearTimeout(autocompleteDebounceRef.current);
+      autocompleteDebounceRef.current = null;
+    }
+    setAddressSuggestions([]);
+    setIsSuggestionsOpen(false);
+    setActiveSuggestionIndex(-1);
+    setIsLoadingSuggestions(false);
+    setIsResolvingSuggestion(false);
+    setAddressAutocompleteError('');
+    setHasSearchedSuggestions(false);
+    setVerifiedAddressSelection(null);
+  };
+
+  useEffect(() => {
+    return () => {
+      if (autocompleteDebounceRef.current) {
+        clearTimeout(autocompleteDebounceRef.current);
+      }
+    };
+  }, []);
+
+  const executeAddressSearch = async (query: string, requestId: number) => {
+    try {
+      const suggestions = await fetchAddressSuggestions(query, { country: 'ng' });
+      if (autocompleteRequestSeq.current !== requestId) return;
+      setAddressSuggestions(suggestions);
+      setHasSearchedSuggestions(true);
+      setIsLoadingSuggestions(false);
+      setIsSuggestionsOpen(true);
+    } catch (error: any) {
+      if (autocompleteRequestSeq.current !== requestId) return;
+      setAddressSuggestions([]);
+      setHasSearchedSuggestions(false);
+      setIsLoadingSuggestions(false);
+      setIsSuggestionsOpen(false);
+      setAddressAutocompleteError(
+        error?.message || 'Unable to load Google Maps address suggestions. Please retry.'
+      );
+    }
+  };
+
+  const triggerAddressAutocomplete = (rawInput: string, immediate = false) => {
+    if (autocompleteDebounceRef.current) {
+      clearTimeout(autocompleteDebounceRef.current);
+      autocompleteDebounceRef.current = null;
+    }
+    const query = rawInput.trim();
+    const requestId = ++autocompleteRequestSeq.current;
+    setAddressAutocompleteError('');
+    setActiveSuggestionIndex(-1);
+
+    if (query.length < 2) {
+      setAddressSuggestions([]);
+      setIsSuggestionsOpen(false);
+      setIsLoadingSuggestions(false);
+      setHasSearchedSuggestions(false);
+      return;
+    }
+
+    setIsLoadingSuggestions(true);
+    setIsSuggestionsOpen(true);
+
+    const delayMs = immediate || import.meta.env.MODE === 'test' ? 0 : 180;
+    if (delayMs === 0) {
+      void executeAddressSearch(query, requestId);
+    } else {
+      autocompleteDebounceRef.current = setTimeout(() => {
+        void executeAddressSearch(query, requestId);
+      }, delayMs);
+    }
+  };
+
+  const handleSelectAddressSuggestion = async (suggestion: AddressSuggestion) => {
+    const requestId = ++autocompleteRequestSeq.current;
+    if (autocompleteDebounceRef.current) {
+      clearTimeout(autocompleteDebounceRef.current);
+      autocompleteDebounceRef.current = null;
+    }
+    setIsLoadingSuggestions(false);
+    setIsSuggestionsOpen(false);
+    setActiveSuggestionIndex(-1);
+    setAddressAutocompleteError('');
+    setIsResolvingSuggestion(true);
+
+    try {
+      const normalized = await resolveAddressSuggestion(suggestion);
+      if (autocompleteRequestSeq.current !== requestId) return;
+      setNewAddress(prev => ({
+        ...prev,
+        address_line1: normalized.addressLine1,
+        address_line2: normalized.addressLine2 || prev.address_line2,
+        city: normalized.city,
+        state: normalized.state,
+        postal_code: normalized.postalCode || prev.postal_code || '',
+        country: normalized.country || 'Nigeria',
+      }));
+      setVerifiedAddressSelection(normalized);
+      setAddressSuggestions([]);
+      setHasSearchedSuggestions(false);
+    } catch (error: any) {
+      if (autocompleteRequestSeq.current !== requestId) return;
+      setVerifiedAddressSelection(null);
+      setAddressAutocompleteError(
+        error?.message || 'Could not verify the selected Google Maps address. Please try again.'
+      );
+    } finally {
+      if (autocompleteRequestSeq.current === requestId) {
+        setIsResolvingSuggestion(false);
+      }
+    }
+  };
+
+  const resetNewAddress = () => {
+    resetAutocompleteState();
+    return setNewAddress({
     full_name: user?.full_name || '',
     phone_number: user?.phone_number || '',
     address_line1: '',
@@ -124,6 +260,8 @@ export default function Checkout() {
     address_type: 'shipping',
     is_default: false,
   });
+
+  };
 
   const [allDomesticEstimates, setAllDomesticEstimates] = useState(false);
   const [shippingProvider, setShippingProvider] = useState<ShippingProviderSettings['provider'] | null>(null);
@@ -316,20 +454,23 @@ export default function Checkout() {
   };
 
   const handleCreateAddress = async () => {
-    if (enforcedOrder) return;
+    if (enforcedOrder || !isAddressVerified || isResolvingSuggestion) return;
+    const normalizedState = normalizeNigerianState(newAddress.state) || newAddress.state.trim();
+    const normalizedCountry = normalizeCountryName(newAddress.country);
+    const normalizedPostalCode = (newAddress.postal_code || '').trim().slice(0, 12);
     // For guest checkout, just use the address locally without saving to backend
     if (isGuestCheckout) {
       const guestAddress: Address = {
         id: editingAddressId || 'guest-address',
         user_id: 'guest',
-        full_name: newAddress.full_name,
-        phone_number: newAddress.phone_number,
-        address_line1: newAddress.address_line1,
-        address_line2: newAddress.address_line2,
-        city: newAddress.city,
-        state: newAddress.state,
-        postal_code: newAddress.postal_code,
-        country: newAddress.country,
+        full_name: newAddress.full_name.trim(),
+        phone_number: newAddress.phone_number.trim(),
+        address_line1: newAddress.address_line1.trim(),
+        address_line2: newAddress.address_line2?.trim() || '',
+        city: newAddress.city.trim(),
+        state: normalizedState,
+        postal_code: normalizedPostalCode,
+        country: normalizedCountry,
         address_type: newAddress.address_type,
         is_default: newAddress.is_default,
         created_at: new Date().toISOString(),
@@ -340,6 +481,7 @@ export default function Checkout() {
       setSelectedAddressId(guestAddress.id);
       setShowNewAddressForm(false);
       setEditingAddressId(null);
+      resetAutocompleteState();
       return;
     }
 
@@ -347,14 +489,14 @@ export default function Checkout() {
     setIsSavingAddress(true);
     try {
       const addressData: CreateAddressData = {
-        full_name: newAddress.full_name,
-        phone_number: newAddress.phone_number,
-        address_line1: newAddress.address_line1,
-        address_line2: newAddress.address_line2,
-        city: newAddress.city,
-        state: newAddress.state,
-        postal_code: newAddress.postal_code,
-        country: newAddress.country,
+        full_name: newAddress.full_name.trim(),
+        phone_number: newAddress.phone_number.trim(),
+        address_line1: newAddress.address_line1.trim(),
+        address_line2: newAddress.address_line2?.trim() || '',
+        city: newAddress.city.trim(),
+        state: normalizedState,
+        postal_code: normalizedPostalCode,
+        country: normalizedCountry,
         address_type: newAddress.address_type,
         is_default: newAddress.is_default,
       };
@@ -979,11 +1121,19 @@ export default function Checkout() {
   };
 
   const hasEmail = email.trim().length > 3 && isValidEmail(email);
+  const isAddressVerified = Boolean(
+    verifiedAddressSelection &&
+    newAddress.address_line1.trim() === verifiedAddressSelection.addressLine1.trim() &&
+    newAddress.city.trim().toLowerCase() === verifiedAddressSelection.city.trim().toLowerCase() &&
+    newAddress.state.trim() === verifiedAddressSelection.state.trim()
+  );
   const isAddressComplete = Boolean(
     newAddress.full_name.trim() &&
     newAddress.phone_number.trim() &&
     isValidNigerianPhone(newAddress.phone_number) &&
     newAddress.address_line1.trim() &&
+    isAddressVerified &&
+    !isResolvingSuggestion &&
     newAddress.city.trim() &&
     newAddress.state.trim() &&
     (!postalCodeRequired || isValidDhlPostalCode(newAddress.postal_code)) &&
@@ -1007,6 +1157,9 @@ export default function Checkout() {
       ? 'Enter a postal code with 12 characters or fewer for DHL delivery estimates.'
       : ''
     : '';
+  const addressVerificationGuidance = !isAddressVerified
+    ? 'Select a verified address suggestion from Google Maps to save this address.'
+    : '';
   const addressSaveGuidance = !shippingConfigLoaded
     ? 'Loading delivery configuration before this address can be saved.'
     : shippingConfigError
@@ -1014,7 +1167,7 @@ export default function Checkout() {
       : phoneSaveGuidance || postalCodeSaveGuidance || (
     missingAddressFields.length
       ? `Complete ${missingAddressFields.join(', ')} to save this address.`
-      : ''
+      : addressVerificationGuidance
   );
   const hasSelectedAddress = !!selectedAddressId;
   const hasSelectedShipping = !!selectedShippingRateId;
@@ -1084,6 +1237,7 @@ export default function Checkout() {
   };
 
   const handleAddressSave = async () => {
+    if (showNewAddressForm) return;
     if (hasSelectedAddress && !selectedAddressNeedsPostalCode) {
       if (secureShipping) {
         // Domestic server-owned estimates require a durable order, but the
@@ -1246,7 +1400,7 @@ export default function Checkout() {
                                 Sign in
                               </Link>
                             </span>
-                            <span className="text-gray-400">or continue as guest</span>
+                            <span className="text-gray-400">enter your email to continue as a guest</span>
                           </div>
                         )}
                       </>
@@ -1315,18 +1469,33 @@ export default function Checkout() {
                                 aria-label="Edit delivery address"
                                 disabled={!!enforcedOrder || isCheckoutRequestPending}
                                 onClick={() => {
+                                  const normalizedAddrState = normalizeNigerianState(addr.state) || addr.state;
+                                  const normalizedAddrCountry = normalizeCountryName(addr.country);
+                                  resetAutocompleteState();
                                   setNewAddress({
                                     full_name: addr.full_name,
                                     phone_number: addr.phone_number,
                                     address_line1: addr.address_line1,
                                     address_line2: addr.address_line2 || '',
                                     city: addr.city,
-                                    state: addr.state,
+                                    state: normalizedAddrState,
                                     postal_code: addr.postal_code || '',
-                                    country: addr.country,
+                                    country: normalizedAddrCountry,
                                     address_type: addr.address_type,
                                     is_default: addr.is_default,
                                   });
+                                  if (addr.address_line1.trim() && addr.city.trim() && normalizedAddrState.trim()) {
+                                    setVerifiedAddressSelection({
+                                      placeId: `saved-${addr.id}`,
+                                      formattedAddress: [addr.address_line1, addr.city, normalizedAddrState, normalizedAddrCountry].filter(Boolean).join(', '),
+                                      addressLine1: addr.address_line1,
+                                      addressLine2: addr.address_line2 || undefined,
+                                      city: addr.city,
+                                      state: normalizedAddrState,
+                                      postalCode: addr.postal_code || '',
+                                      country: normalizedAddrCountry,
+                                    });
+                                  }
                                   setEditingAddressId(addr.id);
                                   setShowNewAddressForm(true);
                                 }}
@@ -1379,25 +1548,208 @@ export default function Checkout() {
                                   {phoneSaveGuidance || 'Required for delivery updates. Use 08012345678 or 2348012345678.'}
                                 </p>
                               </div>
-                              <div>
-                                <label className="text-xs text-gray-500">Street Address</label>
-                                <input
-                                  type="text"
-                                  aria-label="Street Address"
+                              <div className="relative">
+                                <div className="flex items-center justify-between gap-2">
+                                  <label className="text-xs text-gray-500" htmlFor="checkout-street-address">
+                                    Street Address <span className="text-red-500">*</span>
+                                  </label>
+                                  {isAddressVerified && !verifiedAddressSelection?.placeId.startsWith('saved-') && (
+                                    <span className="inline-flex items-center gap-1 rounded bg-emerald-50 px-2 py-0.5 text-[11px] font-medium text-emerald-700">
+                                      ✓ Verified address
+                                    </span>
+                                  )}
+                                </div>
+                                <div className="relative">
+                                  <input
+                                    id="checkout-street-address"
+                                    type="text"
+                                    role="combobox"
+                                    aria-label="Street Address"
+                                    aria-autocomplete="list"
+                                    aria-expanded={isSuggestionsOpen && (isLoadingSuggestions || addressSuggestions.length > 0)}
+                                    aria-controls="checkout-address-suggestions"
+                                    aria-activedescendant={
+                                      activeSuggestionIndex >= 0
+                                        ? `checkout-address-suggestion-${activeSuggestionIndex}`
+                                        : undefined
+                                    }
+                                    autoComplete="off"
                                     value={newAddress.address_line1}
-                                  onChange={(e) => setNewAddress({ ...newAddress, address_line1: e.target.value })}
-                                  className="w-full border-b border-gray-300 focus:border-primary focus:outline-none py-2 text-sm"
-                                  required
-                                />
+                                    placeholder="Start typing your street address..."
+                                    onFocus={() => {
+                                      if (addressSuggestions.length > 0 && (!isAddressVerified || verifiedAddressSelection?.placeId.startsWith('saved-'))) {
+                                        setIsSuggestionsOpen(true);
+                                      } else if (
+                                        newAddress.address_line1.trim().length >= 2 &&
+                                        (!isAddressVerified || verifiedAddressSelection?.placeId.startsWith('saved-'))
+                                      ) {
+                                        triggerAddressAutocomplete(newAddress.address_line1);
+                                      }
+                                    }}
+                                    onChange={(e) => {
+                                      const nextValue = e.target.value;
+                                      setNewAddress(prev => ({ ...prev, address_line1: nextValue }));
+                                      setVerifiedAddressSelection(null);
+                                      triggerAddressAutocomplete(nextValue);
+                                    }}
+                                    onKeyDown={(e) => {
+                                      if (!isSuggestionsOpen || addressSuggestions.length === 0) {
+                                        if (e.key === 'Escape') {
+                                          setIsSuggestionsOpen(false);
+                                        }
+                                        return;
+                                      }
+                                      if (e.key === 'ArrowDown') {
+                                        e.preventDefault();
+                                        setActiveSuggestionIndex(prev =>
+                                          prev < addressSuggestions.length - 1 ? prev + 1 : 0
+                                        );
+                                      } else if (e.key === 'ArrowUp') {
+                                        e.preventDefault();
+                                        setActiveSuggestionIndex(prev =>
+                                          prev > 0 ? prev - 1 : addressSuggestions.length - 1
+                                        );
+                                      } else if (e.key === 'Enter' && activeSuggestionIndex >= 0) {
+                                        e.preventDefault();
+                                        void handleSelectAddressSuggestion(addressSuggestions[activeSuggestionIndex]);
+                                      } else if (e.key === 'Escape') {
+                                        e.preventDefault();
+                                        setIsSuggestionsOpen(false);
+                                      }
+                                    }}
+                                    className="w-full border-b border-gray-300 focus:border-primary focus:outline-none py-2 pr-8 text-sm"
+                                    required
+                                  />
+                                  {(isLoadingSuggestions || isResolvingSuggestion) && (
+                                    <span
+                                      aria-hidden="true"
+                                      className="pointer-events-none absolute right-1 top-1/2 -translate-y-1/2 inline-block h-4 w-4 animate-spin rounded-full border-2 border-gray-300 border-t-primary"
+                                    />
+                                  )}
+                                </div>
+
+                                {isSuggestionsOpen && (isLoadingSuggestions || addressSuggestions.length > 0 || (hasSearchedSuggestions && !addressAutocompleteError && newAddress.address_line1.trim().length >= 2)) && (
+                                  <div className="mt-1 w-full max-h-60 overflow-y-auto rounded-sm border border-gray-200 bg-white shadow-lg z-30">
+                                    {isLoadingSuggestions && (
+                                      <div
+                                        role="status"
+                                        aria-live="polite"
+                                        className="flex items-center gap-2 px-3 py-3 text-xs sm:text-sm text-gray-600"
+                                      >
+                                        <span className="inline-block h-3.5 w-3.5 animate-spin rounded-full border-2 border-gray-300 border-t-primary" />
+                                        <span>Searching Google Maps addresses...</span>
+                                      </div>
+                                    )}
+                                    {!isLoadingSuggestions && addressSuggestions.length > 0 && (
+                                      <>
+                                        <ul
+                                          id="checkout-address-suggestions"
+                                          role="listbox"
+                                          aria-label="Google Maps address suggestions"
+                                          className="divide-y divide-gray-100"
+                                        >
+                                          {addressSuggestions.map((suggestion, index) => (
+                                            <li
+                                              key={suggestion.placeId}
+                                              id={`checkout-address-suggestion-${index}`}
+                                              role="option"
+                                              aria-selected={index === activeSuggestionIndex}
+                                            >
+                                              <button
+                                                type="button"
+                                                onMouseDown={(e) => e.preventDefault()}
+                                                onClick={() => void handleSelectAddressSuggestion(suggestion)}
+                                                className={`w-full text-left px-3 py-2.5 sm:py-2 min-h-[44px] flex flex-col justify-center transition ${
+                                                  index === activeSuggestionIndex
+                                                    ? 'bg-gray-100 text-gray-900'
+                                                    : 'hover:bg-gray-50 text-gray-800'
+                                                }`}
+                                              >
+                                                <span className="text-xs sm:text-sm font-medium text-gray-900 break-words">
+                                                  {suggestion.mainText}
+                                                </span>
+                                                {suggestion.secondaryText && (
+                                                  <span className="text-[11px] sm:text-xs text-gray-500 break-words">
+                                                    {suggestion.secondaryText}
+                                                  </span>
+                                                )}
+                                              </button>
+                                            </li>
+                                          ))}
+                                        </ul>
+                                        <div className="px-3 py-1.5 bg-gray-50 border-t border-gray-100 flex items-center justify-end">
+                                          <span className="text-[10px] uppercase tracking-wider text-gray-400">
+                                            Powered by Google Maps
+                                          </span>
+                                        </div>
+                                      </>
+                                    )}
+                                    {!isLoadingSuggestions && hasSearchedSuggestions && addressSuggestions.length === 0 && !addressAutocompleteError && (
+                                      <div className="px-3 py-3 text-xs sm:text-sm text-gray-500" role="status">
+                                        No matching Google Maps addresses found. Try entering a nearby street or landmark.
+                                      </div>
+                                    )}
+                                  </div>
+                                )}
+
+                                {isResolvingSuggestion && (
+                                  <p className="mt-1.5 text-xs text-gray-600" role="status" aria-live="polite">
+                                    Verifying selected address with Google Maps...
+                                  </p>
+                                )}
+
+                                {addressAutocompleteError && (
+                                  <div
+                                    role="alert"
+                                    className="mt-2 rounded-sm border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-700 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2"
+                                  >
+                                    <span>{addressAutocompleteError}</span>
+                                    <button
+                                      type="button"
+                                      onClick={() => void triggerAddressAutocomplete(newAddress.address_line1, true)}
+                                      className="self-start sm:self-auto font-semibold text-primary underline hover:text-primary-dark whitespace-nowrap"
+                                    >
+                                      Retry address search
+                                    </button>
+                                  </div>
+                                )}
+
+                                {!isLoadingSuggestions && !isResolvingSuggestion && !addressAutocompleteError && (
+                                  isAddressVerified && verifiedAddressSelection ? (
+                                    verifiedAddressSelection.placeId.startsWith('saved-') ? (
+                                      <p className="mt-1 text-xs text-gray-500">
+                                        Click Street Address or type to select a verified Google Maps suggestion.
+                                      </p>
+                                    ) : (
+                                      <p className="mt-1 text-xs text-emerald-700">
+                                        Verified with Google Maps: {verifiedAddressSelection.formattedAddress}
+                                      </p>
+                                    )
+                                  ) : newAddress.address_line1.trim() ? (
+                                    <p className="mt-1 text-xs text-amber-700">
+                                      Select a Google Maps suggestion above to verify your delivery location.
+                                    </p>
+                                  ) : (
+                                    <p className="mt-1 text-xs text-gray-500">
+                                      Start typing and choose a verified Google Maps suggestion for accurate shipping.
+                                    </p>
+                                  )
+                                )}
                               </div>
-                              <div className="grid grid-cols-2 gap-4">
+                              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 sm:gap-4">
                                 <div>
                                   <label className="text-xs text-gray-500">City</label>
                                   <input
                                     type="text"
                                     aria-label="City"
                                     value={newAddress.city}
-                                    onChange={(e) => setNewAddress({ ...newAddress, city: e.target.value })}
+                                    onChange={(e) => {
+                                      const nextCity = e.target.value;
+                                      setNewAddress({ ...newAddress, city: nextCity });
+                                      if (verifiedAddressSelection && nextCity.trim().toLowerCase() !== verifiedAddressSelection.city.trim().toLowerCase()) {
+                                        setVerifiedAddressSelection(null);
+                                      }
+                                    }}
                                     className="w-full border-b border-gray-300 focus:border-primary focus:outline-none py-2 text-sm"
                                     required
                                   />
@@ -1407,7 +1759,13 @@ export default function Checkout() {
                                   <select
                                     aria-label="State"
                                     value={newAddress.state}
-                                    onChange={(e) => setNewAddress({ ...newAddress, state: e.target.value })}
+                                    onChange={(e) => {
+                                      const nextState = e.target.value;
+                                      setNewAddress({ ...newAddress, state: nextState });
+                                      if (verifiedAddressSelection && nextState.trim() !== verifiedAddressSelection.state.trim()) {
+                                        setVerifiedAddressSelection(null);
+                                      }
+                                    }}
                                     className="w-full border-b border-gray-300 bg-white focus:border-primary focus:outline-none py-2 text-sm"
                                     required
                                   >
@@ -1450,23 +1808,24 @@ export default function Checkout() {
                                   Set as default shipping address
                                 </label>
                               </div>
-                              <div className="flex gap-2">
+                              <div className="flex flex-col sm:flex-row gap-2">
                                 <button
                                   type="button"
                                   onClick={handleCreateAddress}
                                   disabled={!isAddressComplete || !shippingConfigLoaded || shippingConfigError || isCheckoutRequestPending}
-                                  className="flex-1 py-2 rounded-sm bg-primary text-white text-sm font-semibold disabled:opacity-50"
+                                  className="flex-1 py-2.5 sm:py-2 rounded-sm bg-primary text-white text-sm font-semibold disabled:opacity-50"
                                 >
                                   {editingAddressId ? 'Save changes' : 'Save Address'}
                                 </button>
                                 <button
                                   type="button"
                                   onClick={() => {
+                                    resetAutocompleteState();
                                     setShowNewAddressForm(false);
                                     setEditingAddressId(null);
                                   }}
                                   disabled={isCheckoutRequestPending}
-                                  className="px-4 py-2 rounded-sm border border-gray-300 text-sm disabled:opacity-50"
+                                  className="px-4 py-2.5 sm:py-2 rounded-sm border border-gray-300 text-sm disabled:opacity-50"
                                 >
                                   Cancel
                                 </button>
@@ -1515,7 +1874,7 @@ export default function Checkout() {
                             <button
                               type="button"
                               onClick={handleAddressSave}
-                              disabled={step !== 'address' || !hasSelectedAddress || selectedAddressNeedsPostalCode || isCheckoutRequestPending || !shippingConfigLoaded || shippingConfigError || !!enforcedOrder}
+                              disabled={step !== 'address' || showNewAddressForm || !hasSelectedAddress || selectedAddressNeedsPostalCode || isCheckoutRequestPending || !shippingConfigLoaded || shippingConfigError || !!enforcedOrder}
                               className="w-full py-3 rounded-sm bg-primary text-white text-sm font-semibold disabled:opacity-50"
                             >
                               {isLoadingShipping ? 'Calculating Shipping...' : 'Continue'}
