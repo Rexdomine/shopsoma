@@ -99,12 +99,12 @@ CUSTOMER_STATUS_MESSAGES = {
     FulfillmentStatus.PICKED_UP: {
         "title": "Order Dispatched",
         "message": "Your order has been dispatched and is on its way to you.",
-        "send_email": False,
+        "send_email": True,
     },
     FulfillmentStatus.IN_TRANSIT: {
         "title": "In Transit",
         "message": "Your order is in transit and will arrive soon.",
-        "send_email": False,
+        "send_email": True,
     },
     FulfillmentStatus.OUT_FOR_DELIVERY: {
         "title": "Out for Delivery",
@@ -141,6 +141,26 @@ class OrderNotificationService:
         self.db = db
         self.email_service = email_service or EmailService()
 
+    async def _ensure_order_relations_loaded(self, order: Order) -> Order:
+        """Ensure order.customer and order.items are loaded before synchronous access."""
+        try:
+            from sqlalchemy import inspect as sa_inspect
+            insp = sa_inspect(order)
+            if "customer" in insp.unloaded or "items" in insp.unloaded:
+                loaded = (
+                    await self.db.execute(
+                        select(Order)
+                        .options(selectinload(Order.customer), selectinload(Order.items))
+                        .where(Order.id == order.id)
+                        .execution_options(populate_existing=True)
+                    )
+                ).scalar_one_or_none()
+                if loaded is not None:
+                    return loaded
+        except Exception as exc:
+            logger.debug("Order relation preload note for %s: %s", getattr(order, "id", None), exc)
+        return order
+
     async def notify_status_change(
         self,
         order: Order,
@@ -158,6 +178,7 @@ class OrderNotificationService:
         Returns:
             Dict with vendor_notified and customer_notified boolean flags
         """
+        order = await self._ensure_order_relations_loaded(order)
         logger.info(f"📢 notify_status_change called for order {order.order_number}: status={new_status.value}")
 
         result = {
@@ -170,6 +191,9 @@ class OrderNotificationService:
         vendor_notified = await self._notify_vendors(order, new_status, pickup_details)
         result["vendor_notified"] = vendor_notified
         logger.info(f"👔 Vendor notification result: {vendor_notified}")
+
+        # Re-ensure relations in case vendor notification committed or rolled back
+        order = await self._ensure_order_relations_loaded(order)
 
         # Notify customer
         logger.info(f"👤 Attempting to notify customer for order {order.order_number}")

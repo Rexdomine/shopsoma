@@ -19,7 +19,8 @@ PRODUCT_RELATIONSHIPS = (
     selectinload(Product.variations).selectinload(Variation.size_stocks),
     selectinload(Product.images),
     selectinload(Product.vendor),
-    selectinload(Product.category).selectinload(Category.parent),
+    selectinload(Product.category).selectinload(Category.parent).selectinload(Category.parent),
+    selectinload(Product.shop_edit_categories),
     selectinload(Product.collection),
 )
 
