@@ -613,6 +613,91 @@ describe('admin product view/edit API boundaries', () => {
     expect(screen.getByText('Shorts')).toBeInTheDocument();
     expect(screen.getByText('Uncategorized')).toBeInTheDocument();
   });
+  it('renders searchable filter dropdowns for Primary Category, Sub Category, Child Category, and Collection', async () => {
+    mocks.get.mockImplementation(async (url: string) => {
+      if (url === '/admin/categories') {
+        return {
+          data: {
+            categories: [
+              { id: 'cat-men', name: 'Men', slug: 'men', parent_id: null, display_order: 1, is_active: true },
+              { id: 'cat-women', name: 'Women', slug: 'women', parent_id: null, display_order: 2, is_active: true },
+              { id: 'cat-activewear', name: "Women's Activewear", slug: 'womens-activewear', parent_id: 'cat-women', display_order: 1, is_active: true },
+              { id: 'cat-shorts', name: 'Shorts', slug: 'shorts', parent_id: 'cat-activewear', display_order: 1, is_active: true },
+            ],
+          },
+        };
+      }
+      if (url === '/admin/collections') {
+        return {
+          data: {
+            collections: [
+              { id: 'col-resort', name: 'Resort 2026', slug: 'resort-2026', is_active: true },
+            ],
+          },
+        };
+      }
+      if (url.startsWith('/admin/products?')) {
+        return {
+          data: {
+            items: [
+              {
+                ...product,
+                sku: 'SKU-1',
+                categories: ['Women', "Women's Activewear", 'Shorts'],
+                vendor: { id: 'vendor-1', business_name: 'Test Vendor' },
+                moderated_at: null,
+                moderation_notes: null,
+              },
+            ],
+            total: 1,
+            page: 1,
+            page_size: 20,
+            total_pages: 1,
+          },
+        };
+      }
+      throw { response: { status: 404, data: { detail: 'Product not found' } } };
+    });
+
+    render(<MemoryRouter><AdminProducts /></MemoryRouter>);
+    await screen.findByText(product.title);
+
+    // 1. Primary Category searchable dropdown
+    fireEvent.click(screen.getByRole('button', { name: 'Primary Category' }));
+    const primarySearch = await screen.findByLabelText('Search Primary Category');
+    fireEvent.change(primarySearch, { target: { value: 'Wom' } });
+    fireEvent.click(await screen.findByRole('option', { name: 'Women' }));
+    await waitFor(() => {
+      expect(mocks.get).toHaveBeenCalledWith(expect.stringContaining('category_id=cat-women'));
+    });
+
+    // 2. Sub Category searchable dropdown
+    fireEvent.click(screen.getByRole('button', { name: 'Sub Category' }));
+    const subSearch = await screen.findByLabelText('Search Sub Category');
+    fireEvent.change(subSearch, { target: { value: 'Activewear' } });
+    fireEvent.click(await screen.findByRole('option', { name: "Women's Activewear" }));
+    await waitFor(() => {
+      expect(mocks.get).toHaveBeenCalledWith(expect.stringContaining('category_id=cat-activewear'));
+    });
+
+    // 3. Child Category searchable dropdown
+    fireEvent.click(screen.getByRole('button', { name: 'Child Category' }));
+    const childSearch = await screen.findByLabelText('Search Child Category');
+    fireEvent.change(childSearch, { target: { value: 'Short' } });
+    fireEvent.click(await screen.findByRole('option', { name: 'Shorts' }));
+    await waitFor(() => {
+      expect(mocks.get).toHaveBeenCalledWith(expect.stringContaining('category_id=cat-shorts'));
+    });
+
+    // 4. Collection searchable dropdown
+    fireEvent.click(screen.getByRole('button', { name: 'Collection' }));
+    const collectionSearch = await screen.findByLabelText('Search Collection');
+    fireEvent.change(collectionSearch, { target: { value: 'Resort' } });
+    fireEvent.click(await screen.findByRole('option', { name: 'Resort 2026' }));
+    await waitFor(() => {
+      expect(mocks.get).toHaveBeenCalledWith(expect.stringContaining('collection_id=col-resort'));
+    });
+  });
   it('list denial validates the trimmed reason length before sending the trimmed payload', async () => {
     render(<MemoryRouter><AdminProducts /></MemoryRouter>);
     await screen.findByText(product.title);

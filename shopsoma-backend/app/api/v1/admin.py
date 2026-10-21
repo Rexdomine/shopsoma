@@ -1903,6 +1903,7 @@ async def list_all_products(
     moderation_status: Optional[ModerationStatus] = Query(None, description="Filter by moderation status"),
     vendor_id: Optional[UUID] = Query(None, description="Filter by vendor ID"),
     category_id: Optional[UUID] = Query(None, description="Filter by category ID"),
+    collection_id: Optional[UUID] = Query(None, description="Filter by collection ID"),
     is_featured: Optional[bool] = Query(None, description="Filter by featured status"),
     current_admin: User = Depends(get_current_admin),
     db: AsyncSession = Depends(get_db)
@@ -1959,7 +1960,17 @@ async def list_all_products(
                 descendant_category.parent_id == descendants.c.id
             )
         )
-        filters.append(Product.category_id.in_(select(descendants.c.id)))
+        filters.append(
+            or_(
+                Product.category_id.in_(select(descendants.c.id)),
+                Product.shop_edit_categories.any(
+                    Category.id.in_(select(descendants.c.id))
+                ),
+            )
+        )
+
+    if collection_id is not None:
+        filters.append(Product.collection_id == collection_id)
 
     if is_featured is not None:
         filters.append(Product.is_featured == is_featured)
@@ -3525,21 +3536,21 @@ async def list_collections(
 
     Requires admin role
     """
-    from app.models.product import ProductCollection
+    from app.models.collection import Collection
 
-    result = await db.execute(select(ProductCollection).order_by(ProductCollection.display_order))
+    result = await db.execute(select(Collection).order_by(Collection.name))
     collections = result.scalars().all()
 
     return {
         "collections": [
             {
                 "id": str(collection.id),
-                "title": collection.title,
+                "name": collection.name,
+                "title": collection.name,
                 "description": collection.description,
                 "slug": collection.slug,
-                "image_url": collection.image_url,
-                "display_order": collection.display_order,
-                "is_featured": collection.is_featured,
+                "image_url": collection.banner_image_url,
+                "vendor_id": str(collection.vendor_id) if collection.vendor_id else None,
                 "is_active": collection.is_active,
             }
             for collection in collections
