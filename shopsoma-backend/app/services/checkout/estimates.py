@@ -572,7 +572,54 @@ async def _shipbubble_checkout_options(db, *, order: Order):
             package_dimension=package_dimension,
         )
     except ShipBubbleError as exc:
-        if "category" in str(exc).lower():
+        err_lower = str(exc).lower()
+        if (
+            "sender address" in err_lower
+            or "receiver address" in err_lower
+            or "reciever address" in err_lower
+            or "address code" in err_lower
+        ):
+            try:
+                logger.warning(
+                    "[ShipBubble] Address code rejected during fetch_rates (%s); re-validating addresses",
+                    exc,
+                )
+                hub_address_str = f"{hub.address_line1} {hub.address_line2 or ''}".strip()
+                val_hub = await service.validate_address(
+                    name=hub.contact_name or "Shopsoma Fulfillment Hub",
+                    email=settings.SHIPBUBBLE_SENDER_EMAIL or "logistics@shopsoma.com",
+                    phone=hub.contact_phone or "+2348000000000",
+                    address=f"{hub_address_str}, {hub.city}, {hub.state}, Nigeria",
+                    force_refresh=True,
+                )
+                sender_address_code = int(val_hub["address_code"])
+                hub.shipbubble_address_code = sender_address_code
+                db.add(hub)
+                await db.flush()
+
+                if "receiver" in err_lower or "reciever" in err_lower:
+                    val_dest = await service.validate_address(
+                        name=dest_name,
+                        email=dest_email,
+                        phone=dest_phone,
+                        address=dest_full,
+                        force_refresh=True,
+                    )
+                    receiver_address_code = int(val_dest["address_code"])
+
+                rates_result = await service.fetch_rates(
+                    sender_address_code=sender_address_code,
+                    receiver_address_code=receiver_address_code,
+                    pickup_date=pickup_date,
+                    category_id=category_id,
+                    package_items=package_items,
+                    package_dimension=package_dimension,
+                )
+                exc = None
+            except ShipBubbleError as retry_exc:
+                exc = retry_exc
+
+        if exc is not None and "category" in str(exc).lower():
             try:
                 available_cats = await service.get_categories()
                 fallback_cat = next(
@@ -595,7 +642,7 @@ async def _shipbubble_checkout_options(db, *, order: Order):
             except Exception:
                 logger.error("[ShipBubble] fetch_rates error: %s", exc)
                 raise HTTPException(status_code=503, detail=f"Unable to retrieve courier rates from ShipBubble: {exc.message}") from exc
-        else:
+        elif exc is not None:
             logger.error("[ShipBubble] fetch_rates error: %s", exc)
             raise HTTPException(status_code=503, detail=f"Unable to retrieve courier rates from ShipBubble: {exc.message}") from exc
 
@@ -1143,7 +1190,7 @@ async def create_estimate(
     combined_manual_rates = None
 
     active_providers_count = sum(1 for p in (manual_provider_enabled, dhl_provider_enabled, shipbubble_provider_enabled) if p)
-    if provider == "combined" or active_providers_count > 1:
+    if not is_pure_manual and (provider == "combined" or active_providers_count > 1):
         comb_lock_key = f"comb:{order.customer_id}:{idempotency_key}"
         await db.execute(
             text(
@@ -1159,7 +1206,13 @@ async def create_estimate(
             )
         )
         if existing is not None:
-            if existing.request_fingerprint != fingerprint:
+            expected_fp = _estimate_request_fingerprint(
+                order.id,
+                snapshot_hash,
+                parcel_snapshot_hash if existing.source_kind == "sandbox_normalized" else None,
+                subject_snapshot_hash if existing.source_kind == "sandbox_normalized" else None,
+            )
+            if existing.request_fingerprint != expected_fp:
                 raise HTTPException(status_code=409, detail="idempotency conflict")
             return existing
 
@@ -1269,12 +1322,24 @@ async def create_estimate(
             )
         )
         if existing is not None:
-            if existing.request_fingerprint != fingerprint:
+            expected_fp = _estimate_request_fingerprint(
+                order.id,
+                snapshot_hash,
+                parcel_snapshot_hash if existing.source_kind == "sandbox_normalized" else None,
+                subject_snapshot_hash if existing.source_kind == "sandbox_normalized" else None,
+            )
+            if existing.request_fingerprint != expected_fp:
                 raise HTTPException(status_code=409, detail="idempotency conflict")
             return existing
         database_now = await db.scalar(select(text("statement_timestamp()")))
         customer_id = order.customer_id
         source_kind = "sandbox_normalized" if dhl_offers else ("shipbubble_live" if sb_rates_result else "static_domestic_rate")
+        effective_fingerprint = _estimate_request_fingerprint(
+            order.id,
+            snapshot_hash,
+            parcel_snapshot_hash if source_kind == "sandbox_normalized" else None,
+            subject_snapshot_hash if source_kind == "sandbox_normalized" else None,
+        )
         refs = []
         if dhl_offers:
             refs.append("dhl")
@@ -1306,7 +1371,7 @@ async def create_estimate(
                 else "create_checkout_estimate"
             ),
             idempotency_key=idempotency_key,
-            request_fingerprint=fingerprint,
+            request_fingerprint=effective_fingerprint,
             schema_version="checkout_estimate_v1",
             created_by_actor_type=actor_type,
             created_by_actor_id=actor_id,
@@ -1324,7 +1389,13 @@ async def create_estimate(
             )
             if replay is None:
                 raise
-            if replay.request_fingerprint != fingerprint:
+            expected_replay_fp = _estimate_request_fingerprint(
+                order.id,
+                snapshot_hash,
+                parcel_snapshot_hash if replay.source_kind == "sandbox_normalized" else None,
+                subject_snapshot_hash if replay.source_kind == "sandbox_normalized" else None,
+            )
+            if replay.request_fingerprint != expected_replay_fp:
                 raise HTTPException(status_code=409, detail="idempotency conflict")
             return replay
     elif dhl_provider_enabled:
@@ -1746,7 +1817,11 @@ async def create_estimate(
                         currency=order.currency,
                         min_delivery_days=rate.min_delivery_days,
                         max_delivery_days=rate.max_delivery_days,
-                        source_rate_id=None,
+                        source_rate_id=(
+                            rate.id
+                            if estimate.source_kind == "static_domestic_rate"
+                            else None
+                        ),
                         provider_metadata={
                             "provider": "manual",
                             "rate_id": str(rate.id),

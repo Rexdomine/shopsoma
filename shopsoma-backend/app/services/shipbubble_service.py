@@ -260,6 +260,7 @@ class ShipBubbleService:
         address: str,
         latitude: Optional[float] = None,
         longitude: Optional[float] = None,
+        force_refresh: bool = False,
     ) -> Dict[str, Any]:
         """Validate an address via POST /shipping/address/validate.
 
@@ -271,7 +272,7 @@ class ShipBubbleService:
             phone.strip(),
             address.strip().lower(),
         )
-        if self.transport is None and cache_key in _ADDRESS_VALIDATION_CACHE:
+        if not force_refresh and self.transport is None and cache_key in _ADDRESS_VALIDATION_CACHE:
             return _ADDRESS_VALIDATION_CACHE[cache_key]
 
         payload: Dict[str, Any] = {
