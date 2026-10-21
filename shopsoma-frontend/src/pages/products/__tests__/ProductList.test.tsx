@@ -596,4 +596,116 @@ describe('ProductList', () => {
     const page1Button = screen.getByRole('button', { name: '1' });
     expect(page1Button).toHaveClass('border-primary', 'bg-primary', 'text-white');
   });
+
+  it("prefers real database child category IDs from getSubcategories over static childCategoryOverrides", async () => {
+    getProductsMock.mockResolvedValue({
+      products: [
+        {
+          id: 'eko-trousers',
+          title: 'Eko Trousers',
+          category_name: "Women's Jeans",
+          category_parent_name: "Women's Bottoms",
+          categories: ['Women', "Women's Bottoms", "Women's Jeans"],
+        },
+      ],
+      total: 1,
+      total_pages: 1,
+    });
+    getSubcategoriesMock.mockResolvedValue([
+      {
+        id: 'ca419b8a-fdb0-4352-aaea-871c0b95a34d',
+        name: "Women's Jeans",
+        slug: 'women-bottoms-jeans',
+        is_active: true,
+        display_order: 1,
+        created_at: '',
+        updated_at: '',
+      },
+    ]);
+
+    const categoryNav = [
+      {
+        id: '70a15429-37c3-4f49-bb5e-37dfe724058c',
+        name: "Women's Bottoms",
+        slug: 'women-bottoms',
+        is_active: true,
+        display_order: 3,
+        created_at: '',
+        updated_at: '',
+      },
+    ];
+    const childCategoryOverrides = {
+      'women-bottoms': [
+        {
+          id: '3c0a63b2-0001-4c30-af12-e0a735153bf0',
+          name: "Women's Jeans",
+          slug: 'women-bottoms-jeans',
+          is_active: true,
+          display_order: 1,
+          created_at: '',
+          updated_at: '',
+        },
+      ],
+    };
+
+    render(
+      <MemoryRouter initialEntries={['/women']}>
+        <ProductList
+          presetCategory="Women"
+          initialParams={{ category_id: '6e0c2540-2b10-4104-a654-6c562d9d2e24' }}
+          categoryNav={categoryNav}
+          childCategoryOverrides={childCategoryOverrides}
+        />
+      </MemoryRouter>
+    );
+
+    await waitFor(() =>
+      expect(screen.getByRole('button', { name: "Women's Bottoms" })).toBeInTheDocument()
+    );
+
+    fireEvent.mouseEnter(screen.getByRole('button', { name: "Women's Bottoms" }));
+    await waitFor(() =>
+      expect(getSubcategoriesMock).toHaveBeenCalledWith('70a15429-37c3-4f49-bb5e-37dfe724058c')
+    );
+
+    fireEvent.click(await screen.findByRole('button', { name: "Women's Jeans" }));
+
+    await waitFor(() =>
+      expect(getProductsMock).toHaveBeenLastCalledWith(
+        expect.objectContaining({ category_id: 'ca419b8a-fdb0-4352-aaea-871c0b95a34d' })
+      )
+    );
+  });
+
+  it('matches 3-level category lineage via product.categories for client-side category filtering', async () => {
+    getProductsMock.mockResolvedValue({
+      products: [
+        {
+          id: 'men-trousers-1',
+          title: 'Tailored Trousers',
+          category_name: 'Trousers',
+          category_parent_name: 'Bottoms',
+          categories: ['Men', 'Bottoms', 'Trousers'],
+        },
+        {
+          id: 'women-jeans-1',
+          title: 'Eko Trousers',
+          category_name: "Women's Jeans",
+          category_parent_name: "Women's Bottoms",
+          categories: ['Women', "Women's Bottoms", "Women's Jeans"],
+        },
+      ],
+      total: 2,
+      total_pages: 1,
+    });
+
+    render(
+      <MemoryRouter initialEntries={['/products?category=Men']}>
+        <ProductList />
+      </MemoryRouter>
+    );
+
+    await waitFor(() => expect(screen.getAllByTestId('product-men-trousers-1')).not.toHaveLength(0));
+    expect(screen.queryByTestId('product-women-jeans-1')).not.toBeInTheDocument();
+  });
 });

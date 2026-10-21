@@ -16,7 +16,7 @@ const filterByCategories = (items: Product[], categories: string[]) => {
   const normalized = categories.map(normalize).filter(Boolean);
   if (!normalized.length) return [];
   return items.filter((product) => {
-    const category = normalize(product.category_name || product.collection_name);
+    const category = normalize([product.category_name, product.category_parent_name, product.collection_name, ...(product.categories || [])].filter(Boolean).join(' '));
     const description = normalize(product.description);
     return normalized.some((prefCategory) =>
       category.includes(prefCategory) || description.includes(prefCategory)
@@ -29,9 +29,10 @@ const filterByInterest = (items: Product[], interest?: string | null) => {
   const target = interest === 'menswear' ? 'men' : interest === 'womenswear' ? 'women' : '';
   if (!target) return [];
   return items.filter((product) => {
-    const category = normalize(product.category_name || product.collection_name);
+    const category = normalize([product.category_name, product.category_parent_name, product.collection_name, ...(product.categories || [])].filter(Boolean).join(' '));
     const description = normalize(product.description);
-    return category.startsWith(target) || description.startsWith(`${target} -`);
+    const rootCategory = normalize(product.categories?.[0]);
+    return category.startsWith(target) || rootCategory === target || description.startsWith(`${target} -`);
   });
 };
 

@@ -65,7 +65,7 @@ export default function CategoryStorefront() {
     <ProductList
       presetCategory={category.name}
       initialParams={{ category_id: category.id }}
-      serverFilteredCategory={SHOP_EDITS_CATEGORY_SLUGS.has(category.slug)}
+      serverFilteredCategory={Boolean(category.id) || SHOP_EDITS_CATEGORY_SLUGS.has(category.slug)}
       heroOverride={{
         title: category.name,
         body: CATEGORY_HERO_COPY[category.slug] || category.description || `Explore the ${category.name.toLowerCase()} edit.`,
