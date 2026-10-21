@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef, useMemo } from 'react';
 import type { Category } from '../../types';
 import { useLocation, useNavigate, useSearchParams } from 'react-router-dom';
-import { Search, CheckCircle, XCircle, Eye, Package, AlertCircle, Edit2, Trash2 } from 'lucide-react';
+import { Search, CheckCircle, XCircle, Eye, Package, AlertCircle, Edit2, Trash2, ChevronDown, X } from 'lucide-react';
 import AdminSidebar from '../../components/admin/AdminSidebar';
 import { adminService } from '../../services/adminService';
 import { ROUTES } from '../../config/constants';
@@ -65,6 +65,181 @@ export const sameTimestamp = (left: string, right: string): boolean => {
   );
 };
 
+interface FilterDropdownOption {
+  value: string;
+  label: string;
+}
+
+interface SearchableFilterDropdownProps {
+  id: string;
+  label: string;
+  placeholder: string;
+  allOptionLabel: string;
+  allOptionValue?: string;
+  value: string;
+  options: FilterDropdownOption[];
+  onChange: (value: string) => void;
+  emptyMessage?: string;
+}
+
+function SearchableFilterDropdown({
+  id,
+  label,
+  placeholder,
+  allOptionLabel,
+  allOptionValue = '',
+  value,
+  options,
+  onChange,
+  emptyMessage = 'No options available',
+}: SearchableFilterDropdownProps) {
+  const [isOpen, setIsOpen] = useState(false);
+  const [searchQuery, setSearchQuery] = useState('');
+  const containerRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!isOpen) return;
+    const handleMouseDown = (event: MouseEvent) => {
+      if (containerRef.current && !containerRef.current.contains(event.target as Node)) {
+        setIsOpen(false);
+        setSearchQuery('');
+      }
+    };
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        setIsOpen(false);
+        setSearchQuery('');
+      }
+    };
+    document.addEventListener('mousedown', handleMouseDown);
+    document.addEventListener('keydown', handleKeyDown);
+    return () => {
+      document.removeEventListener('mousedown', handleMouseDown);
+      document.removeEventListener('keydown', handleKeyDown);
+    };
+  }, [isOpen]);
+
+  const selectedOption = options.find((opt) => opt.value === value);
+  const isAllSelected = value === allOptionValue || !selectedOption;
+
+  const filteredOptions = useMemo(() => {
+    const query = searchQuery.trim().toLowerCase();
+    if (!query) return options;
+    return options.filter((opt) => opt.label.toLowerCase().includes(query));
+  }, [options, searchQuery]);
+
+  const showAllOption =
+    !searchQuery.trim() || allOptionLabel.toLowerCase().includes(searchQuery.trim().toLowerCase());
+
+  return (
+    <div ref={containerRef} className="relative">
+      <label htmlFor={id} className="block text-sm font-medium text-gray-700 mb-2">
+        {label}
+      </label>
+      <button
+        id={id}
+        type="button"
+        aria-label={label}
+        aria-haspopup="listbox"
+        aria-expanded={isOpen}
+        onClick={() => {
+          setIsOpen((prev) => {
+            if (prev) setSearchQuery('');
+            return !prev;
+          });
+        }}
+        className="w-full rounded-lg border border-gray-200 bg-gray-50 px-4 py-3 text-sm text-left flex items-center justify-between focus:outline-none focus:border-[#105E53] focus:ring-2 focus:ring-[#105E53]/20"
+      >
+        <span className={!isAllSelected ? 'text-gray-900 truncate pr-2' : 'text-gray-400 truncate pr-2'}>
+          {!isAllSelected && selectedOption ? selectedOption.label : placeholder}
+        </span>
+        <ChevronDown className={`w-4 h-4 text-gray-400 shrink-0 transition ${isOpen ? 'rotate-180' : ''}`} />
+      </button>
+
+      {isOpen && (
+        <div
+          role="listbox"
+          aria-label={`${label} options`}
+          className="absolute z-30 mt-2 w-full bg-white border border-gray-200 rounded-lg shadow-lg overflow-hidden"
+        >
+          <div className="p-2 border-b border-gray-100 bg-white sticky top-0">
+            <div className="relative">
+              <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" />
+              <input
+                type="text"
+                value={searchQuery}
+                onChange={(e) => setSearchQuery(e.target.value)}
+                placeholder={`Search ${label.toLowerCase()}...`}
+                aria-label={`Search ${label}`}
+                className="w-full pl-9 pr-8 py-2 text-sm border border-gray-200 rounded-md focus:outline-none focus:border-[#105E53] focus:ring-1 focus:ring-[#105E53]"
+                autoFocus
+              />
+              {searchQuery && (
+                <button
+                  type="button"
+                  aria-label={`Clear ${label} search`}
+                  onClick={() => setSearchQuery('')}
+                  className="absolute right-2.5 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600"
+                >
+                  <X className="w-3.5 h-3.5" />
+                </button>
+              )}
+            </div>
+          </div>
+
+          <div className="max-h-60 overflow-y-auto">
+            {showAllOption && (
+              <button
+                type="button"
+                role="option"
+                aria-selected={isAllSelected}
+                onClick={() => {
+                  onChange(allOptionValue);
+                  setIsOpen(false);
+                  setSearchQuery('');
+                }}
+                className={`w-full px-4 py-3 text-left text-sm hover:bg-gray-50 ${
+                  isAllSelected ? 'font-medium text-[#105E53] bg-[#105E53]/5' : 'text-gray-700'
+                }`}
+              >
+                {allOptionLabel}
+              </button>
+            )}
+
+            {filteredOptions.length > 0 ? (
+              filteredOptions.map((opt) => {
+                const isSelected = opt.value === value;
+                return (
+                  <button
+                    key={opt.value}
+                    type="button"
+                    role="option"
+                    aria-selected={isSelected}
+                    onClick={() => {
+                      onChange(opt.value);
+                      setIsOpen(false);
+                      setSearchQuery('');
+                    }}
+                    className={`w-full px-4 py-3 text-left text-sm hover:bg-gray-50 ${
+                      isSelected ? 'font-medium text-[#105E53] bg-[#105E53]/5' : 'text-gray-700'
+                    }`}
+                  >
+                    {opt.label}
+                  </button>
+                );
+              })
+            ) : !showAllOption ? (
+              <div className="p-4 text-center text-sm text-gray-500">No matching options</div>
+            ) : options.length === 0 ? (
+              <div className="p-4 text-center text-sm text-gray-500">{emptyMessage}</div>
+            ) : null}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 export default function AdminProducts() {
   const navigate = useNavigate();
   const location = useLocation();
@@ -95,8 +270,12 @@ export default function AdminProducts() {
   const [total, setTotal] = useState(0);
   const [moderationFilter, setModerationFilter] = useState<string>('pending');
   const [statusFilter, setStatusFilter] = useState<string>('all');
-  const [categoryFilter, setCategoryFilter] = useState<string>('all');
+  const [primaryCategoryFilter, setPrimaryCategoryFilter] = useState<string>('');
+  const [subCategoryFilter, setSubCategoryFilter] = useState<string>('');
+  const [childCategoryFilter, setChildCategoryFilter] = useState<string>('');
+  const [collectionFilter, setCollectionFilter] = useState<string>('');
   const [categories, setCategories] = useState<Category[]>([]);
+  const [collections, setCollections] = useState<Array<{ id: string; name: string; title?: string }>>([]);
   const [message, setMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
   const [actionLoading, setActionLoading] = useState<string | null>(null);
   const [featureLoadingId, setFeatureLoadingId] = useState<string | null>(null);
@@ -111,43 +290,103 @@ export default function AdminProducts() {
 
   const pageSize = 20;
 
-  const categoryOptions = useMemo(() => {
-    if (!Array.isArray(categories) || categories.length === 0) return [];
-    const byParent = new Map<string | null, Category[]>();
-    const allIds = new Set(categories.map((c) => c.id));
+  const primaryCategories = useMemo(
+    () => categories.filter((c) => !c.parent_id),
+    [categories]
+  );
 
-    for (const cat of categories) {
-      const parentKey = cat.parent_id && allIds.has(cat.parent_id) ? cat.parent_id : null;
-      const group = byParent.get(parentKey) || [];
-      group.push(cat);
-      byParent.set(parentKey, group);
+  const primaryIdSet = useMemo(
+    () => new Set(primaryCategories.map((c) => c.id)),
+    [primaryCategories]
+  );
+
+  const allSubcategories = useMemo(
+    () => categories.filter((c) => Boolean(c.parent_id && primaryIdSet.has(c.parent_id))),
+    [categories, primaryIdSet]
+  );
+
+  const allSubcategoryIdSet = useMemo(
+    () => new Set(allSubcategories.map((c) => c.id)),
+    [allSubcategories]
+  );
+
+  const visibleSubcategories = useMemo(() => {
+    if (primaryCategoryFilter) {
+      return categories.filter((c) => c.parent_id === primaryCategoryFilter);
     }
+    return allSubcategories;
+  }, [categories, primaryCategoryFilter, allSubcategories]);
 
-    const options: Array<{ id: string; label: string }> = [];
-    const visited = new Set<string>();
+  const visibleChildCategories = useMemo(() => {
+    if (subCategoryFilter) {
+      return categories.filter((c) => c.parent_id === subCategoryFilter);
+    }
+    if (primaryCategoryFilter) {
+      const subIdsForPrimary = new Set(
+        categories.filter((c) => c.parent_id === primaryCategoryFilter).map((c) => c.id)
+      );
+      return categories.filter((c) => Boolean(c.parent_id && subIdsForPrimary.has(c.parent_id)));
+    }
+    return categories.filter((c) => Boolean(c.parent_id && allSubcategoryIdSet.has(c.parent_id)));
+  }, [categories, primaryCategoryFilter, subCategoryFilter, allSubcategoryIdSet]);
 
-    const walk = (parentId: string | null, prefix: string) => {
-      const children = byParent.get(parentId) || [];
-      for (const child of children) {
-        if (visited.has(child.id)) continue;
-        visited.add(child.id);
-        const label = prefix ? `${prefix} ? ${child.name}` : child.name;
-        options.push({ id: child.id, label });
-        walk(child.id, label);
-      }
-    };
+  const primaryCategoryOptions = useMemo(
+    () => primaryCategories.map((c) => ({ value: c.id, label: c.name })),
+    [primaryCategories]
+  );
 
-    walk(null, '');
+  const subCategoryOptions = useMemo(
+    () => visibleSubcategories.map((c) => ({ value: c.id, label: c.name })),
+    [visibleSubcategories]
+  );
 
-    for (const cat of categories) {
-      if (!visited.has(cat.id)) {
-        visited.add(cat.id);
-        options.push({ id: cat.id, label: cat.name });
+  const childCategoryOptions = useMemo(
+    () => visibleChildCategories.map((c) => ({ value: c.id, label: c.name })),
+    [visibleChildCategories]
+  );
+
+  const collectionOptions = useMemo(
+    () => collections.map((col) => ({ value: col.id, label: col.name || col.title || 'Collection' })),
+    [collections]
+  );
+
+  const handlePrimaryCategoryFilterChange = (newPrimaryId: string) => {
+    setPrimaryCategoryFilter(newPrimaryId);
+    setSubCategoryFilter('');
+    setChildCategoryFilter('');
+    setPage(1);
+  };
+
+  const handleSubCategoryFilterChange = (newSubId: string) => {
+    setSubCategoryFilter(newSubId);
+    setChildCategoryFilter('');
+    if (newSubId) {
+      const sub = categories.find((c) => c.id === newSubId);
+      if (sub?.parent_id && sub.parent_id !== primaryCategoryFilter) {
+        setPrimaryCategoryFilter(sub.parent_id);
       }
     }
+    setPage(1);
+  };
 
-    return options;
-  }, [categories]);
+  const handleChildCategoryFilterChange = (newChildId: string) => {
+    setChildCategoryFilter(newChildId);
+    if (newChildId) {
+      const child = categories.find((c) => c.id === newChildId);
+      if (child?.parent_id) {
+        if (child.parent_id !== subCategoryFilter) {
+          setSubCategoryFilter(child.parent_id);
+        }
+        const parentSub = categories.find((c) => c.id === child.parent_id);
+        if (parentSub?.parent_id && parentSub.parent_id !== primaryCategoryFilter) {
+          setPrimaryCategoryFilter(parentSub.parent_id);
+        }
+      }
+    }
+    setPage(1);
+  };
+
+  const effectiveCategoryFilter = childCategoryFilter || subCategoryFilter || primaryCategoryFilter;
 
   useEffect(() => {
     fetchExchangeRate();
@@ -165,6 +404,16 @@ export default function AdminProducts() {
       .catch(() => {
         // Ignore category list errors so product moderation remains usable
       });
+    adminService
+      .listCollections()
+      .then((data) => {
+        if (isMounted && Array.isArray(data)) {
+          setCollections(data);
+        }
+      })
+      .catch(() => {
+        // Ignore collection list errors so product moderation remains usable
+      });
     return () => {
       isMounted = false;
     };
@@ -172,7 +421,7 @@ export default function AdminProducts() {
 
   useEffect(() => {
     loadProducts();
-  }, [page, moderationFilter, statusFilter, categoryFilter, search]);
+  }, [page, moderationFilter, statusFilter, effectiveCategoryFilter, collectionFilter, search]);
 
   const loadProducts = async (): Promise<boolean> => {
     try {
@@ -186,7 +435,8 @@ export default function AdminProducts() {
 
       if (moderationFilter !== 'all') filters.moderation_status = moderationFilter;
       if (statusFilter !== 'all') filters.status = statusFilter;
-      if (categoryFilter !== 'all') filters.category_id = categoryFilter;
+      if (effectiveCategoryFilter) filters.category_id = effectiveCategoryFilter;
+      if (collectionFilter) filters.collection_id = collectionFilter;
 
       const response = await adminService.listProducts(filters);
       setProducts(response.items);
@@ -597,63 +847,93 @@ export default function AdminProducts() {
             />
           </div>
 
-          {/* Filter Row */}
-          <div className="flex flex-col sm:flex-row gap-4">
-            <div className="flex-1">
-              <label className="block text-sm font-medium text-gray-700 mb-1">Moderation Status</label>
-              <select
-                value={moderationFilter}
-                onChange={(e) => {
-                  setModerationFilter(e.target.value);
-                  setPage(1);
-                }}
-                className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-              >
-                <option value="all">All Moderation Statuses</option>
-                <option value="pending">Pending Review</option>
-                <option value="approved">Approved</option>
-                <option value="rejected">Rejected</option>
-              </select>
-            </div>
+          {/* Filter Grid */}
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+            <SearchableFilterDropdown
+              id="primary-category-filter"
+              label="Primary Category"
+              placeholder="Select category"
+              allOptionLabel="All Primary Categories"
+              value={primaryCategoryFilter}
+              options={primaryCategoryOptions}
+              onChange={handlePrimaryCategoryFilterChange}
+              emptyMessage="No categories available"
+            />
 
-            <div className="flex-1">
-              <label className="block text-sm font-medium text-gray-700 mb-1">Product Status</label>
-              <select
-                value={statusFilter}
-                onChange={(e) => {
-                  setStatusFilter(e.target.value);
-                  setPage(1);
-                }}
-                className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-              >
-                <option value="all">All Product Statuses</option>
-                <option value="draft">Draft</option>
-                <option value="active">Active</option>
-                <option value="inactive">Inactive</option>
-                <option value="archived">Archived</option>
-              </select>
-            </div>
+            <SearchableFilterDropdown
+              id="sub-category-filter"
+              label="Sub Category"
+              placeholder="Select subcategory"
+              allOptionLabel="All Sub Categories"
+              value={subCategoryFilter}
+              options={subCategoryOptions}
+              onChange={handleSubCategoryFilterChange}
+              emptyMessage="No subcategories available"
+            />
 
-            <div className="flex-1">
-              <label htmlFor="category-filter" className="block text-sm font-medium text-gray-700 mb-1">Categories</label>
-              <select
-                id="category-filter"
-                aria-label="Categories"
-                value={categoryFilter}
-                onChange={(e) => {
-                  setCategoryFilter(e.target.value);
-                  setPage(1);
-                }}
-                className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-              >
-                <option value="all">All Categories</option>
-                {categoryOptions.map((option) => (
-                  <option key={option.id} value={option.id}>
-                    {option.label}
-                  </option>
-                ))}
-              </select>
-            </div>
+            <SearchableFilterDropdown
+              id="child-category-filter"
+              label="Child Category"
+              placeholder="Select child category"
+              allOptionLabel="All Child Categories"
+              value={childCategoryFilter}
+              options={childCategoryOptions}
+              onChange={handleChildCategoryFilterChange}
+              emptyMessage="No child categories available"
+            />
+
+            <SearchableFilterDropdown
+              id="collection-filter"
+              label="Collection"
+              placeholder="Select collection (optional)"
+              allOptionLabel="All Collections"
+              value={collectionFilter}
+              options={collectionOptions}
+              onChange={(val) => {
+                setCollectionFilter(val);
+                setPage(1);
+              }}
+              emptyMessage="No collections available"
+            />
+          </div>
+
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+            <SearchableFilterDropdown
+              id="moderation-status-filter"
+              label="Moderation Status"
+              placeholder="All Moderation Statuses"
+              allOptionLabel="All Moderation Statuses"
+              allOptionValue="all"
+              value={moderationFilter}
+              options={[
+                { value: 'pending', label: 'Pending Review' },
+                { value: 'approved', label: 'Approved' },
+                { value: 'rejected', label: 'Rejected' },
+              ]}
+              onChange={(val) => {
+                setModerationFilter(val);
+                setPage(1);
+              }}
+            />
+
+            <SearchableFilterDropdown
+              id="product-status-filter"
+              label="Product Status"
+              placeholder="All Product Statuses"
+              allOptionLabel="All Product Statuses"
+              allOptionValue="all"
+              value={statusFilter}
+              options={[
+                { value: 'draft', label: 'Draft' },
+                { value: 'active', label: 'Active' },
+                { value: 'inactive', label: 'Inactive' },
+                { value: 'archived', label: 'Archived' },
+              ]}
+              onChange={(val) => {
+                setStatusFilter(val);
+                setPage(1);
+              }}
+            />
           </div>
         </div>
 
