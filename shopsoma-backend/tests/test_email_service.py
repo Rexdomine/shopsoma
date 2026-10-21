@@ -480,8 +480,10 @@ def test_customer_status_notifications_only_for_allowed_milestones():
     from app.services.order_notification_service import CUSTOMER_STATUS_MESSAGES, VENDOR_STATUS_MESSAGES
     from app.models.order import FulfillmentStatus
 
-    # Only these 5 statuses send email to the customer
+    # Only these customer-facing tracking/final statuses send email to the customer
     allowed_customer_email_statuses = {
+        FulfillmentStatus.PICKED_UP,
+        FulfillmentStatus.IN_TRANSIT,
         FulfillmentStatus.OUT_FOR_DELIVERY,
         FulfillmentStatus.DELIVERED,
         FulfillmentStatus.DELIVERY_FAILED,
@@ -489,13 +491,11 @@ def test_customer_status_notifications_only_for_allowed_milestones():
         FulfillmentStatus.CANCELLED,
     }
 
-    # All other statuses must NOT send customer email
+    # Internal pre-dispatch statuses must NOT send customer email
     suppressed_customer_email_statuses = {
         FulfillmentStatus.ORDER_RECEIVED,
         FulfillmentStatus.PREPARING_FOR_PICKUP,
         FulfillmentStatus.PICKUP_SCHEDULED,
-        FulfillmentStatus.PICKED_UP,
-        FulfillmentStatus.IN_TRANSIT,
     }
 
     for status in allowed_customer_email_statuses:
