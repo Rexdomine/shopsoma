@@ -1246,7 +1246,7 @@ export default function Checkout() {
                                 Sign in
                               </Link>
                             </span>
-                            <span className="text-gray-400">or continue as guest</span>
+                            <span className="text-gray-400">enter your email to continue as a guest</span>
                           </div>
                         )}
                       </>
