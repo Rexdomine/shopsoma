@@ -1,4 +1,5 @@
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef, useMemo } from 'react';
+import type { Category } from '../../types';
 import { useLocation, useNavigate, useSearchParams } from 'react-router-dom';
 import { Search, CheckCircle, XCircle, Eye, Package, AlertCircle, Edit2, Trash2 } from 'lucide-react';
 import AdminSidebar from '../../components/admin/AdminSidebar';
@@ -94,6 +95,8 @@ export default function AdminProducts() {
   const [total, setTotal] = useState(0);
   const [moderationFilter, setModerationFilter] = useState<string>('pending');
   const [statusFilter, setStatusFilter] = useState<string>('all');
+  const [categoryFilter, setCategoryFilter] = useState<string>('all');
+  const [categories, setCategories] = useState<Category[]>([]);
   const [message, setMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
   const [actionLoading, setActionLoading] = useState<string | null>(null);
   const [featureLoadingId, setFeatureLoadingId] = useState<string | null>(null);
@@ -108,13 +111,68 @@ export default function AdminProducts() {
 
   const pageSize = 20;
 
+  const categoryOptions = useMemo(() => {
+    if (!Array.isArray(categories) || categories.length === 0) return [];
+    const byParent = new Map<string | null, Category[]>();
+    const allIds = new Set(categories.map((c) => c.id));
+
+    for (const cat of categories) {
+      const parentKey = cat.parent_id && allIds.has(cat.parent_id) ? cat.parent_id : null;
+      const group = byParent.get(parentKey) || [];
+      group.push(cat);
+      byParent.set(parentKey, group);
+    }
+
+    const options: Array<{ id: string; label: string }> = [];
+    const visited = new Set<string>();
+
+    const walk = (parentId: string | null, prefix: string) => {
+      const children = byParent.get(parentId) || [];
+      for (const child of children) {
+        if (visited.has(child.id)) continue;
+        visited.add(child.id);
+        const label = prefix ? `${prefix} ? ${child.name}` : child.name;
+        options.push({ id: child.id, label });
+        walk(child.id, label);
+      }
+    };
+
+    walk(null, '');
+
+    for (const cat of categories) {
+      if (!visited.has(cat.id)) {
+        visited.add(cat.id);
+        options.push({ id: cat.id, label: cat.name });
+      }
+    }
+
+    return options;
+  }, [categories]);
+
   useEffect(() => {
     fetchExchangeRate();
   }, [fetchExchangeRate]);
 
   useEffect(() => {
+    let isMounted = true;
+    adminService
+      .listCategories()
+      .then((data) => {
+        if (isMounted && Array.isArray(data)) {
+          setCategories(data);
+        }
+      })
+      .catch(() => {
+        // Ignore category list errors so product moderation remains usable
+      });
+    return () => {
+      isMounted = false;
+    };
+  }, []);
+
+  useEffect(() => {
     loadProducts();
-  }, [page, moderationFilter, statusFilter, search]);
+  }, [page, moderationFilter, statusFilter, categoryFilter, search]);
 
   const loadProducts = async (): Promise<boolean> => {
     try {
@@ -128,6 +186,7 @@ export default function AdminProducts() {
 
       if (moderationFilter !== 'all') filters.moderation_status = moderationFilter;
       if (statusFilter !== 'all') filters.status = statusFilter;
+      if (categoryFilter !== 'all') filters.category_id = categoryFilter;
 
       const response = await adminService.listProducts(filters);
       setProducts(response.items);
@@ -572,6 +631,27 @@ export default function AdminProducts() {
                 <option value="active">Active</option>
                 <option value="inactive">Inactive</option>
                 <option value="archived">Archived</option>
+              </select>
+            </div>
+
+            <div className="flex-1">
+              <label htmlFor="category-filter" className="block text-sm font-medium text-gray-700 mb-1">Categories</label>
+              <select
+                id="category-filter"
+                aria-label="Categories"
+                value={categoryFilter}
+                onChange={(e) => {
+                  setCategoryFilter(e.target.value);
+                  setPage(1);
+                }}
+                className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+              >
+                <option value="all">All Categories</option>
+                {categoryOptions.map((option) => (
+                  <option key={option.id} value={option.id}>
+                    {option.label}
+                  </option>
+                ))}
               </select>
             </div>
           </div>

@@ -613,6 +613,53 @@ describe('admin product view/edit API boundaries', () => {
     expect(screen.getByText('Shorts')).toBeInTheDocument();
     expect(screen.getByText('Uncategorized')).toBeInTheDocument();
   });
+  it('filters products by category when a category is selected from the Categories filter', async () => {
+    mocks.get.mockImplementation(async (url: string) => {
+      if (url === '/admin/categories') {
+        return {
+          data: {
+            categories: [
+              { id: 'cat-women', name: 'Women', slug: 'women', parent_id: null, display_order: 1, is_active: true },
+              { id: 'cat-activewear', name: "Women's Activewear", slug: 'womens-activewear', parent_id: 'cat-women', display_order: 1, is_active: true },
+              { id: 'cat-shorts', name: 'Shorts', slug: 'shorts', parent_id: 'cat-activewear', display_order: 1, is_active: true },
+            ],
+          },
+        };
+      }
+      if (url.startsWith('/admin/products?')) {
+        return {
+          data: {
+            items: [
+              {
+                ...product,
+                sku: 'SKU-1',
+                categories: ['Women', "Women's Activewear", 'Shorts'],
+                vendor: { id: 'vendor-1', business_name: 'Test Vendor' },
+                moderated_at: null,
+                moderation_notes: null,
+              },
+            ],
+            total: 1,
+            page: 1,
+            page_size: 20,
+            total_pages: 1,
+          },
+        };
+      }
+      throw { response: { status: 404, data: { detail: 'Product not found' } } };
+    });
+
+    render(<MemoryRouter><AdminProducts /></MemoryRouter>);
+    await screen.findByText(product.title);
+    const categorySelect = screen.getByLabelText('Categories') as HTMLSelectElement;
+    await waitFor(() => {
+      expect(within(categorySelect).getByRole('option', { name: "Women ? Women's Activewear ? Shorts" })).toBeInTheDocument();
+    });
+    fireEvent.change(categorySelect, { target: { value: 'cat-shorts' } });
+    await waitFor(() => {
+      expect(mocks.get).toHaveBeenCalledWith(expect.stringContaining('category_id=cat-shorts'));
+    });
+  });
   it('list denial validates the trimmed reason length before sending the trimmed payload', async () => {
     render(<MemoryRouter><AdminProducts /></MemoryRouter>);
     await screen.findByText(product.title);

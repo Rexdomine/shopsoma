@@ -1959,7 +1959,14 @@ async def list_all_products(
                 descendant_category.parent_id == descendants.c.id
             )
         )
-        filters.append(Product.category_id.in_(select(descendants.c.id)))
+        filters.append(
+            or_(
+                Product.category_id.in_(select(descendants.c.id)),
+                Product.shop_edit_categories.any(
+                    Category.id.in_(select(descendants.c.id))
+                ),
+            )
+        )
 
     if is_featured is not None:
         filters.append(Product.is_featured == is_featured)
