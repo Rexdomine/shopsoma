@@ -345,6 +345,7 @@ export const adminService = {
     moderation_status?: 'pending' | 'approved' | 'rejected';
     vendor_id?: string;
     category_id?: string;
+    collection_id?: string;
     is_featured?: boolean;
   }): Promise<PaginatedResponse<any>> {
     const params = new URLSearchParams();
@@ -356,6 +357,7 @@ export const adminService = {
     if (filters?.moderation_status) params.append('moderation_status', filters.moderation_status);
     if (filters?.vendor_id) params.append('vendor_id', filters.vendor_id);
     if (filters?.category_id) params.append('category_id', filters.category_id);
+    if (filters?.collection_id) params.append('collection_id', filters.collection_id);
     if (filters?.is_featured !== undefined) params.append('is_featured', filters.is_featured.toString());
 
     const response = await api.get(`/admin/products?${params.toString()}`);
@@ -444,6 +446,11 @@ export const adminService = {
   async listCategories(): Promise<Category[]> {
     const response = await api.get('/admin/categories');
     return response.data?.categories || [];
+  },
+
+  async listCollections(): Promise<Array<{ id: string; name: string; title?: string; slug?: string; is_active?: boolean }>> {
+    const response = await api.get('/admin/collections');
+    return response.data?.collections || [];
   },
 
   async createCategory(data: {
