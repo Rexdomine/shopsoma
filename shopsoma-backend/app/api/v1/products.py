@@ -22,6 +22,7 @@ from app.api.dependencies import get_completed_vendor, get_current_admin
 from app.services.vendor_visibility import customer_visible_vendor_product_filter
 from app.models.user import User
 from app.models.category import Category
+from app.api.v1.categories import resolve_category_by_id_or_static_slug
 from app.models.collection import Collection
 from app.models.product import Product, ProductVariant, ProductImage, ProductStatus, ProductType, ModerationStatus, Variation, SizeStock, SizeEnum
 from app.models.vendor import Vendor
@@ -1031,15 +1032,16 @@ async def list_products(
 
     # Category filter
     if category_id:
-        category_result = await db.execute(select(Category).where(Category.id == category_id))
-        requested_category = category_result.scalar_one_or_none()
+        requested_category = await resolve_category_by_id_or_static_slug(db, category_id)
+        effective_category_id = requested_category.id if requested_category else category_id
+
         requested_slug = requested_category.slug if requested_category else None
         if requested_slug == "shop-edits":
             # The public landing page requests the parent category, while the
             # admin associations are stored on its four leaf edit categories.
             # Include only curated associations; do not broaden normal
             # category filtering or fall back to Product.category_id here.
-            descendants = select(Category.id).where(Category.id == category_id).cte(
+            descendants = select(Category.id).where(Category.id == effective_category_id).cte(
                 "shop_edit_descendants", recursive=True
             )
             descendant_category = aliased(Category)
@@ -1054,9 +1056,25 @@ async def list_products(
                 )
             )
         elif requested_slug in SHOP_EDIT_SLUGS.values():
-            filters.append(Product.shop_edit_categories.any(Category.id == category_id))
+            filters.append(Product.shop_edit_categories.any(Category.id == effective_category_id))
+        elif requested_slug in ("bags-wallets", "perfumes"):
+            related_slugs = (
+                ["bags-wallets", "women-accessories-bags", "men-accessories-wallets"]
+                if requested_slug == "bags-wallets"
+                else ["perfumes", "beauty-fragrances"]
+            )
+            descendants = select(Category.id).where(
+                or_(Category.id == effective_category_id, Category.slug.in_(related_slugs))
+            ).cte("category_descendants", recursive=True)
+            descendant_category = aliased(Category)
+            descendants = descendants.union_all(
+                select(descendant_category.id).where(
+                    descendant_category.parent_id == descendants.c.id
+                )
+            )
+            filters.append(Product.category_id.in_(select(descendants.c.id)))
         else:
-            descendants = select(Category.id).where(Category.id == category_id).cte(
+            descendants = select(Category.id).where(Category.id == effective_category_id).cte(
                 "category_descendants", recursive=True
             )
             descendant_category = aliased(Category)

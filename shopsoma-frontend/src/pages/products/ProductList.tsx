@@ -22,6 +22,7 @@ import { useWishlistActions } from '../../hooks/useWishlistActions';
 import { usePreferenceStore } from '../../store/preferenceStore';
 import { hasSolidColorHex } from '../../utils/colorDisplay';
 import { getProductImageSource, normalizeProductImageUrl } from '../../utils/productImages';
+import { mergeSubcategoriesWithDefaults } from '../../config/categoryNavigation';
 
 const PAGE_SIZE = 12;
 
@@ -126,6 +127,8 @@ const WOMEN_HERO: HeroContent = {
 
 const MEN_CATEGORY_KEYS = ['men', 'mens', 'menswear', "men's fashion", 'mens fashion', "men's wear", 'mens wear'];
 const WOMEN_CATEGORY_KEYS = ['women', 'womens', 'womenswear', "women's fashion", 'womens fashion', "women's wear", 'womens wear'];
+const BAGS_WALLETS_CATEGORY_KEYS = ['bags & wallets', 'bags and wallets', 'bags', 'bag', "women's bags", 'womens bags', "men's bags", 'mens bags', 'wallets', 'wallet', "women's wallets", 'womens wallets', "men's wallets", 'mens wallets'];
+const PERFUMES_CATEGORY_KEYS = ['perfumes', 'perfume', 'fragrances', 'fragrance'];
 
 const getProductPrice = (p: Product): number => {
   const isSingle = !p.variations || p.variations.length === 0;
@@ -271,6 +274,8 @@ export default function ProductList({
     const normalizedPreset = normalize(preset);
     if (preset === 'Men') return MEN_CATEGORY_KEYS.some((key) => normalized === key);
     if (preset === 'Women') return WOMEN_CATEGORY_KEYS.some((key) => normalized === key);
+    if (preset === 'Bags & Wallets') return BAGS_WALLETS_CATEGORY_KEYS.some((key) => normalized === key);
+    if (preset === 'Perfumes') return PERFUMES_CATEGORY_KEYS.some((key) => normalized === key);
     if (normalized === normalizedPreset) return true;
     if (normalized === `${normalizedPreset}s` || `${normalized}s` === normalizedPreset) return true;
     if (normalized === `${normalizedPreset}es` || `${normalized}es` === normalizedPreset) return true;
@@ -288,6 +293,9 @@ export default function ProductList({
       return true;
     }
     const collectionCategory = normalize(product.collection_name || '');
+    if (Array.isArray(product.categories) && product.categories.some((cat) => cat && categoryMatchesPreset(cat, category))) {
+      return true;
+    }
     if (collectionCategory && categoryMatchesPreset(collectionCategory, category)) {
       return true;
     }
@@ -490,7 +498,7 @@ export default function ProductList({
     [navItems, hoveredNavId]
   );
 
-  const getItemChildren = (item: { id: string; name: string; slug?: string }) => {
+  const getOverrideChildren = (item: { id: string; name: string; slug?: string }): Category[] => {
     if (childCategoryOverrides?.[item.id]?.length) {
       return childCategoryOverrides[item.id];
     }
@@ -510,7 +518,19 @@ export default function ProductList({
         }
       }
     }
-    return childCategoryMap[item.id] || [];
+    return [];
+  };
+
+  const getItemChildren = (item: { id: string; name: string; slug?: string }) => {
+    const fetched = childCategoryMap[item.id] || [];
+    const overrides = getOverrideChildren(item);
+    if (fetched.length > 0 && overrides.length > 0) {
+      return mergeSubcategoriesWithDefaults(fetched, overrides);
+    }
+    if (fetched.length > 0) {
+      return fetched;
+    }
+    return overrides;
   };
 
   const hoveredChildCategories = useMemo(() => {
@@ -557,12 +577,13 @@ export default function ProductList({
       (hoveredNavItem?.slug && childCategoryOverrides?.[hoveredNavItem.slug]?.length) ||
       (hoveredNavItem?.name && childCategoryOverrides?.[hoveredNavItem.name]?.length)
     );
-    if (hasOverride || childCategoryMap[hoveredNavId]) return;
+    if (hoveredNavId in childCategoryMap) return;
+    void hasOverride;
 
     const loadChildren = async () => {
       try {
         const children = await categoryService.getSubcategories(hoveredNavId);
-        setChildCategoryMap((prev) => ({ ...prev, [hoveredNavId]: children }));
+        setChildCategoryMap((prev) => ({ ...prev, [hoveredNavId]: children || [] }));
       } catch (error) {
         console.error('Failed to load child categories for nav', error);
       }
@@ -582,7 +603,9 @@ export default function ProductList({
     const candidates = allProducts.filter((product) => {
       const productCategory = normalize(product.category_name || '');
       const parentCategory = normalize(product.category_parent_name || '');
-      if (childNames.length && childNames.includes(productCategory)) return true;
+      const lineageCategories = (product.categories || []).map((cat) => normalize(cat || ''));
+      if (childNames.length && (childNames.includes(productCategory) || childNames.some((c) => lineageCategories.includes(c)))) return true;
+      if (lineageCategories.includes(targetName)) return true;
       return productCategory === targetName || parentCategory === targetName;
     });
 
@@ -594,6 +617,23 @@ export default function ProductList({
     const randomIndex = Math.floor(Math.random() * pool.length);
     setFeaturedHoverProduct(pool[randomIndex]);
   }, [hoveredNavItem, hoveredChildCategories, allProducts]);
+
+  useEffect(() => {
+    if (!selectedCategoryId || !activeCategory || activeCategory === 'All') return;
+    const normActive = normalize(activeCategory);
+    const allFetchedChildren = Object.values(childCategoryMap).flat();
+    const matchedFetchedChild = allFetchedChildren.find(
+      (cat) => cat && normalize(cat.name) === normActive
+    );
+    if (matchedFetchedChild && matchedFetchedChild.id !== selectedCategoryId) {
+      setSelectedCategoryId(matchedFetchedChild.id);
+      return;
+    }
+    const matchedNav = navItems.find((item) => normalize(item.name) === normActive);
+    if (matchedNav && matchedNav.id !== selectedCategoryId) {
+      setSelectedCategoryId(matchedNav.id);
+    }
+  }, [selectedCategoryId, activeCategory, navItems, childCategoryMap]);
 
   const handleNavEnter = (categoryId: string) => {
     if (hoverCloseRef.current) {
@@ -667,7 +707,7 @@ export default function ProductList({
       list = list.filter((product) => {
         const title = product.title?.toLowerCase() || '';
         const description = product.description?.toLowerCase() || '';
-        const category = product.category_name?.toLowerCase() || '';
+        const category = [product.category_name, product.category_parent_name, ...(product.categories || [])].filter(Boolean).join(' ').toLowerCase();
         const vendor = product.vendor_name?.toLowerCase() || '';
         const combined = `${title} ${description} ${category} ${vendor}`;
         return terms.every((term) => combined.includes(term));
@@ -767,7 +807,7 @@ export default function ProductList({
       list = list.filter((product) => {
         const title = product.title?.toLowerCase() || '';
         const description = product.description?.toLowerCase() || '';
-        const category = product.category_name?.toLowerCase() || '';
+        const category = [product.category_name, product.category_parent_name, ...(product.categories || [])].filter(Boolean).join(' ').toLowerCase();
         const vendor = product.vendor_name?.toLowerCase() || '';
         const combined = `${title} ${description} ${category} ${vendor}`;
         return terms.every((term) => combined.includes(term));
