@@ -390,6 +390,8 @@ describe('Checkout M5 sequencing and recovery', () => {
     for (const [label, value] of [['Full Name', 'Guest Buyer'], ['Street Address', '1 Test Street'], ['City', 'Lagos'], ['State', 'Lagos'], ['Postal code', '100001']]) {
       fireEvent.change(screen.getByLabelText(label), { target: { value } });
     }
+    fireEvent.click(await screen.findByRole('button', { name: /1 Test Street/i }));
+    await waitFor(() => expect(screen.getByText(/Verified with Google Maps/i)).toBeInTheDocument());
     expect(stateSelect).toHaveValue('Lagos');
     fireEvent.change(screen.getByPlaceholderText('08012345678'), { target: { value: '08012345678' } });
     fireEvent.click(screen.getByRole('button', { name: /Save Address/i }));
@@ -437,6 +439,8 @@ describe('Checkout M5 sequencing and recovery', () => {
     for (const [label, value] of [['Full Name', 'Guest Buyer'], ['Street Address', '1 Test Street'], ['City', 'Lagos'], ['State', 'Lagos']]) {
       fireEvent.change(screen.getByLabelText(label), { target: { value } });
     }
+    fireEvent.click(await screen.findByRole('button', { name: /1 Test Street/i }));
+    await waitFor(() => expect(screen.getByText(/Verified with Google Maps/i)).toBeInTheDocument());
     fireEvent.change(screen.getByPlaceholderText('08012345678'), { target: { value: '08012345678' } });
 
     expect(screen.getByRole('textbox', { name: 'Postal code' })).not.toHaveAttribute('required');
@@ -518,6 +522,53 @@ describe('Checkout M5 sequencing and recovery', () => {
     sessionStorage.clear();
     vi.stubGlobal('alert', vi.fn());
     vi.stubGlobal('crypto', { randomUUID: vi.fn(() => `id-${Math.random()}`) });
+    window.google = {
+      maps: {
+        places: {
+          PlacesServiceStatus: { OK: 'OK', ZERO_RESULTS: 'ZERO_RESULTS' },
+          AutocompleteService: function () {
+            return {
+              getPlacePredictions: (req: { input: string }, cb: (predictions: any[], status: string) => void) => {
+                const input = req.input.trim();
+                cb(
+                  [
+                    {
+                      place_id: `place-${input}`,
+                      description: `${input}, Lagos, Nigeria`,
+                      structured_formatting: {
+                        main_text: input,
+                        secondary_text: 'Lagos, Nigeria',
+                      },
+                    },
+                  ],
+                  'OK'
+                );
+              },
+            };
+          },
+          PlacesService: function () {
+            return {
+              getDetails: (req: { placeId: string }, cb: (result: any, status: string) => void) => {
+                const street = req.placeId.replace(/^place-/, '');
+                cb(
+                  {
+                    place_id: req.placeId,
+                    formatted_address: `${street}, Lagos, Lagos State, Nigeria`,
+                    address_components: [
+                      { long_name: street, short_name: street, types: ['route'] },
+                      { long_name: 'Lagos', short_name: 'Lagos', types: ['locality'] },
+                      { long_name: 'Lagos State', short_name: 'LA', types: ['administrative_area_level_1'] },
+                      { long_name: 'Nigeria', short_name: 'NG', types: ['country'] },
+                    ],
+                  },
+                  'OK'
+                );
+              },
+            };
+          },
+        },
+      },
+    };
     mocks.getShippingProviderSettings.mockResolvedValue({ provider: 'manual', checkout_estimates_required: false });
     mocks.getAddresses.mockResolvedValue({ addresses: [address] });
     mocks.calculateShipping.mockResolvedValue({ available_rates: [rate], recommended_rate: rate });
@@ -584,6 +635,8 @@ describe('Checkout M5 sequencing and recovery', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Edit delivery address' }));
     expect(screen.getByRole('heading', { name: 'Edit Address' })).toBeInTheDocument();
     fireEvent.change(screen.getByLabelText('Street Address'), { target: { value: '2 Updated Street' } });
+    fireEvent.click(await screen.findByRole('button', { name: /2 Updated Street/i }));
+    await waitFor(() => expect(screen.getByText(/Verified with Google Maps/i)).toBeInTheDocument());
     fireEvent.click(screen.getByRole('button', { name: 'Save changes' }));
 
     await waitFor(() => expect(mocks.updateAddress).toHaveBeenCalledWith('address-1', expect.objectContaining({
@@ -628,6 +681,8 @@ describe('Checkout M5 sequencing and recovery', () => {
 
     fireEvent.click(screen.getByRole('button', { name: 'Edit delivery address' }));
     fireEvent.change(screen.getByLabelText('Street Address'), { target: { value: '2 Updated Street' } });
+    fireEvent.click(await screen.findByRole('button', { name: /2 Updated Street/i }));
+    await waitFor(() => expect(screen.getByText(/Verified with Google Maps/i)).toBeInTheDocument());
     fireEvent.click(screen.getByRole('button', { name: 'Save changes' }));
     await waitFor(() => expect(mocks.updateAddress).toHaveBeenCalled());
     expect(screen.getByRole('button', { name: 'Continue' })).toBeDisabled();
@@ -1365,5 +1420,180 @@ describe('Checkout M5 sequencing and recovery', () => {
     fireEvent.click(screen.getByText(/2 Other St/));
     const reenabledAddressContinue = screen.getByRole('button', { name: 'Continue' });
     expect(reenabledAddressContinue).toBeEnabled();
+  });
+
+  it('requires selecting a Google Maps suggestion instead of free text and saves normalized shipping details', async () => {
+    mocks.auth.isAuthenticated = false;
+    mocks.getShippingProviderSettings.mockResolvedValue({ provider: 'combined', checkout_estimates_required: true });
+    window.google = {
+      maps: {
+        places: {
+          PlacesServiceStatus: { OK: 'OK', ZERO_RESULTS: 'ZERO_RESULTS' },
+          AutocompleteService: function () {
+            return {
+              getPlacePredictions: (_req: { input: string }, cb: (predictions: any[], status: string) => void) => {
+                cb(
+                  [
+                    {
+                      place_id: 'place-admiralty-12',
+                      description: '12 Admiralty Way, Lekki Phase 1, Lagos, Nigeria',
+                      structured_formatting: {
+                        main_text: '12 Admiralty Way',
+                        secondary_text: 'Lekki Phase 1, Lagos, Nigeria',
+                      },
+                    },
+                    {
+                      place_id: 'place-admiralty-20',
+                      description: '20 Admiralty Road, Lekki, Lagos, Nigeria',
+                      structured_formatting: {
+                        main_text: '20 Admiralty Road',
+                        secondary_text: 'Lekki, Lagos, Nigeria',
+                      },
+                    },
+                  ],
+                  'OK'
+                );
+              },
+            };
+          },
+          PlacesService: function () {
+            return {
+              getDetails: (_req: { placeId: string }, cb: (result: any, status: string) => void) => {
+                cb(
+                  {
+                    place_id: 'place-admiralty-12',
+                    formatted_address: '12 Admiralty Way, Lekki Phase 1, Lagos 106104, Nigeria',
+                    address_components: [
+                      { long_name: '12', short_name: '12', types: ['street_number'] },
+                      { long_name: 'Admiralty Way', short_name: 'Admiralty Way', types: ['route'] },
+                      { long_name: 'Lekki', short_name: 'Lekki', types: ['locality'] },
+                      { long_name: 'Lagos State', short_name: 'LA', types: ['administrative_area_level_1'] },
+                      { long_name: '106104', short_name: '106104', types: ['postal_code'] },
+                      { long_name: 'Nigeria', short_name: 'NG', types: ['country'] },
+                    ],
+                  },
+                  'OK'
+                );
+              },
+            };
+          },
+        },
+      },
+    };
+
+    render(<MemoryRouter initialEntries={['/checkout']}><CheckoutTestRoutes /></MemoryRouter>);
+    fireEvent.change(await screen.findByPlaceholderText('you@example.com'), { target: { value: 'guest@example.com' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Confirm' }));
+    fireEvent.click(screen.getByRole('button', { name: '+ Add New Address' }));
+
+    fireEvent.change(screen.getByLabelText('Full Name'), { target: { value: 'Guest Buyer' } });
+    fireEvent.change(screen.getByPlaceholderText('08012345678'), { target: { value: '08012345678' } });
+    fireEvent.change(screen.getByLabelText('Street Address'), { target: { value: '12 Admiralty' } });
+    fireEvent.change(screen.getByLabelText('City'), { target: { value: 'Lekki' } });
+    fireEvent.change(screen.getByLabelText('State'), { target: { value: 'Lagos' } });
+
+    // Relevant Google Maps suggestions are shown
+    expect(await screen.findByRole('listbox', { name: /Google Maps address suggestions/i })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /12 Admiralty Way/i })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /20 Admiralty Road/i })).toBeInTheDocument();
+
+    // Free-text entry alone cannot be saved or used to continue checkout
+    expect(screen.getByRole('button', { name: 'Save Address' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Continue' })).toBeDisabled();
+    expect(screen.getByText(/Select a verified address suggestion from Google Maps to save this address/i)).toBeInTheDocument();
+
+    // Selecting a suggestion populates normalized details and enables saving
+    fireEvent.click(screen.getByRole('button', { name: /12 Admiralty Way/i }));
+    await waitFor(() => expect(screen.getByText(/Verified with Google Maps/i)).toBeInTheDocument());
+    expect(screen.getByLabelText('Street Address')).toHaveValue('12 Admiralty Way');
+    expect(screen.getByLabelText('City')).toHaveValue('Lekki');
+    expect(screen.getByRole('combobox', { name: 'State' })).toHaveValue('Lagos');
+    expect(screen.getByLabelText('Postal code')).toHaveValue('106104');
+    expect(screen.getByRole('button', { name: 'Save Address' })).toBeEnabled();
+
+    // Manually typing over the verified street address invalidates verification again
+    fireEvent.change(screen.getByLabelText('Street Address'), { target: { value: '12 Admiralty Way Typed Manually' } });
+    expect(screen.getByRole('button', { name: 'Save Address' })).toBeDisabled();
+
+    // Re-selecting the suggestion restores verification and saves normalized details for automatic shipping
+    fireEvent.click(await screen.findByRole('button', { name: /12 Admiralty Way/i }));
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Save Address' })).toBeEnabled());
+    fireEvent.click(screen.getByRole('button', { name: 'Save Address' }));
+
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Continue' })).toBeEnabled());
+    fireEvent.click(screen.getByRole('button', { name: 'Continue' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Calculate live delivery rates' }));
+
+    await waitFor(() => expect(mocks.createOrder).toHaveBeenCalledWith(expect.objectContaining({
+      customer_email: 'guest@example.com',
+      guest_address: expect.objectContaining({
+        address_line1: '12 Admiralty Way',
+        city: 'Lekki',
+        state: 'Lagos',
+        postal_code: '106104',
+        country: 'Nigeria',
+      }),
+    })));
+  });
+
+  it('displays loading, empty, and retryable error states for Google Maps address autocomplete', async () => {
+    let resolvePredictions!: (predictions: any[], status: string) => void;
+    let callCount = 0;
+    window.google = {
+      maps: {
+        places: {
+          PlacesServiceStatus: { OK: 'OK', ZERO_RESULTS: 'ZERO_RESULTS' },
+          AutocompleteService: function () {
+            return {
+              getPlacePredictions: (_req: { input: string }, cb: (predictions: any[], status: string) => void) => {
+                callCount += 1;
+                if (callCount === 1) {
+                  resolvePredictions = cb;
+                  return;
+                }
+                if (callCount === 2) {
+                  cb([], 'OVER_QUERY_LIMIT');
+                  return;
+                }
+                cb([], 'ZERO_RESULTS');
+              },
+            };
+          },
+          PlacesService: function () {
+            return { getDetails: vi.fn() };
+          },
+        },
+      },
+    };
+
+    render(<MemoryRouter initialEntries={['/checkout']}><CheckoutTestRoutes /></MemoryRouter>);
+    await waitFor(() => expect(mocks.getAddresses).toHaveBeenCalled());
+    fireEvent.click(screen.getByRole('button', { name: '+ Add New Address' }));
+
+    // 1. Loading state while fetching Google Maps suggestions
+    fireEvent.change(screen.getByLabelText('Street Address'), { target: { value: '10 Victoria' } });
+    expect(screen.getByText(/Searching Google Maps addresses/i)).toBeInTheDocument();
+    await waitFor(() => expect(resolvePredictions).toBeTypeOf('function'));
+    resolvePredictions(
+      [
+        {
+          place_id: 'place-vi-10',
+          description: '10 Victoria Island, Lagos, Nigeria',
+          structured_formatting: { main_text: '10 Victoria Island', secondary_text: 'Lagos, Nigeria' },
+        },
+      ],
+      'OK'
+    );
+    expect(await screen.findByRole('button', { name: /10 Victoria Island/i })).toBeInTheDocument();
+
+    // 2. Error state when Google Maps query fails, with retry button
+    fireEvent.change(screen.getByLabelText('Street Address'), { target: { value: '10 Victoria Retry' } });
+    expect(await screen.findByRole('alert')).toHaveTextContent(/Unable to load Google Maps address suggestions/i);
+    const retryButton = screen.getByRole('button', { name: /Retry address search/i });
+    expect(retryButton).toBeEnabled();
+
+    // 3. Clicking retry triggers a fresh search and shows empty state when ZERO_RESULTS is returned
+    fireEvent.click(retryButton);
+    expect(await screen.findByText(/No matching Google Maps addresses found/i)).toBeInTheDocument();
   });
 });
