@@ -1,4 +1,5 @@
 import { useCurrencyStore } from './currencyStore';
+import { canUseCookieCategory } from './cookieConsentStore';
 import { create } from 'zustand';
 import type { Currency } from '../utils/pricing';
 
@@ -16,7 +17,7 @@ const readStoredCurrency = (): Currency =>
 
 const readStoredInterest = (): InterestValue => {
   if (!isBrowser) return null;
-  const value = window.localStorage.getItem(INTEREST_KEY);
+  const value = canUseCookieCategory('preferences') ? window.localStorage.getItem(INTEREST_KEY) : null;
   if (value === 'menswear') return 'menswear';
   if (value === 'womenswear') return 'womenswear';
   return null;
@@ -24,7 +25,7 @@ const readStoredInterest = (): InterestValue => {
 
 const readStoredList = (key: string): string[] => {
   if (!isBrowser) return [];
-  const raw = window.localStorage.getItem(key);
+  const raw = canUseCookieCategory('preferences') ? window.localStorage.getItem(key) : null;
   if (!raw) return [];
   try {
     const parsed = JSON.parse(raw);
@@ -39,6 +40,7 @@ const readStoredList = (key: string): string[] => {
 
 const writeStoredList = (key: string, values: string[]) => {
   if (!isBrowser) return;
+  if (!canUseCookieCategory('preferences')) { window.localStorage.removeItem(key); return; }
   window.localStorage.setItem(key, JSON.stringify(values));
 };
 
@@ -72,7 +74,7 @@ export const usePreferenceStore = create<PreferenceState>((set) => ({
   },
   setInterest: (interest) => {
     if (isBrowser) {
-      if (interest === null) {
+      if (interest === null || !canUseCookieCategory('preferences')) {
         window.localStorage.removeItem(INTEREST_KEY);
       } else {
         window.localStorage.setItem(INTEREST_KEY, interest);

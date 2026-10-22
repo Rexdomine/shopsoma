@@ -83,5 +83,8 @@ describe('shouldBypassComingSoon', () => {
     expect(shouldBypassComingSoon('/vendor/signup/thank-you', null)).toBe(true);
     expect(shouldBypassComingSoon('/admin/dashboard', null)).toBe(true);
     expect(shouldBypassComingSoon('/vendor/analytics', null)).toBe(true);
+    expect(shouldBypassComingSoon('/cookies', null)).toBe(true);
+    expect(shouldBypassComingSoon('/privacy', null)).toBe(true);
+    expect(shouldBypassComingSoon('/terms', null)).toBe(true);
   });
 });

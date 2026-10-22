@@ -5,6 +5,7 @@ import { getComingSoonSettings, type ComingSoonSettings } from '../../services/s
 import { useAuth } from '../../context/AuthContext';
 import type { User } from '../../types';
 import Loading from '../common/Loading';
+import CookieConsentBanner from '../common/CookieConsentBanner';
 
 const AUTH_ENTRY_PATHS = new Set([
   '/login',
@@ -14,6 +15,9 @@ const AUTH_ENTRY_PATHS = new Set([
   '/reset-password',
   '/verify-email',
   '/claim-account',
+  '/cookies',
+  '/privacy',
+  '/terms',
 ]);
 
 const TRANSACTIONAL_RETURN_PATHS = [
@@ -138,8 +142,8 @@ export default function RootLayout() {
   }
 
   if (gateState === 'closed' && !bypassComingSoon) {
-    return <ComingSoon initialSettings={resolvedSettings ?? undefined} onReleased={() => setGateState('open')} />;
+    return <><ComingSoon initialSettings={resolvedSettings ?? undefined} onReleased={() => setGateState('open')} /><CookieConsentBanner /></>;
   }
 
-  return <Outlet />;
+  return <><Outlet /><CookieConsentBanner /></>;
 }

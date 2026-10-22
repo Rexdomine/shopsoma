@@ -5,6 +5,7 @@ import Layout from '../../components/layout/Layout';
 import { ROUTES } from '../../config/constants';
 import { FOOTER_DOCUMENTS } from '../../content/footerDocuments';
 import { blocksFor } from '../../content/documentBlocks';
+import { useCookieConsentStore } from '../../store/cookieConsentStore';
 
 export { blocksFor } from '../../content/documentBlocks';
 import type { FooterDocumentKey } from '../../content/footerDocuments';
@@ -23,6 +24,9 @@ export default function PublicDocument({ documentKey }: { documentKey: FooterDoc
   const [orderId, setOrderId] = useState('');
   const [error, setError] = useState('');
   const isTrack = documentKey === 'track';
+  const openCookiePreferences = useCookieConsentStore((state) => state.openPreferences);
+  const hasValidConsent = useCookieConsentStore((state) => state.hasValidConsent);
+  const resetConsent = useCookieConsentStore((state) => state.resetConsent);
   const submit = (event: FormEvent) => {
     event.preventDefault();
     const value = orderId.trim();
@@ -47,6 +51,7 @@ export default function PublicDocument({ documentKey }: { documentKey: FooterDoc
       {error && <p role="alert" className="text-sm text-red-700">{error}</p>}
     </form>}
     {documentKey === 'partner' && <a href={ROUTES.VENDOR_SIGNUP} className="mt-8 inline-flex border border-[#1E5053] px-6 py-3 text-xs font-ui uppercase tracking-[0.2em]">Apply to become a ShopSoma partner</a>}
+    {documentKey === 'cookies' && <div className="mt-8 flex flex-wrap items-center gap-3"><button type="button" onClick={openCookiePreferences} className="inline-flex border border-[#1E5053] bg-[#1E5053] text-white px-6 py-3 text-xs font-ui uppercase tracking-[0.2em] hover:opacity-90 transition">Manage Cookie Preferences</button>{hasValidConsent && <button type="button" onClick={resetConsent} className="inline-flex border border-[#1E5053] px-6 py-3 text-xs font-ui uppercase tracking-[0.2em] text-[#1E5053] hover:bg-[#F0F5F4] transition">Reset Saved Preference</button>}</div>}
     {!isTrack && <article className="mt-12 space-y-8 font-serif leading-7">{blocksFor(document.body).map((block, index) => block.kind === 'heading' ? <section key={`${documentKey}-${index}`}><h2 className="mb-2 text-xl font-ui font-medium">{block.lines[0]}</h2></section> : block.kind === 'list' ? <ul key={`${documentKey}-${index}`} className="list-disc space-y-1 pl-6">{block.lines.map((line) => <li key={line}><LinkedText text={line} /></li>)}</ul> : <p key={`${documentKey}-${index}`}><LinkedText text={block.lines.join(' ')} /></p>)}</article>}
   </div>
   </Layout>;
