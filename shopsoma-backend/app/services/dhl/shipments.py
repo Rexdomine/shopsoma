@@ -53,7 +53,10 @@ from app.services.dhl.client import (
     DHLClient,
     DHLConfigurationError,
 )
-from app.services.dhl.rating import DHLDomesticRateAdapter
+from app.services.dhl.rating import (
+    DHLDomesticRateAdapter,
+    resolve_nigeria_dhl_state_fallback,
+)
 from app.models.fulfillment_hub import FulfillmentHub
 
 PROVIDER = "dhl"
@@ -294,6 +297,54 @@ class ShipmentAdapter(Protocol):
     async def track(self, tracking_number: str) -> Sequence[TrackingObservation]: ...
 
 
+def _fallback_nigeria_dhl_booking_payload(
+    payload: dict[str, object],
+) -> dict[str, object] | None:
+    customer_details = payload.get("customerDetails")
+    if not isinstance(customer_details, dict):
+        return None
+    changed = False
+    updated_customer_details = dict(customer_details)
+    for role in ("shipperDetails", "receiverDetails"):
+        party_wrapper = customer_details.get(role)
+        if not isinstance(party_wrapper, dict):
+            continue
+        postal_address = party_wrapper.get("postalAddress")
+        if not isinstance(postal_address, dict) or postal_address.get("countryCode") != "NG":
+            continue
+        fallback = resolve_nigeria_dhl_state_fallback(postal_address.get("provinceCode"))
+        if fallback is None:
+            continue
+        capital_city, canonical_postal = fallback
+        original_city = postal_address.get("cityName")
+        if (
+            original_city != capital_city
+            or postal_address.get("postalCode") != canonical_postal
+        ):
+            updated_postal = dict(postal_address)
+            updated_postal["cityName"] = capital_city
+            updated_postal["postalCode"] = canonical_postal
+            if isinstance(original_city, str) and original_city.strip():
+                existing_lines = " ".join(
+                    str(updated_postal.get(key) or "")
+                    for key in ("addressLine1", "addressLine2", "addressLine3")
+                ).lower()
+                if original_city.strip().lower() not in existing_lines:
+                    if not updated_postal.get("addressLine2"):
+                        updated_postal["addressLine2"] = original_city.strip()[:45]
+                    elif not updated_postal.get("addressLine3"):
+                        updated_postal["addressLine3"] = original_city.strip()[:45]
+            updated_wrapper = dict(party_wrapper)
+            updated_wrapper["postalAddress"] = updated_postal
+            updated_customer_details[role] = updated_wrapper
+            changed = True
+    if not changed:
+        return None
+    updated_payload = dict(payload)
+    updated_payload["customerDetails"] = updated_customer_details
+    return updated_payload
+
+
 class DHLShipmentAdapter:
     def __init__(self, settings: Settings) -> None:
         self._settings = settings
@@ -397,7 +448,19 @@ class DHLShipmentAdapter:
             package_version,
             quoted_service,
         )
-        response = await self._client.request_json("POST", "/shipments", json=payload)
+        try:
+            response = await self._client.request_json("POST", "/shipments", json=payload)
+        except DHLAPIError as exc:
+            fallback_payload = (
+                _fallback_nigeria_dhl_booking_payload(payload)
+                if exc.status_code in (400, 422)
+                else None
+            )
+            if fallback_payload is None:
+                raise
+            response = await self._client.request_json(
+                "POST", "/shipments", json=fallback_payload
+            )
         documents = response.get("documents") or []
         label_media_type = None
         label_content = None

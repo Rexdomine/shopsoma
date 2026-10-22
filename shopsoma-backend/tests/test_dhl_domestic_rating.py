@@ -1108,3 +1108,49 @@ def test_adapter_reuses_existing_dhl_client() -> None:
         identity_key_version="test-key-v1",
     )
     assert isinstance(adapter._client, DHLClient)
+
+
+@pytest.mark.asyncio
+async def test_post_rates_retries_with_state_capital_when_dhl_rejects_neighborhood_city() -> (
+    None
+):
+    request_value = rate_request(
+        destination=replace(
+            rate_request().destination,
+            city="Gwarinpa",
+            state="Federal Capital Territory",
+            postal_code="900108",
+        )
+    )
+    seen_cities: list[tuple[str, str]] = []
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        body = json.loads(request.content)
+        receiver = body["customerDetails"]["receiverDetails"]
+        seen_cities.append((receiver["cityName"], receiver["postalCode"]))
+        if receiver["cityName"] == "Gwarinpa":
+            return httpx.Response(
+                400,
+                json={
+                    "detail": "420505: The destination location is invalid. Please check the data",
+                    "status": "400",
+                },
+            )
+        assert receiver["cityName"] == "Abuja"
+        assert receiver["postalCode"] == "900001"
+        return httpx.Response(
+            200, json={"products": [product(code="N", service_code="DOM")]}
+        )
+
+    adapter = create_sandbox_domestic_rate_adapter(
+        config=config(),
+        transport=httpx.MockTransport(handler),
+        identity_key=IDENTITY_KEY,
+        identity_key_version="test-key-v1",
+    )
+    result = await adapter.rate(
+        resolved_hub(request=request_value),
+        request_value,
+    )
+    assert result.result_kind == "success"
+    assert seen_cities == [("Gwarinpa", "900108"), ("Abuja", "900001")]
