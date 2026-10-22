@@ -30,7 +30,7 @@ def _dhl_resilient_getaddrinfo(
     except socket.gaierror:
         if host in ("express.api.dhl.com", b"express.api.dhl.com"):
             return _orig_getaddrinfo(
-                "165.72.204.44", port, socket.AF_INET, type, proto, flags
+                "156.137.1.116", port, socket.AF_INET, type, proto, flags
             )
         raise
 

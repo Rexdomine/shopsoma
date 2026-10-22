@@ -528,6 +528,37 @@ export default function Checkout() {
       // Reset form
       resetNewAddress();
     } catch (error: any) {
+      if (error?.response?.status === 401 || error?.response?.status === 403) {
+        // Session expired and could not be refreshed; fall back to guest checkout address so the customer can continue
+        const guestAddress: Address = {
+          id: 'guest-address',
+          user_id: 'guest',
+          full_name: newAddress.full_name.trim(),
+          phone_number: newAddress.phone_number.trim(),
+          address_line1: newAddress.address_line1.trim(),
+          address_line2: newAddress.address_line2?.trim() || '',
+          city: newAddress.city.trim(),
+          state: normalizedState,
+          postal_code: normalizedPostalCode,
+          country: normalizedCountry,
+          address_type: newAddress.address_type,
+          is_default: newAddress.is_default,
+          created_at: new Date().toISOString(),
+          updated_at: new Date().toISOString(),
+        };
+        setIsGuestCheckout(true);
+        setAddresses([guestAddress]);
+        setSelectedAddressId(guestAddress.id);
+        setShowNewAddressForm(false);
+        setEditingAddressId(null);
+        setShippingRates([]);
+        setSelectedShippingRateId('');
+        setOrderReview(null);
+        setCurrentOrderId('');
+        setStep('address');
+        resetAutocompleteState();
+        return;
+      }
       console.error('Error creating address:', error);
       alert(error.response?.data?.detail || 'Failed to create address. Please try again.');
     } finally {

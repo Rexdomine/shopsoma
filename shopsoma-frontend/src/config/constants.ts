@@ -36,6 +36,7 @@ export const STORAGE_KEYS = {
   USER: 'shopsoma_user',
   VENDOR_ONBOARDING_WELCOME_SEEN: 'shopsoma_vendor_onboarding_welcome_seen',
   THEME: 'shopsoma_theme',
+  COOKIE_CONSENT: 'shopsoma_cookie_consent',
 } as const;
 
 // Route Paths

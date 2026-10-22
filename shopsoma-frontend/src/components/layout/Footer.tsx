@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { Link } from 'react-router-dom';
 import { subscribeToNewsletter } from '../../services/newsletterService';
+import { useCookieConsentStore } from '../../store/cookieConsentStore';
 
 export const FOOTER_SECTIONS = [
   { key: 'customer-care', title: 'Customer Care', links: [{ to: '/contact', label: 'Contact Us' }, { to: '/orders', label: 'My Orders' }, { to: '/track', label: 'Track your order' }, { to: '/shipping', label: 'Shipping' }, { to: '/returns', label: 'Returns and Refunds' }, { to: '/faqs', label: 'FAQ' }] },
@@ -14,6 +15,7 @@ export default function Footer() {
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [message, setMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
   const [openSection, setOpenSection] = useState<string | null>('customer-care');
+  const openCookiePreferences = useCookieConsentStore((state) => state.openPreferences);
 
   const handleNewsletterSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -130,7 +132,8 @@ export default function Footer() {
             })}
           </div>
 
-          <div className="mt-10 text-xs font-ui uppercase tracking-[0.3em] text-center" style={{ color: '#1E5053' }}>
+          <div className="mt-10 flex flex-col items-center gap-3 text-xs font-ui uppercase tracking-[0.3em] text-center" style={{ color: '#1E5053' }}>
+            <button type="button" onClick={openCookiePreferences} className="underline underline-offset-4 text-[11px] font-ui uppercase tracking-[0.2em]" style={{ color: '#1E5053' }}>Cookie Settings</button>
             Shopsoma {currentYear}
           </div>
         </div>
@@ -187,8 +190,10 @@ export default function Footer() {
               </div>)}
             </div>
 
-            <div className="mt-8 border-t border-[#1E5053] pt-4 text-xs font-ui uppercase tracking-[0.3em] text-[#1E5053]">
-              Shopsoma {currentYear}
+            <div className="mt-8 border-t border-[#1E5053] pt-4 flex items-center justify-between text-xs font-ui uppercase tracking-[0.3em] text-[#1E5053]">
+              <span>Shopsoma {currentYear}</span>
+              <button type="button" onClick={openCookiePreferences} className="underline underline-offset-4 hover:opacity-80 transition text-xs font-ui uppercase tracking-[0.2em] text-[#1E5053]">Cookie Settings</button>
+
             </div>
           </div>
         </div>

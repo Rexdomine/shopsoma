@@ -20,6 +20,7 @@ import ProductCard from '../../components/products/ProductCard';
 import VendorShowcaseCard from '../../components/products/VendorShowcaseCard';
 import { useWishlistActions } from '../../hooks/useWishlistActions';
 import { usePreferenceStore } from '../../store/preferenceStore';
+import { canUseCookieCategory } from '../../store/cookieConsentStore';
 import { hasSolidColorHex } from '../../utils/colorDisplay';
 import { getProductImageSource, normalizeProductImageUrl } from '../../utils/productImages';
 import { mergeSubcategoriesWithDefaults } from '../../config/categoryNavigation';
@@ -205,7 +206,7 @@ export default function ProductList({
   const [selectedCategoryId, setSelectedCategoryId] = useState<string | null>(null);
   const [showInterestBanner, setShowInterestBanner] = useState<boolean>(() => {
     if (typeof window === 'undefined') return true;
-    const stored = window.localStorage.getItem('shopsoma_pref_interest_banner');
+    const stored = canUseCookieCategory('preferences') ? window.localStorage.getItem('shopsoma_pref_interest_banner') : null;
     return stored !== 'hidden';
   });
   const [sortOption, setSortOption] = useState('suggested');
@@ -1476,7 +1477,7 @@ const handleFilterChange = (key: keyof FilterState, value: string, categoryId?: 
                         onClick={() => {
                           setShowInterestBanner(false);
                           if (typeof window !== 'undefined') {
-                            window.localStorage.setItem('shopsoma_pref_interest_banner', 'hidden');
+                            if (canUseCookieCategory('preferences')) { window.localStorage.setItem('shopsoma_pref_interest_banner', 'hidden'); }
                           }
                         }}
                       >
