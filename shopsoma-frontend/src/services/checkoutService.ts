@@ -136,8 +136,38 @@ export interface PromoCodeResult {
 // Order Types
 export interface OrderItem {
   product_id: string;
-  variant_id?: string;
+  variant_id?: string | null;
   quantity: number;
+  expected_unit_price?: number;
+}
+
+export interface CheckoutQuoteItem {
+  product_id: string;
+  variant_id?: string | null;
+  product_title: string;
+  variant_details?: Record<string, any> | null;
+  quantity: number;
+  currency: 'NGN' | 'USD';
+  unit_price: number | string;
+  subtotal: number | string;
+  previous_unit_price?: number | string | null;
+  price_changed?: boolean;
+}
+
+export interface CheckoutQuote {
+  quote_token: string;
+  issued_at: string;
+  expires_at: string;
+  ttl_seconds: number;
+  currency: 'NGN' | 'USD';
+  subtotal: number | string;
+  shipping_cost: number | string;
+  tax_amount: number | string;
+  discount_amount: number | string;
+  total_amount: number | string;
+  items: CheckoutQuoteItem[];
+  has_price_changes: boolean;
+  price_change_message?: string | null;
 }
 
 export interface OrderReviewRequest {
@@ -147,6 +177,7 @@ export interface OrderReviewRequest {
   guest_address?: CreateAddressData;
   promo_code?: string;
   shipping_rate_id?: string;
+  quote_token?: string;
 }
 
 export interface OrderSummary {
@@ -172,6 +203,8 @@ export interface OrderReview {
     quantity: number;
     subtotal: number;
     vendor_name: string;
+    previous_unit_price?: number | null;
+    price_changed?: boolean;
   }>;
   shipping_rate?: {
     id: string;
@@ -186,6 +219,7 @@ export interface OrderReview {
     discount_percent?: number;
     discount_amount: number;
   };
+  checkout_quote?: CheckoutQuote | null;
 }
 
 export interface CreateOrderData {
@@ -198,6 +232,8 @@ export interface CreateOrderData {
   customer_notes?: string;
   promo_code?: string;
   shipping_rate_id?: string;
+  checkout_quote_token?: string;
+  require_quote?: boolean;
 }
 
 export interface Order {

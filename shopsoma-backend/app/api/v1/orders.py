@@ -10,7 +10,9 @@ from sqlalchemy.orm import selectinload
 from uuid import UUID, uuid4, uuid5
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal, ROUND_HALF_UP
+import base64
 import hashlib
+import hmac
 import json
 import secrets
 import logging
@@ -51,6 +53,8 @@ from app.services.dhl.shipments import (
 )
 from app.services.dhl.rating import derive_sandbox_cohort_id
 from app.schemas.order import (
+    CheckoutQuote,
+    CheckoutQuoteItem,
     OrderCreate,
     OrderUpdate,
     OrderResponse,
@@ -532,6 +536,214 @@ async def calculate_order_totals(
     }
 
 
+CHECKOUT_QUOTE_TTL_SECONDS = 900
+
+
+def _quantize_money(value: Any) -> Decimal:
+    return _as_decimal(value).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+
+
+def _checkout_quote_secret() -> bytes:
+    secret = getattr(settings, "SECRET_KEY", None) or "shopsoma-checkout-quote-secret"
+    return str(secret).encode("utf-8")
+
+
+def _quote_item_key(product_id: Any, variant_id: Any) -> str:
+    return f"{str(product_id)}:{str(variant_id) if variant_id else ''}"
+
+
+def _sign_checkout_quote_payload(payload: Dict[str, Any]) -> str:
+    payload_bytes = json.dumps(
+        payload, sort_keys=True, separators=(",", ":")
+    ).encode("utf-8")
+    payload_b64 = base64.urlsafe_b64encode(payload_bytes).decode("ascii").rstrip("=")
+    signature = hmac.new(
+        _checkout_quote_secret(),
+        payload_b64.encode("ascii"),
+        hashlib.sha256,
+    ).hexdigest()
+    return f"v1.{payload_b64}.{signature}"
+
+
+def _decode_checkout_quote_token(
+    token: str, *, allow_expired: bool = False
+) -> Dict[str, Any]:
+    if not token or not isinstance(token, str):
+        raise ValueError("invalid_quote")
+    parts = token.split(".")
+    if len(parts) != 3 or parts[0] != "v1":
+        raise ValueError("invalid_quote")
+    _, payload_b64, signature = parts
+    expected_signature = hmac.new(
+        _checkout_quote_secret(),
+        payload_b64.encode("ascii"),
+        hashlib.sha256,
+    ).hexdigest()
+    if not hmac.compare_digest(signature, expected_signature):
+        raise ValueError("invalid_quote")
+    padded = payload_b64 + "=" * (-len(payload_b64) % 4)
+    try:
+        payload = json.loads(base64.urlsafe_b64decode(padded.encode("ascii")).decode("utf-8"))
+    except Exception as exc:
+        raise ValueError("invalid_quote") from exc
+    if not isinstance(payload, dict):
+        raise ValueError("invalid_quote")
+    exp_raw = payload.get("exp")
+    if not exp_raw:
+        raise ValueError("invalid_quote")
+    try:
+        expires_at = datetime.fromisoformat(str(exp_raw))
+    except Exception as exc:
+        raise ValueError("invalid_quote") from exc
+    if expires_at.tzinfo is None:
+        expires_at = expires_at.replace(tzinfo=timezone.utc)
+    if not allow_expired and datetime.now(timezone.utc) > expires_at:
+        raise ValueError("expired_quote")
+    return payload
+
+
+def build_checkout_quote(
+    *,
+    items: List[Dict[str, Any]],
+    currency: str,
+    subtotal: Decimal,
+    shipping_cost: Decimal,
+    tax_amount: Decimal,
+    discount_amount: Decimal,
+    total_amount: Decimal,
+    shipping_rate_id: Optional[str] = None,
+    promo_code: Optional[str] = None,
+    prior_quote_payload: Optional[Dict[str, Any]] = None,
+    now: Optional[datetime] = None,
+) -> CheckoutQuote:
+    issued_at = now or datetime.now(timezone.utc)
+    expires_at = issued_at + timedelta(seconds=CHECKOUT_QUOTE_TTL_SECONDS)
+
+    prior_prices: Dict[str, Decimal] = {}
+    if isinstance(prior_quote_payload, dict):
+        for prior_item in prior_quote_payload.get("items") or []:
+            if isinstance(prior_item, dict) and prior_item.get("unit_price") is not None:
+                key = _quote_item_key(
+                    prior_item.get("product_id"), prior_item.get("variant_id")
+                )
+                prior_prices[key] = _quantize_money(prior_item["unit_price"])
+
+    quote_items: List[CheckoutQuoteItem] = []
+    has_price_changes = False
+
+    for item in items:
+        live_unit_price = _quantize_money(item["unit_price"])
+        live_subtotal = _quantize_money(item["subtotal"])
+        key = _quote_item_key(item.get("product_id"), item.get("variant_id"))
+
+        prior_unit_price = prior_prices.get(key)
+        expected_raw = item.get("expected_unit_price")
+        expected_unit_price = (
+            _quantize_money(expected_raw) if expected_raw is not None else None
+        )
+
+        previous_unit_price: Optional[Decimal] = None
+        price_changed = False
+        if prior_unit_price is not None and prior_unit_price != live_unit_price:
+            previous_unit_price = prior_unit_price
+            price_changed = True
+        elif expected_unit_price is not None and expected_unit_price != live_unit_price:
+            previous_unit_price = expected_unit_price
+            price_changed = True
+
+        if price_changed:
+            has_price_changes = True
+
+        quote_items.append(
+            CheckoutQuoteItem(
+                product_id=str(item["product_id"]),
+                variant_id=(
+                    str(item["variant_id"]) if item.get("variant_id") else None
+                ),
+                product_title=str(item["product_title"]),
+                variant_details=item.get("variant_details"),
+                quantity=int(item["quantity"]),
+                currency=currency,
+                unit_price=live_unit_price,
+                subtotal=live_subtotal,
+                previous_unit_price=previous_unit_price,
+                price_changed=price_changed,
+            )
+        )
+
+    quantized_subtotal = _quantize_money(subtotal)
+    quantized_shipping = _quantize_money(shipping_cost)
+    quantized_tax = _quantize_money(tax_amount)
+    quantized_discount = _quantize_money(discount_amount)
+    quantized_total = _quantize_money(total_amount)
+
+    token_payload = {
+        "v": 1,
+        "iat": issued_at.isoformat(),
+        "exp": expires_at.isoformat(),
+        "currency": currency,
+        "subtotal": str(quantized_subtotal),
+        "shipping_cost": str(quantized_shipping),
+        "tax_amount": str(quantized_tax),
+        "discount_amount": str(quantized_discount),
+        "total_amount": str(quantized_total),
+        "shipping_rate_id": str(shipping_rate_id) if shipping_rate_id else None,
+        "promo_code": promo_code.upper() if promo_code else None,
+        "items": [
+            {
+                "product_id": qi.product_id,
+                "variant_id": qi.variant_id,
+                "quantity": qi.quantity,
+                "unit_price": str(qi.unit_price),
+                "subtotal": str(qi.subtotal),
+            }
+            for qi in quote_items
+        ],
+    }
+    quote_token = _sign_checkout_quote_payload(token_payload)
+    price_change_message = (
+        "Item prices have changed since you last reviewed your bag. "
+        "Please review and confirm the updated prices before placing your order."
+        if has_price_changes
+        else None
+    )
+
+    return CheckoutQuote(
+        quote_token=quote_token,
+        issued_at=issued_at,
+        expires_at=expires_at,
+        ttl_seconds=CHECKOUT_QUOTE_TTL_SECONDS,
+        currency=currency,
+        subtotal=quantized_subtotal,
+        shipping_cost=quantized_shipping,
+        tax_amount=quantized_tax,
+        discount_amount=quantized_discount,
+        total_amount=quantized_total,
+        items=quote_items,
+        has_price_changes=has_price_changes,
+        price_change_message=price_change_message,
+    )
+
+
+def _price_changes_from_quote(quote: CheckoutQuote) -> List[Dict[str, Any]]:
+    return [
+        {
+            "product_id": item.product_id,
+            "variant_id": item.variant_id,
+            "product_title": item.product_title,
+            "previous_unit_price": (
+                str(item.previous_unit_price)
+                if item.previous_unit_price is not None
+                else None
+            ),
+            "current_unit_price": str(item.unit_price),
+            "currency": item.currency,
+        }
+        for item in quote.items
+        if item.price_changed
+    ]
+
+
 @router.post("/review", response_model=OrderReviewResponse)
 async def review_order(
     review_data: OrderReviewRequest,
@@ -672,6 +884,7 @@ async def review_order(
                 "currency": checkout_currency,
                 "quantity": item.quantity,
                 "subtotal": float(item_subtotal),
+                "expected_unit_price": item.expected_unit_price,
                 "vendor_name": (
                     product.vendor.business_name if product.vendor else "Shopsoma"
                 ),
@@ -730,8 +943,41 @@ async def review_order(
     )
 
     # Calculate totals
-    tax_amount = (subtotal + shipping_cost) * TAX_RATE
-    total_amount = subtotal + shipping_cost + tax_amount - discount_amount
+    tax_amount = _quantize_money((subtotal + shipping_cost) * TAX_RATE)
+    total_amount = _quantize_money(
+        subtotal + shipping_cost + tax_amount - discount_amount
+    )
+
+    prior_quote_payload = None
+    if review_data.quote_token:
+        try:
+            prior_quote_payload = _decode_checkout_quote_token(
+                review_data.quote_token, allow_expired=True
+            )
+        except ValueError:
+            prior_quote_payload = None
+
+    checkout_quote = build_checkout_quote(
+        items=items_details,
+        currency=checkout_currency,
+        subtotal=subtotal,
+        shipping_cost=shipping_cost,
+        tax_amount=tax_amount,
+        discount_amount=discount_amount,
+        total_amount=total_amount,
+        shipping_rate_id=str(selected_rate.id),
+        promo_code=review_data.promo_code,
+        prior_quote_payload=prior_quote_payload,
+    )
+
+    for detail_item, quote_item in zip(items_details, checkout_quote.items):
+        detail_item.pop("expected_unit_price", None)
+        detail_item["previous_unit_price"] = (
+            float(quote_item.previous_unit_price)
+            if quote_item.previous_unit_price is not None
+            else None
+        )
+        detail_item["price_changed"] = quote_item.price_changed
 
     summary = OrderSummary(
         currency=checkout_currency,
@@ -756,6 +1002,7 @@ async def review_order(
             "max_days": selected_rate.max_delivery_days,
         },
         applied_promo=applied_promo,
+        checkout_quote=checkout_quote,
     )
 
 
@@ -786,6 +1033,9 @@ async def create_order(
     shipping_address_id = None
     billing_address_id = None
     customer_id_for_order = None
+    guest_user = None
+    guest_addr = None
+    created_new_guest_user = False
 
     if order_data.shipping_address_id:
         # Authenticated user with saved address
@@ -842,6 +1092,7 @@ async def create_order(
                 )
         else:
             guest_user = User(
+                id=uuid4(),
                 email=order_data.customer_email,
                 full_name=order_data.guest_address.full_name,
                 hashed_password=None,
@@ -849,14 +1100,13 @@ async def create_order(
                 role=UserRole.CUSTOMER,
                 is_guest_created=True,
             )
-            db.add(guest_user)
-            await db.flush()
+            created_new_guest_user = True
 
         guest_addr = Address(
-            user_id=guest_user.id, **order_data.guest_address.model_dump()
+            id=uuid4(),
+            user_id=guest_user.id,
+            **order_data.guest_address.model_dump(),
         )
-        db.add(guest_addr)
-        await db.flush()
 
         shipping_address = guest_addr
         shipping_address_id = guest_addr.id
@@ -885,6 +1135,7 @@ async def create_order(
 
     # Process and validate items
     order_items = []
+    quote_items_input = []
     order_item_media = {}
     stock_updates = []
     subtotal = Decimal("0.00")
@@ -987,6 +1238,21 @@ async def create_order(
                 )
             )
         order_items.append(order_item_values)
+        quote_items_input.append(
+            {
+                "product_id": str(product.id),
+                "variant_id": (
+                    str(item_data.variant_id) if item_data.variant_id else None
+                ),
+                "product_title": product.title,
+                "variant_details": variant_details,
+                "quantity": item_data.quantity,
+                "currency": checkout_currency,
+                "unit_price": unit_price_decimal,
+                "subtotal": item_subtotal,
+                "expected_unit_price": item_data.expected_unit_price,
+            }
+        )
         order_item_media[product.id] = _resolve_product_image_url(
             product, variant_details
         )
@@ -1060,8 +1326,119 @@ async def create_order(
     )
 
     # Calculate totals
-    tax_amount = (subtotal + shipping_cost) * TAX_RATE
-    total_amount = subtotal + shipping_cost + tax_amount - discount_amount
+    tax_amount = _quantize_money((subtotal + shipping_cost) * TAX_RATE)
+    total_amount = _quantize_money(
+        subtotal + shipping_cost + tax_amount - discount_amount
+    )
+
+    quote_validation_required = bool(
+        order_data.checkout_quote_token
+        or order_data.require_quote
+        or any(item.expected_unit_price is not None for item in order_data.items)
+    )
+    if quote_validation_required:
+        prior_quote_payload = None
+        if order_data.checkout_quote_token:
+            try:
+                prior_quote_payload = _decode_checkout_quote_token(
+                    order_data.checkout_quote_token, allow_expired=True
+                )
+            except ValueError:
+                prior_quote_payload = None
+
+        live_quote = build_checkout_quote(
+            items=quote_items_input,
+            currency=checkout_currency,
+            subtotal=subtotal,
+            shipping_cost=shipping_cost,
+            tax_amount=tax_amount,
+            discount_amount=discount_amount,
+            total_amount=total_amount,
+            shipping_rate_id=str(selected_rate.id) if selected_rate else None,
+            promo_code=order_data.promo_code,
+            prior_quote_payload=prior_quote_payload,
+        )
+
+        if live_quote.has_price_changes:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail={
+                    "code": "checkout_price_changed",
+                    "message": live_quote.price_change_message,
+                    "price_changes": _price_changes_from_quote(live_quote),
+                    "checkout_quote": live_quote.model_dump(mode="json"),
+                },
+            )
+
+        if order_data.require_quote and not order_data.checkout_quote_token:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail={
+                    "code": "checkout_quote_required",
+                    "message": "A current checkout quote is required before placing your order. Please review and confirm the current prices.",
+                    "price_changes": [],
+                    "checkout_quote": live_quote.model_dump(mode="json"),
+                },
+            )
+
+        if order_data.checkout_quote_token:
+            try:
+                verified_quote_payload = _decode_checkout_quote_token(
+                    order_data.checkout_quote_token, allow_expired=False
+                )
+            except ValueError as exc:
+                err_code = (
+                    "checkout_quote_expired"
+                    if str(exc) == "expired_quote"
+                    else "checkout_quote_invalid"
+                )
+                err_msg = (
+                    "Your checkout quote has expired. Please review and confirm the current prices before placing your order."
+                    if err_code == "checkout_quote_expired"
+                    else "Your checkout quote is invalid. Please review and confirm the current prices before placing your order."
+                )
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail={
+                        "code": err_code,
+                        "message": err_msg,
+                        "price_changes": _price_changes_from_quote(live_quote),
+                        "checkout_quote": live_quote.model_dump(mode="json"),
+                    },
+                )
+
+            quoted_items = verified_quote_payload.get("items") or []
+            live_comparable_items = [
+                {
+                    "product_id": qi.product_id,
+                    "variant_id": qi.variant_id,
+                    "quantity": qi.quantity,
+                    "unit_price": str(qi.unit_price),
+                    "subtotal": str(qi.subtotal),
+                }
+                for qi in live_quote.items
+            ]
+            quote_matches_order = (
+                verified_quote_payload.get("currency") == checkout_currency
+                and quoted_items == live_comparable_items
+                and _quantize_money(verified_quote_payload.get("subtotal"))
+                == live_quote.subtotal
+                and (
+                    enforced_checkout
+                    or _quantize_money(verified_quote_payload.get("total_amount"))
+                    == live_quote.total_amount
+                )
+            )
+            if not quote_matches_order:
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail={
+                        "code": "checkout_quote_mismatch",
+                        "message": "Your checkout quote no longer matches your current bag or order totals. Please review and confirm the updated summary before placing your order.",
+                        "price_changes": _price_changes_from_quote(live_quote),
+                        "checkout_quote": live_quote.model_dump(mode="json"),
+                    },
+                )
 
     # Use the customer_id we determined earlier
     if not customer_id_for_order:
@@ -1069,6 +1446,14 @@ async def create_order(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Unable to determine customer for order",
         )
+
+    if order_data.guest_address:
+        if created_new_guest_user and guest_user is not None:
+            db.add(guest_user)
+            await db.flush()
+        if guest_addr is not None:
+            db.add(guest_addr)
+            await db.flush()
 
     # Create order
     new_order = Order(

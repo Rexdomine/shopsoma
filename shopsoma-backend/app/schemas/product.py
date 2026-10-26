@@ -497,6 +497,10 @@ class ProductVariantBase(BaseModel):
     stock: int = Field(default=0, ge=0, description="Stock quantity")
     sku: Optional[str] = Field(None, max_length=100, description="Stock Keeping Unit")
     is_available: bool = Field(default=True, description="Variant availability")
+    inherits_price: Optional[bool] = Field(
+        default=None,
+        description="Whether this size variant is marked as the main storefront price (must match product base_price)",
+    )
 
     @field_validator("price")
     @classmethod
@@ -523,6 +527,7 @@ class ProductVariantUpdate(BaseModel):
     stock: Optional[int] = Field(None, ge=0)
     sku: Optional[str] = Field(None, max_length=100)
     is_available: Optional[bool] = None
+    inherits_price: Optional[bool] = None
 
     @field_validator("price")
     @classmethod

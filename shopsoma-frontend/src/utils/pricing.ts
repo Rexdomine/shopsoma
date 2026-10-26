@@ -61,6 +61,105 @@ export function getVariantPrice(variantPrice?: number, basePrice?: number): numb
   return variantPrice ?? basePrice ?? 0;
 }
 
+export interface VariationPricingInput {
+  price?: number | null;
+  sale_price?: number | null;
+  inherits_price?: boolean | null;
+  inherits_sale_price?: boolean | null;
+}
+
+/**
+ * Resolve a variation's regular price, matching backend `variation_regular_price`.
+ */
+export function resolveVariationRegularPrice(
+  variation: VariationPricingInput,
+  fallbackBasePrice: number,
+  compareAtFallback?: number | null
+): number {
+  const hasPrice = variation.price !== null && variation.price !== undefined;
+  if (
+    variation.inherits_price === true ||
+    ((variation.inherits_price === null || variation.inherits_price === undefined) && !hasPrice)
+  ) {
+    return compareAtFallback !== null && compareAtFallback !== undefined
+      ? Number(compareAtFallback)
+      : Number(fallbackBasePrice ?? 0);
+  }
+  return hasPrice ? Number(variation.price) : Number(fallbackBasePrice ?? 0);
+}
+
+/**
+ * Resolve a variation's sale price, matching backend `variation_sale_price`.
+ */
+export function resolveVariationSalePrice(
+  variation: VariationPricingInput,
+  fallbackBasePrice: number,
+  parentHasSale?: boolean
+): number | null {
+  if (variation.inherits_sale_price === true) {
+    if (parentHasSale === false) {
+      return null;
+    }
+    return Number(fallbackBasePrice ?? 0);
+  }
+  if (variation.sale_price !== null && variation.sale_price !== undefined) {
+    return Number(variation.sale_price);
+  }
+  if (
+    (variation.inherits_sale_price === null || variation.inherits_sale_price === undefined) &&
+    (variation.price === null || variation.price === undefined)
+  ) {
+    return Number(fallbackBasePrice ?? 0);
+  }
+  return null;
+}
+
+/**
+ * Resolve effective current price and optional compare-at price for a variation,
+ * matching backend `effective_variation_price` in `app/schemas/product.py`.
+ */
+export function resolveVariationPricing(
+  variation: VariationPricingInput | null | undefined,
+  basePrice?: number | null,
+  compareAtPrice?: number | null
+): { currentPrice: number; comparePrice?: number } {
+  const safeBase = Number(basePrice ?? 0);
+  const safeCompare =
+    compareAtPrice !== null && compareAtPrice !== undefined && Number(compareAtPrice) > 0
+      ? Number(compareAtPrice)
+      : undefined;
+
+  if (!variation) {
+    return {
+      currentPrice: safeBase,
+      comparePrice: safeCompare && safeCompare > safeBase ? safeCompare : safeCompare,
+    };
+  }
+
+  const regularPrice = resolveVariationRegularPrice(variation, safeBase, safeCompare);
+  const salePrice = resolveVariationSalePrice(variation, safeBase, safeCompare !== undefined);
+
+  if (salePrice !== null && salePrice > 0 && salePrice < regularPrice) {
+    return {
+      currentPrice: salePrice,
+      comparePrice: regularPrice,
+    };
+  }
+
+  const usesInheritedRegular =
+    variation.inherits_price === true ||
+    ((variation.inherits_price === null || variation.inherits_price === undefined) &&
+      (variation.price === null || variation.price === undefined));
+
+  return {
+    currentPrice: regularPrice,
+    comparePrice:
+      usesInheritedRegular && safeCompare !== undefined && safeCompare > regularPrice
+        ? safeCompare
+        : undefined,
+  };
+}
+
 /**
  * Format currency in Nigerian Naira
  */
