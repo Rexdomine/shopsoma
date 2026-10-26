@@ -1,5 +1,5 @@
 import { create } from 'zustand';
-import type { CartState, AddToCartParams, UpdateCartItemParams, UpdateVariantParams, ApplyCouponParams, Cart, CartItem } from '../types/cart';
+import type { CartState, AddToCartParams, UpdateCartItemParams, UpdateVariantParams, ApplyCouponParams, SyncCartItemPriceUpdate, Cart, CartItem } from '../types/cart';
 import { CartService } from '../services/cartService';
 import { calculateCartSummary, calculateItemSubtotal, getVariantPrice, applyCoupon } from '../utils/pricing';
 
@@ -292,6 +292,48 @@ export const useCartStore = create<CartState>((set, get) => ({
     const updatedCart: Cart = {
       ...cart,
       summary: calculateCartSummary(cart.items, cart.summary.discount),
+    };
+
+    CartService.saveCart(updatedCart);
+    set({ cart: updatedCart });
+  },
+
+  /**
+   * Synchronize local cart item prices with server-authoritative checkout quote prices
+   */
+  syncItemPrices: (updates: SyncCartItemPriceUpdate[]) => {
+    if (!updates || updates.length === 0) return;
+    const { cart } = get();
+    let changed = false;
+
+    const updatedItems = cart.items.map((item) => {
+      const match = updates.find(
+        (u) =>
+          u.product_id === item.product_id &&
+          (u.variant_id || '') === (item.variant?.id || '')
+      );
+      if (!match || !Number.isFinite(Number(match.unit_price))) {
+        return item;
+      }
+      const nextPrice = Number(match.unit_price);
+      if (nextPrice === item.price) {
+        return item;
+      }
+      changed = true;
+      return {
+        ...item,
+        price: nextPrice,
+        subtotal: calculateItemSubtotal(nextPrice, item.quantity),
+        variant: item.variant ? { ...item.variant, price: nextPrice } : item.variant,
+      };
+    });
+
+    if (!changed) return;
+
+    const updatedCart: Cart = {
+      ...cart,
+      items: updatedItems,
+      summary: calculateCartSummary(updatedItems, cart.summary.discount),
     };
 
     CartService.saveCart(updatedCart);

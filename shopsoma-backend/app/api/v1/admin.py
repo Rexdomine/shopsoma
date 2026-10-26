@@ -2893,6 +2893,7 @@ async def get_product_variants(
             "stock": variant.stock,
             "is_available": variant.is_available,
             "is_active": variant.is_available,
+            "inherits_price": bool(variant.inherits_price),
         }
         for variant in product_variants
     ]
@@ -2917,6 +2918,7 @@ async def get_product_variants(
                     "stock": ss.stock,
                     "is_available": bool(variation.is_active) and ss.stock > 0,
                     "is_active": bool(variation.is_active) and ss.stock > 0,
+                    "inherits_price": bool(variation.inherits_price),
                 })
                 existing_sizes.add(size_str)
 
@@ -2986,6 +2988,23 @@ async def create_product_variant(
     if price is None:
         price = product.base_price
 
+    explicit_inherits_price = create_data.get("inherits_price")
+    if explicit_inherits_price is True:
+        if "price" in create_data and create_data["price"] != product.base_price:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Main storefront size price must match the product sales price ({product.base_price})",
+            )
+        price = product.base_price
+        inherits_price = True
+        for existing_variant in product.variants:
+            if existing_variant.size is not None:
+                existing_variant.inherits_price = False
+    elif explicit_inherits_price is False:
+        inherits_price = False
+    else:
+        inherits_price = price == product.base_price
+
     stock = 0 if product.made_to_order else create_data.get("stock", 0)
     is_available = True if product.made_to_order else create_data.get("is_available", stock > 0)
 
@@ -2998,7 +3017,7 @@ async def create_product_variant(
         stock=stock,
         sku=create_data.get("sku"),
         is_available=is_available,
-        inherits_price=price == product.base_price,
+        inherits_price=inherits_price,
         inherits_stock=False,
     )
     db.add(variant)
@@ -3018,6 +3037,7 @@ async def create_product_variant(
             "stock": variant.stock,
             "is_available": variant.is_available,
             "is_active": variant.is_available,
+            "inherits_price": bool(variant.inherits_price),
         },
     }
 
@@ -3055,7 +3075,26 @@ async def update_product_variant(
     variant = result.scalar_one_or_none()
 
     if variant:
-        if "price" in update_data:
+        if update_data.get("inherits_price") is True:
+            product_res = await db.execute(
+                select(Product)
+                .options(selectinload(Product.variants))
+                .where(Product.id == product_id)
+            )
+            product = product_res.scalar_one_or_none()
+            if not product:
+                raise HTTPException(status_code=404, detail="Product not found")
+            if "price" in update_data and update_data["price"] != product.base_price:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail=f"Main storefront size price must match the product sales price ({product.base_price})",
+                )
+            update_data["price"] = product.base_price
+            update_data["inherits_price"] = True
+            for existing_variant in product.variants:
+                if existing_variant.id != variant.id and existing_variant.size is not None:
+                    existing_variant.inherits_price = False
+        elif "price" in update_data:
             variant.inherits_price = False
             variation_result = await db.execute(
                 select(Variation).where(Variation.product_id == product_id)

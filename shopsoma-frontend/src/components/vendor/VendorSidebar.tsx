@@ -224,8 +224,18 @@ export default function VendorSidebar({
                   </div>
                 )}
                 <div className="flex-1 min-w-0">
-                  <p className="text-sm font-semibold text-gray-900 truncate">{vendorProfile?.business_name || user?.full_name || 'Your Brand'}</p>
-                  <p className="text-xs text-gray-500 truncate">{user?.email || 'email@brand.com'}</p>
+                  <p
+                    className="text-sm font-semibold text-gray-900 truncate"
+                    title={vendorProfile?.business_name || user?.full_name || 'Your Brand'}
+                  >
+                    {vendorProfile?.business_name || user?.full_name || 'Your Brand'}
+                  </p>
+                  <p
+                    className="text-xs text-gray-500 truncate"
+                    title={user?.email || 'email@brand.com'}
+                  >
+                    {user?.email || 'email@brand.com'}
+                  </p>
                 </div>
               </div>
 
@@ -336,23 +346,33 @@ export default function VendorSidebar({
         {!isCollapsed ? (
           <button
             type="button"
-            className="w-full bg-white rounded-2xl border border-gray-200 shadow-sm px-3 py-3 flex items-center gap-3 text-left hover:shadow-md transition"
+            className="w-full bg-white rounded-2xl border border-gray-200 shadow-sm px-3 py-3 flex items-center gap-3 text-left hover:shadow-md transition min-w-0 overflow-hidden"
           >
             {showVendorLogo ? (
               <img
                 src={vendorLogoUrl}
-                alt={`${user?.full_name || 'Vendor'} logo`}
-                className="h-10 w-10 rounded-full object-cover"
+                alt={`${vendorProfile?.business_name || user?.full_name || 'Vendor'} logo`}
+                className="h-10 w-10 rounded-full object-cover shrink-0"
                 onError={() => setLogoError(true)}
               />
             ) : (
-              <div className="h-10 w-10 rounded-full bg-[#105E53]/10 flex items-center justify-center text-[#105E53]">
+              <div className="h-10 w-10 rounded-full bg-[#105E53]/10 flex items-center justify-center text-[#105E53] shrink-0">
                 <User className="w-5 h-5" />
               </div>
             )}
-            <div className="flex-1">
-              <p className="text-sm font-semibold text-gray-900 truncate">{vendorProfile?.business_name || user?.full_name || 'Your Brand'}</p>
-              <p className="text-xs text-gray-500 truncate">{user?.email || 'email@brand.com'}</p>
+            <div className="flex-1 min-w-0">
+              <p
+                className="text-sm font-semibold text-gray-900 truncate"
+                title={vendorProfile?.business_name || user?.full_name || 'Your Brand'}
+              >
+                {vendorProfile?.business_name || user?.full_name || 'Your Brand'}
+              </p>
+              <p
+                className="text-xs text-gray-500 truncate"
+                title={user?.email || 'email@brand.com'}
+              >
+                {user?.email || 'email@brand.com'}
+              </p>
             </div>
           </button>
         ) : (
@@ -361,11 +381,11 @@ export default function VendorSidebar({
               <img
                 src={vendorLogoUrl}
                 alt={`${vendorProfile?.business_name || user?.full_name || 'Vendor'} logo`}
-                className="h-10 w-10 rounded-full object-cover"
+                className="h-10 w-10 rounded-full object-cover shrink-0"
                 onError={() => setLogoError(true)}
               />
             ) : (
-              <div className="h-10 w-10 rounded-full bg-[#105E53]/10 flex items-center justify-center text-[#105E53]">
+              <div className="h-10 w-10 rounded-full bg-[#105E53]/10 flex items-center justify-center text-[#105E53] shrink-0">
                 <User className="w-5 h-5" />
               </div>
             )}

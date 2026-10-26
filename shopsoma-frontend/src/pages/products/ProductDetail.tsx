@@ -10,7 +10,7 @@ import { IMAGE_CONFIG, ROUTES, STORAGE_KEYS } from '../../config/constants';
 import Layout from '../../components/layout/Layout';
 import AddToBagModal from '../../components/modals/AddToBagModal';
 import { useCartStore } from '../../store/cartStore';
-import { formatPriceWithConversion } from '../../utils/pricing';
+import { formatPriceWithConversion, resolveVariationPricing } from '../../utils/pricing';
 import { useCurrencyStore } from '../../store/currencyStore';
 import { hasSolidColorHex, normalizeColorValue } from '../../utils/colorDisplay';
 import { getOptimizedImageUrl, getProductImageSources } from '../../utils/productImages';
@@ -136,12 +136,19 @@ export default function ProductDetail() {
           }
         } else {
           const uniqueColors = getColorOptions(data.variants ?? []);
-          if (uniqueColors.length === 1) {
-            setSelectedColor(uniqueColors[0].value);
+          const initialColor = uniqueColors.length === 1 ? uniqueColors[0].value : null;
+          if (initialColor) {
+            setSelectedColor(initialColor);
           }
-          const uniqueSizes = getSizeOptions(data.variants ?? []);
-          if (uniqueSizes.length === 1) {
-            setSelectedSize(uniqueSizes[0]);
+          const uniqueSizes = getSizeOptions(data.variants ?? [], initialColor);
+          if (uniqueSizes.length > 0) {
+            const defaultSize = getDefaultSizeForVariants(
+              data.variants ?? [],
+              uniqueSizes,
+              data.base_price,
+              initialColor
+            );
+            setSelectedSize(defaultSize);
           }
         }
 
@@ -227,6 +234,48 @@ export default function ProductDetail() {
     return Array.from(set);
   };
 
+  const getDefaultSizeForVariants = (
+    variants: ProductVariant[],
+    availableSizeOptions: string[],
+    basePrice?: number,
+    colorFilter?: string | null
+  ): string | null => {
+    if (availableSizeOptions.length === 0) return null;
+    const normalizedColor = normalizeColorValue(colorFilter);
+    const candidateVariants = variants.filter((v) => {
+      if (!v.size || !availableSizeOptions.includes(v.size)) return false;
+      if (normalizedColor && normalizeColorValue(v.color) !== normalizedColor) return false;
+      return true;
+    });
+
+    // 1. Prefer the size variant explicitly marked as main storefront price (inherits_price === true)
+    const explicitMainAvailable = candidateVariants.find(
+      (v) => v.inherits_price === true && v.is_available !== false && (v.stock ?? 1) > 0
+    );
+    if (explicitMainAvailable?.size) return explicitMainAvailable.size;
+
+    const explicitMain = candidateVariants.find((v) => v.inherits_price === true);
+    if (explicitMain?.size) return explicitMain.size;
+
+    // 2. Fallback to the size variant whose price matches the product base_price
+    if (basePrice != null) {
+      const matchingBaseAvailable = candidateVariants.find(
+        (v) =>
+          Number(v.price) === Number(basePrice) &&
+          v.is_available !== false &&
+          (v.stock ?? 1) > 0
+      );
+      if (matchingBaseAvailable?.size) return matchingBaseAvailable.size;
+
+      const matchingBase = candidateVariants.find(
+        (v) => Number(v.price) === Number(basePrice)
+      );
+      if (matchingBase?.size) return matchingBase.size;
+    }
+
+    return availableSizeOptions[0];
+  };
+
   // Derived active variation from selectedColor or first active variation
   const selectedVariation = useMemo(() => {
     if (!product?.variations || product.variations.length === 0) return null;
@@ -279,39 +328,69 @@ export default function ProductDetail() {
 
   useEffect(() => {
     if (sizeOptions.length > 0 && (!selectedSize || !sizeOptions.includes(selectedSize))) {
-      setSelectedSize(sizeOptions[0]);
-    }
-  }, [sizeOptions, selectedSize]);
-
-  // Dynamic pricing based on selected variation or product
-  const { currentPrice, comparePrice } = useMemo((): { currentPrice: number; comparePrice?: number } => {
-    if (selectedVariation) {
-      const regPrice = selectedVariation.price != null
-        ? Number(selectedVariation.price)
-        : Number(product?.base_price ?? 0);
-      const salePrice = selectedVariation.sale_price != null
-        ? Number(selectedVariation.sale_price)
-        : null;
-      if (salePrice != null && salePrice > 0 && salePrice < regPrice) {
-        return { currentPrice: salePrice, comparePrice: regPrice };
+      if (!selectedVariation && product?.variants?.length) {
+        const defaultSize = getDefaultSizeForVariants(
+          product.variants,
+          sizeOptions,
+          product.base_price,
+          selectedColor
+        );
+        setSelectedSize(defaultSize || sizeOptions[0]);
+      } else {
+        setSelectedSize(sizeOptions[0]);
       }
+    }
+  }, [sizeOptions, selectedSize, selectedVariation, product?.variants, product?.base_price, selectedColor]);
+
+  // Matched variant from product.variants for current color/size selection
+  const matchedVariant = useMemo(() => {
+    const normalizeSelection = {
+      color: normalizeColorValue(selectedColor || selectedVariation?.title),
+      size: normalizeColorValue(selectedSize),
+    };
+
+    const variants = product?.variants ?? [];
+
+    return (
+      variants.find((variant) => {
+        const variantColor = normalizeColorValue(variant.color);
+        const variantSize = normalizeColorValue(variant.size);
+        return variantColor === normalizeSelection.color && variantSize === normalizeSelection.size;
+      }) ||
+      variants.find((variant) => {
+        const variantSize = normalizeColorValue(variant.size);
+        return Boolean(normalizeSelection.size) && variantSize === normalizeSelection.size;
+      }) ||
+      variants.find((variant) => {
+        if (normalizeSelection.size) return false;
+        const variantColor = normalizeColorValue(variant.color);
+        return !normalizeSelection.color || variantColor === normalizeSelection.color;
+      }) ||
+      null
+    );
+  }, [product?.variants, selectedColor, selectedSize, selectedVariation?.title]);
+
+  // Dynamic pricing based on selected variation, matched size variant, or product
+  const { currentPrice, comparePrice } = useMemo((): { currentPrice: number; comparePrice?: number } => {
+    if (!selectedVariation && matchedVariant && matchedVariant.price != null) {
+      const variantPrice = Number(matchedVariant.price);
+      const rawCompare =
+        matchedVariant.compare_at_price != null
+          ? Number(matchedVariant.compare_at_price)
+          : product?.compare_at_price != null
+            ? Number(product.compare_at_price)
+            : undefined;
       return {
-        currentPrice: regPrice,
-        comparePrice: selectedVariation.price != null
-          ? undefined
-          : (product?.compare_at_price ? Number(product.compare_at_price) : undefined),
+        currentPrice: variantPrice,
+        comparePrice: rawCompare !== undefined && rawCompare > variantPrice ? rawCompare : undefined,
       };
     }
-    const isSingle = !product?.variations || product.variations.length === 0;
-    return {
-      currentPrice: isSingle && product?.base_price != null
-        ? Number(product.base_price)
-        : Number(product?.base_price ?? 0),
-      comparePrice: isSingle && product?.compare_at_price != null
-        ? Number(product.compare_at_price)
-        : (product?.compare_at_price ? Number(product.compare_at_price) : undefined),
-    };
-  }, [selectedVariation, product]);
+    return resolveVariationPricing(
+      selectedVariation,
+      product?.base_price,
+      product?.compare_at_price
+    );
+  }, [selectedVariation, matchedVariant, product]);
 
   // Inventory & stock count for current selection
   const currentSizeStock = useMemo(() => {
@@ -321,8 +400,11 @@ export default function ProductDetail() {
       );
       if (match) return match.stock;
     }
+    if (!selectedVariation && matchedVariant) {
+      return matchedVariant.stock ?? 0;
+    }
     return product?.total_stock ?? 0;
-  }, [selectedVariation, selectedSize, product?.total_stock]);
+  }, [selectedVariation, selectedSize, matchedVariant, product?.total_stock]);
 
   const usesInventoryTracking = !product?.made_to_order;
   const maxQuantity = usesInventoryTracking ? currentSizeStock : 99;
@@ -335,15 +417,7 @@ export default function ProductDetail() {
     };
 
     const variants = product?.variants ?? [];
-
-    const match = variants.find((variant) => {
-      const variantColor = normalizeColorValue(variant.color);
-      const variantSize = normalizeColorValue(variant.size);
-      return variantColor === normalizeSelection.color && variantSize === normalizeSelection.size;
-    }) || variants.find((variant) => {
-      const variantColor = normalizeColorValue(variant.color);
-      return !normalizeSelection.color || variantColor === normalizeSelection.color;
-    });
+    const match = matchedVariant;
 
     if (match) {
       return {
@@ -387,7 +461,7 @@ export default function ProductDetail() {
     }
 
     return variants[0] ?? null;
-  }, [product, selectedColor, selectedSize, selectedVariation, currentPrice, comparePrice, currentSizeStock, isOutOfStock]);
+  }, [product, selectedColor, selectedSize, selectedVariation, matchedVariant, currentPrice, comparePrice, currentSizeStock, isOutOfStock]);
 
   const hasInvalidSelection = useMemo(() => {
     if (!product?.variants?.length && !product?.variations?.length) return false;
@@ -965,7 +1039,16 @@ export default function ProductDetail() {
                   {sizeMenuOpen && (
                     <div className="absolute z-20 mt-1 max-h-48 w-full overflow-y-auto border border-primary/15 bg-white shadow-lg">
                       {sizeOptions.map((size) => {
-                        const sStock = selectedVariation?.size_stocks?.find((s) => normalizeColorValue(s.size) === normalizeColorValue(size))?.stock;
+                        const sizeVariant = !selectedVariation
+                          ? (product.variants ?? []).find(
+                              (v) =>
+                                normalizeColorValue(v.size) === normalizeColorValue(size) &&
+                                (!selectedColor || normalizeColorValue(v.color) === normalizeColorValue(selectedColor))
+                            )
+                          : undefined;
+                        const sStock = selectedVariation
+                          ? selectedVariation.size_stocks?.find((s) => normalizeColorValue(s.size) === normalizeColorValue(size))?.stock
+                          : sizeVariant?.stock;
                         return (
                           <button
                             key={size}

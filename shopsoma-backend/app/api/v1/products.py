@@ -1509,6 +1509,7 @@ async def get_product_variants(
             "price": float(v.price),
             "stock": v.stock,
             "is_available": v.is_available,
+            "inherits_price": bool(v.inherits_price),
         }
         for v in product_variants
     ]
@@ -1533,6 +1534,7 @@ async def get_product_variants(
                     "price": var_price,
                     "stock": ss.stock,
                     "is_available": bool(variation.is_active) and ss.stock > 0,
+                    "inherits_price": bool(variation.inherits_price),
                 })
                 existing_sizes.add(size_str)
 
@@ -1609,10 +1611,23 @@ async def create_variant(
         and variant_data.color is None
         and not explicit_inventory
     )
-    inherits_price = (
-        not product.variations
-        and variant_data.price == product.base_price
-    )
+    if variant_data.inherits_price is True:
+        if variant_data.price != product.base_price:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Main storefront size price must match the product sales price ({product.base_price})",
+            )
+        inherits_price = True
+        for existing_variant in product.variants:
+            if existing_variant.size is not None:
+                existing_variant.inherits_price = False
+    elif variant_data.inherits_price is False:
+        inherits_price = False
+    else:
+        inherits_price = (
+            not product.variations
+            and variant_data.price == product.base_price
+        )
     variant = ProductVariant(
         product_id=product_id,
         inherits_price=inherits_price,
@@ -1791,7 +1806,18 @@ async def update_variant(
     # total_stock edit would overwrite the direct variant edit.
     if "stock" in update_data or "is_available" in update_data:
         variant.inherits_stock = False
-    if "price" in update_data:
+    if update_data.get("inherits_price") is True:
+        if "price" in update_data and update_data["price"] != product.base_price:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Main storefront size price must match the product sales price ({product.base_price})",
+            )
+        update_data["price"] = product.base_price
+        update_data["inherits_price"] = True
+        for existing_variant in product.variants:
+            if existing_variant.id != variant.id and existing_variant.size is not None:
+                existing_variant.inherits_price = False
+    elif "price" in update_data:
         variant.inherits_price = False
         _sync_direct_variant_price_to_inherited_variation(
             product.variations,
