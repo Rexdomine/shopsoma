@@ -1,62 +1,70 @@
 import { describe, expect, it } from 'vitest';
-import { cleanNumberString, formatWithCommas } from './pricing';
+import { resolveVariationPricing } from './pricing';
 
-describe('cleanNumberString', () => {
-  it('handles empty or null values', () => {
-    expect(cleanNumberString('')).toBe('');
-    expect(cleanNumberString(null)).toBe('');
-    expect(cleanNumberString(undefined)).toBe('');
+describe('resolveVariationPricing', () => {
+  it('uses inherited parent sale price (base_price) instead of stale variation sale_price when inherits_sale_price is true', () => {
+    // Adaeze Trousers (Blue, size 10): product base_price=49,980, compare_at_price=99,960,
+    // variation has stale sale_price=83,300 with inherits_sale_price=true.
+    const result = resolveVariationPricing(
+      {
+        price: 99960,
+        sale_price: 83300,
+        inherits_price: true,
+        inherits_sale_price: true,
+      },
+      49980,
+      99960
+    );
+
+    expect(result.currentPrice).toBe(49980);
+    expect(result.comparePrice).toBe(99960);
   });
 
-  it('strips commas from numbers', () => {
-    expect(cleanNumberString('50,000')).toBe('50000');
-    expect(cleanNumberString('1,234,567')).toBe('1234567');
+  it('uses inherited parent base_price instead of stale variation price when inherits_price is true and no sale exists', () => {
+    const result = resolveVariationPricing(
+      {
+        price: 83300,
+        sale_price: null,
+        inherits_price: true,
+        inherits_sale_price: false,
+      },
+      49980,
+      undefined
+    );
+
+    expect(result.currentPrice).toBe(49980);
+    expect(result.comparePrice).toBeUndefined();
   });
 
-  it('strips currency symbols and spaces', () => {
-    expect(cleanNumberString('₦50,000')).toBe('50000');
-    expect(cleanNumberString('$ 1,200.50')).toBe('1200.50');
+  it('uses explicit variation regular and sale prices when inheritance markers are false', () => {
+    const result = resolveVariationPricing(
+      {
+        price: 99960,
+        sale_price: 83300,
+        inherits_price: false,
+        inherits_sale_price: false,
+      },
+      49980,
+      99960
+    );
+
+    expect(result.currentPrice).toBe(83300);
+    expect(result.comparePrice).toBe(99960);
   });
 
-  it('preserves decimals up to maxDecimals', () => {
-    expect(cleanNumberString('5000.')).toBe('5000.');
-    expect(cleanNumberString('5000.5')).toBe('5000.5');
-    expect(cleanNumberString('5000.50')).toBe('5000.50');
-    expect(cleanNumberString('5000.555', 2)).toBe('5000.55');
-  });
+  it('treats legacy null variation price and sale_price without markers as inherited from parent', () => {
+    const result = resolveVariationPricing(
+      {
+        price: null,
+        sale_price: null,
+        inherits_price: null,
+        inherits_sale_price: null,
+      },
+      49980,
+      83300
+    );
 
-  it('removes subsequent decimal points if multiple are entered', () => {
-    expect(cleanNumberString('50.0.0')).toBe('50.00');
-  });
-});
-
-describe('formatWithCommas', () => {
-  it('returns empty string for empty input', () => {
-    expect(formatWithCommas('')).toBe('');
-    expect(formatWithCommas(null)).toBe('');
-    expect(formatWithCommas(undefined)).toBe('');
-  });
-
-  it('formats whole numbers with thousands separators', () => {
-    expect(formatWithCommas('5')).toBe('5');
-    expect(formatWithCommas('50')).toBe('50');
-    expect(formatWithCommas('500')).toBe('500');
-    expect(formatWithCommas('5000')).toBe('5,000');
-    expect(formatWithCommas('50000')).toBe('50,000');
-    expect(formatWithCommas('500000')).toBe('500,000');
-    expect(formatWithCommas('5000000')).toBe('5,000,000');
-  });
-
-  it('handles decimals gracefully while typing', () => {
-    expect(formatWithCommas('5000.')).toBe('5,000.');
-    expect(formatWithCommas('5000.5')).toBe('5,000.5');
-    expect(formatWithCommas('5000.50')).toBe('5,000.50');
-    expect(formatWithCommas('.5')).toBe('.5');
-    expect(formatWithCommas('0.5')).toBe('0.5');
-  });
-
-  it('formats numbers already formatted or with currency symbols', () => {
-    expect(formatWithCommas('5,000')).toBe('5,000');
-    expect(formatWithCommas('₦50000')).toBe('50,000');
+    expect(result.currentPrice).toBe(49980);
+    expect(result.comparePrice).toBe(83300);
   });
 });

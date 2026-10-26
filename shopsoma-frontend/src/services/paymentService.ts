@@ -18,6 +18,52 @@ api.interceptors.request.use((config) => {
   return config;
 });
 
+let refreshPromise: Promise<string> | null = null;
+
+api.interceptors?.response?.use(
+  (response) => response,
+  async (error) => {
+    const originalRequest = error?.config as any;
+    if (error?.response?.status === 401 && originalRequest && !originalRequest._retry) {
+      const refreshToken = localStorage.getItem(STORAGE_KEYS.REFRESH_TOKEN);
+      if (refreshToken) {
+        originalRequest._retry = true;
+        try {
+          if (!refreshPromise) {
+            refreshPromise = (async () => {
+              try {
+                const response = await axios.post(`${API_BASE_URL}/auth/refresh`, {
+                  refresh_token: refreshToken,
+                });
+                const { access_token, refresh_token: nextRefreshToken } = response.data;
+                localStorage.setItem(STORAGE_KEYS.ACCESS_TOKEN, access_token);
+                if (nextRefreshToken) {
+                  localStorage.setItem(STORAGE_KEYS.REFRESH_TOKEN, nextRefreshToken);
+                }
+                return access_token;
+              } finally {
+                refreshPromise = null;
+              }
+            })();
+          }
+          const newAccessToken = await refreshPromise;
+          originalRequest.headers = originalRequest.headers || {};
+          originalRequest.headers.Authorization = `Bearer ${newAccessToken}`;
+          return api(originalRequest);
+        } catch {
+          localStorage.removeItem(STORAGE_KEYS.ACCESS_TOKEN);
+          localStorage.removeItem(STORAGE_KEYS.REFRESH_TOKEN);
+          localStorage.removeItem(STORAGE_KEYS.USER);
+        }
+      } else {
+        localStorage.removeItem(STORAGE_KEYS.ACCESS_TOKEN);
+        localStorage.removeItem(STORAGE_KEYS.USER);
+      }
+    }
+    return Promise.reject(error);
+  },
+);
+
 export interface CustomerPortalResponse {
   url: string;
   provider: 'paystack' | 'stripe';

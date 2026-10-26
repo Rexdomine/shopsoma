@@ -75,6 +75,7 @@ export default function ProductSizeOptionsManager({
   const [newStock, setNewStock] = useState('10');
   const [newPrice, setNewPrice] = useState(basePrice > 0 ? basePrice.toString() : '');
   const [newIsAvailable, setNewIsAvailable] = useState(true);
+  const [newIsMainPrice, setNewIsMainPrice] = useState(false);
 
   // Edit modal state
   const [editingVariant, setEditingVariant] = useState<ProductVariant | null>(null);
@@ -83,6 +84,7 @@ export default function ProductSizeOptionsManager({
   const [editStock, setEditStock] = useState('0');
   const [editPrice, setEditPrice] = useState('');
   const [editIsAvailable, setEditIsAvailable] = useState(true);
+  const [editIsMainPrice, setEditIsMainPrice] = useState(false);
 
   // Delete modal state
   const [deletingVariant, setDeletingVariant] = useState<ProductVariant | null>(null);
@@ -114,6 +116,21 @@ export default function ProductSizeOptionsManager({
     );
   }, [variants]);
 
+  const mainVariantId = useMemo(() => {
+    const explicitMain = variants.find((v) => v.inherits_price === true);
+    if (explicitMain) return explicitMain.id;
+    if (basePrice > 0) {
+      const matchingPrice = variants.find((v) => Number(v.price) === Number(basePrice));
+      if (matchingPrice) return matchingPrice.id;
+    }
+    return null;
+  }, [variants, basePrice]);
+
+  const hasDifferentPrices = useMemo(() => {
+    const prices = new Set(variants.map((v) => Number(v.price)));
+    return prices.size > 1;
+  }, [variants]);
+
   const fetchVariants = async () => {
     try {
       setLoading(true);
@@ -142,6 +159,7 @@ export default function ProductSizeOptionsManager({
     setNewStock(madeToOrder ? '0' : '10');
     setNewPrice(basePrice > 0 ? basePrice.toString() : '');
     setNewIsAvailable(true);
+    setNewIsMainPrice(false);
     setErrorMsg(null);
     setModalErrorMsg(null);
     setSuccessMsg(null);
@@ -156,9 +174,50 @@ export default function ProductSizeOptionsManager({
     setEditStock((variant.stock ?? 0).toString());
     setEditPrice((variant.price ?? basePrice).toString());
     setEditIsAvailable(variant.is_available ?? true);
+    setEditIsMainPrice(variant.inherits_price === true);
     setErrorMsg(null);
     setModalErrorMsg(null);
     setSuccessMsg(null);
+  };
+
+  const handleSetMainVariant = async (variant: ProductVariant) => {
+    if (basePrice <= 0) return;
+    try {
+      setActionLoading(true);
+      setErrorMsg(null);
+      setSuccessMsg(null);
+
+      const payload: any = {
+        size: variant.size || 'One/Size',
+        stock: madeToOrder ? 0 : (variant.stock ?? 0),
+        price: basePrice,
+        is_available: variant.is_available ?? true,
+        inherits_price: true,
+      };
+      if (variant.color) {
+        payload.color = variant.color;
+      }
+      if (variant.color_hex) {
+        payload.color_hex = variant.color_hex;
+      }
+
+      if (isAdmin) {
+        await adminService.updateProductVariant(productId, variant.id, payload);
+      } else {
+        await productService.updateVariant(productId, variant.id, payload);
+      }
+
+      setSuccessMsg(
+        `Size "${variant.size || 'One/Size'}" is now the main storefront price (${currency} ${Number(basePrice).toFixed(2)}) and default selected size.`
+      );
+      await fetchVariants();
+    } catch (err: any) {
+      console.error('Error setting main storefront size:', err);
+      const detail = err.response?.data?.detail;
+      setErrorMsg(typeof detail === 'string' ? detail : 'Failed to set main storefront size.');
+    } finally {
+      setActionLoading(false);
+    }
   };
 
   const handleCreateVariant = async (e?: React.SyntheticEvent) => {
@@ -189,6 +248,13 @@ export default function ProductSizeOptionsManager({
       return;
     }
 
+    if (newIsMainPrice && basePrice > 0 && Number(parsedPrice) !== Number(basePrice)) {
+      setModalErrorMsg(
+        `Main storefront size price must match the product sales price (${currency} ${Number(basePrice).toFixed(2)}).`
+      );
+      return;
+    }
+
     try {
       setActionLoading(true);
       setModalErrorMsg(null);
@@ -200,9 +266,12 @@ export default function ProductSizeOptionsManager({
       const payload: any = {
         size: sizeName,
         stock: parsedStock,
-        price: parsedPrice,
+        price: newIsMainPrice && basePrice > 0 ? basePrice : parsedPrice,
         is_available: newIsAvailable,
       };
+      if (newIsMainPrice) {
+        payload.inherits_price = true;
+      }
       if (sharedColor) {
         payload.color = sharedColor;
       }
@@ -267,6 +336,13 @@ export default function ProductSizeOptionsManager({
       return;
     }
 
+    if (editIsMainPrice && basePrice > 0 && Number(parsedPrice) !== Number(basePrice)) {
+      setModalErrorMsg(
+        `Main storefront size price must match the product sales price (${currency} ${Number(basePrice).toFixed(2)}).`
+      );
+      return;
+    }
+
     try {
       setActionLoading(true);
       setModalErrorMsg(null);
@@ -275,9 +351,14 @@ export default function ProductSizeOptionsManager({
       const payload: any = {
         size: sizeName,
         stock: parsedStock,
-        price: parsedPrice,
+        price: editIsMainPrice && basePrice > 0 ? basePrice : parsedPrice,
         is_available: editIsAvailable,
       };
+      if (editIsMainPrice) {
+        payload.inherits_price = true;
+      } else if (editingVariant.inherits_price === true) {
+        payload.inherits_price = false;
+      }
       if (editingVariant.color) {
         payload.color = editingVariant.color;
       }
@@ -399,6 +480,15 @@ export default function ProductSizeOptionsManager({
             </div>
           </div>
         )}
+
+        {basePrice > 0 && variants.length > 0 && !mainVariantId && (
+          <div className="mb-4 bg-amber-50 border border-amber-200 rounded-lg p-3 text-xs text-amber-800 flex items-start gap-2">
+            <AlertCircle className="h-4 w-4 text-amber-600 shrink-0 mt-0.5" />
+            <div>
+              <strong>No Main Storefront Size Selected:</strong> None of your size options matches the product sales price ({currency} {Number(basePrice).toFixed(2)}). Click <strong>Set as Main Price</strong> on one size option to sync its price with the sales price and make it the default size on the storefront.
+            </div>
+          </div>
+        )}
       </div>
 
       {/* Body: Variants List */}
@@ -444,18 +534,25 @@ export default function ProductSizeOptionsManager({
                   const isAvailable = variant.is_available ?? true;
                   const stockCount = variant.stock ?? 0;
                   const price = variant.price ?? basePrice;
+                  const isMainVariant = variant.id === mainVariantId;
 
                   return (
                     <tr key={variant.id} className="hover:bg-gray-50/60 transition">
                       {/* Size */}
                       <td className="py-3.5 px-4">
-                        <div className="flex items-center gap-2">
+                        <div className="flex flex-wrap items-center gap-2">
                           <span className="inline-flex items-center justify-center min-w-[36px] h-8 px-3 rounded-lg bg-gray-100 border border-gray-200 font-bold text-gray-900 text-xs shadow-xs whitespace-nowrap">
                             {sizeLabel}
                           </span>
                           {variant.color && (
                             <span className="text-[11px] text-gray-500">
                               ({variant.color})
+                            </span>
+                          )}
+                          {isMainVariant && (
+                            <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] font-semibold bg-emerald-50 text-emerald-700 border border-emerald-200">
+                              <Check className="h-3 w-3" />
+                              Main Storefront Price (Default)
                             </span>
                           )}
                         </div>
@@ -512,6 +609,17 @@ export default function ProductSizeOptionsManager({
                       {/* Actions */}
                       <td className="py-3.5 px-4 text-right">
                         <div className="inline-flex items-center gap-1">
+                          {!isMainVariant && basePrice > 0 && (hasDifferentPrices || !mainVariantId) && (
+                            <button
+                              type="button"
+                              disabled={actionLoading}
+                              onClick={() => handleSetMainVariant(variant)}
+                              className="px-2 py-1 text-[11px] font-medium text-emerald-700 bg-emerald-50 hover:bg-emerald-100 border border-emerald-200 rounded-md transition mr-1 disabled:opacity-50"
+                              title={`Mark size ${sizeLabel} as the main storefront price (${currency} ${Number(basePrice).toFixed(2)}) and default selected size`}
+                            >
+                              Set as Main Price
+                            </button>
+                          )}
                           <button
                             type="button"
                             onClick={() => handleOpenEditModal(variant)}
@@ -706,7 +814,13 @@ export default function ProductSizeOptionsManager({
                     min="0.01"
                     step="0.01"
                     value={newPrice}
-                    onChange={(e) => setNewPrice(e.target.value)}
+                    onChange={(e) => {
+                      const val = e.target.value;
+                      setNewPrice(val);
+                      if (basePrice > 0 && parseFloat(val) !== Number(basePrice)) {
+                        setNewIsMainPrice(false);
+                      }
+                    }}
                     onKeyDown={(e) => {
                       if (e.key === 'Enter') {
                         e.preventDefault();
@@ -721,18 +835,44 @@ export default function ProductSizeOptionsManager({
                 </div>
               </div>
 
-              {/* Availability */}
-              <div className="flex items-center gap-2 pt-1">
-                <input
-                  id="newIsAvailable"
-                  type="checkbox"
-                  checked={newIsAvailable}
-                  onChange={(e) => setNewIsAvailable(e.target.checked)}
-                  className={`rounded text-[#105E53] ${primaryRing}`}
-                />
-                <label htmlFor="newIsAvailable" className="text-xs text-gray-700 cursor-pointer font-medium">
-                  Available for purchase
-                </label>
+              {/* Main Storefront Price & Availability */}
+              <div className="space-y-2 pt-1">
+                {basePrice > 0 && (
+                  <div className="flex items-start gap-2">
+                    <input
+                      id="newIsMainPrice"
+                      type="checkbox"
+                      checked={newIsMainPrice}
+                      onChange={(e) => {
+                        const checked = e.target.checked;
+                        setNewIsMainPrice(checked);
+                        if (checked && basePrice > 0) {
+                          setNewPrice(basePrice.toString());
+                        }
+                      }}
+                      className={`mt-0.5 rounded text-[#105E53] ${primaryRing}`}
+                    />
+                    <label htmlFor="newIsMainPrice" className="text-xs text-gray-700 cursor-pointer">
+                      <span className="font-medium">Set as main storefront default size</span>
+                      <span className="block text-[11px] text-gray-500">
+                        Must match the product sales amount ({currency} {Number(basePrice).toFixed(2)}) and will be selected by default on the product detail page.
+                      </span>
+                    </label>
+                  </div>
+                )}
+
+                <div className="flex items-center gap-2">
+                  <input
+                    id="newIsAvailable"
+                    type="checkbox"
+                    checked={newIsAvailable}
+                    onChange={(e) => setNewIsAvailable(e.target.checked)}
+                    className={`rounded text-[#105E53] ${primaryRing}`}
+                  />
+                  <label htmlFor="newIsAvailable" className="text-xs text-gray-700 cursor-pointer font-medium">
+                    Available for purchase
+                  </label>
+                </div>
               </div>
 
               {/* Modal footer */}
@@ -936,7 +1076,13 @@ export default function ProductSizeOptionsManager({
                     min="0.01"
                     step="0.01"
                     value={editPrice}
-                    onChange={(e) => setEditPrice(e.target.value)}
+                    onChange={(e) => {
+                      const val = e.target.value;
+                      setEditPrice(val);
+                      if (basePrice > 0 && parseFloat(val) !== Number(basePrice)) {
+                        setEditIsMainPrice(false);
+                      }
+                    }}
                     onKeyDown={(e) => {
                       if (e.key === 'Enter') {
                         e.preventDefault();
@@ -950,17 +1096,43 @@ export default function ProductSizeOptionsManager({
                 </div>
               </div>
 
-              <div className="flex items-center gap-2 pt-1">
-                <input
-                  id="editIsAvailable"
-                  type="checkbox"
-                  checked={editIsAvailable}
-                  onChange={(e) => setEditIsAvailable(e.target.checked)}
-                  className={`rounded text-[#105E53] ${primaryRing}`}
-                />
-                <label htmlFor="editIsAvailable" className="text-xs text-gray-700 cursor-pointer font-medium">
-                  Available for purchase
-                </label>
+              <div className="space-y-2 pt-1">
+                {basePrice > 0 && (
+                  <div className="flex items-start gap-2">
+                    <input
+                      id="editIsMainPrice"
+                      type="checkbox"
+                      checked={editIsMainPrice}
+                      onChange={(e) => {
+                        const checked = e.target.checked;
+                        setEditIsMainPrice(checked);
+                        if (checked && basePrice > 0) {
+                          setEditPrice(basePrice.toString());
+                        }
+                      }}
+                      className={`mt-0.5 rounded text-[#105E53] ${primaryRing}`}
+                    />
+                    <label htmlFor="editIsMainPrice" className="text-xs text-gray-700 cursor-pointer">
+                      <span className="font-medium">Set as main storefront default size</span>
+                      <span className="block text-[11px] text-gray-500">
+                        Must match the product sales amount ({currency} {Number(basePrice).toFixed(2)}) and will be selected by default on the product detail page.
+                      </span>
+                    </label>
+                  </div>
+                )}
+
+                <div className="flex items-center gap-2">
+                  <input
+                    id="editIsAvailable"
+                    type="checkbox"
+                    checked={editIsAvailable}
+                    onChange={(e) => setEditIsAvailable(e.target.checked)}
+                    className={`rounded text-[#105E53] ${primaryRing}`}
+                  />
+                  <label htmlFor="editIsAvailable" className="text-xs text-gray-700 cursor-pointer font-medium">
+                    Available for purchase
+                  </label>
+                </div>
               </div>
 
               <div className="pt-4 border-t border-gray-100 flex items-center justify-end gap-2.5">

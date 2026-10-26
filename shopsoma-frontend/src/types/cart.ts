@@ -46,6 +46,12 @@ export interface ApplyCouponParams {
   code: string;
 }
 
+export interface SyncCartItemPriceUpdate {
+  product_id: string;
+  variant_id?: string | null;
+  unit_price: number;
+}
+
 export interface CartState {
   cart: Cart;
   isLoading: boolean;
@@ -58,6 +64,7 @@ export interface CartState {
   updateVariant: (params: UpdateVariantParams) => void;
   clearCart: () => void;
   applyCoupon: (params: ApplyCouponParams) => Promise<void>;
+  syncItemPrices?: (updates: SyncCartItemPriceUpdate[]) => void;
 
   // Sync
   syncWithServer: () => Promise<void>;

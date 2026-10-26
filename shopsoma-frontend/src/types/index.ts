@@ -98,6 +98,7 @@ export interface ProductVariant {
   stock: number;
   sku?: string;
   is_available: boolean;
+  inherits_price?: boolean | null;
 }
 
 export interface ProductImage {
@@ -144,10 +145,10 @@ export interface Variation {
   title: string;
   type?: string;
   color_hex?: string;
-  price?: number;
-  sale_price?: number;
-  inherits_price?: boolean;
-  inherits_sale_price?: boolean;
+  price?: number | null;
+  sale_price?: number | null;
+  inherits_price?: boolean | null;
+  inherits_sale_price?: boolean | null;
   images: string[];
   is_active?: boolean;
   size_stocks: SizeStock[];

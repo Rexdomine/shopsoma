@@ -347,3 +347,51 @@ async def test_create_variant_duplicate_size_rejected(
     )
     assert dup_admin.status_code == 400, dup_admin.text
 
+
+
+async def test_mark_size_variant_as_main_storefront_price_enforces_base_price_and_unmarks_others(
+    client,
+    db_session,
+    vendor_user,
+    sample_product,
+):
+    sample_product.base_price = Decimal("100.00")
+    v10 = ProductVariant(
+        id=uuid.uuid4(),
+        product_id=sample_product.id,
+        size="10",
+        price=Decimal("60.00"),
+        stock=5,
+        inherits_price=False,
+    )
+    v14 = ProductVariant(
+        id=uuid.uuid4(),
+        product_id=sample_product.id,
+        size="14",
+        price=Decimal("100.00"),
+        stock=5,
+        inherits_price=True,
+    )
+    db_session.add_all([v10, v14])
+    await db_session.commit()
+
+    # Rejects marking as main storefront price if explicit price != base_price
+    bad_res = await client.put(
+        f"/api/v1/products/{sample_product.id}/variants/{v10.id}",
+        json={"price": "60.00", "inherits_price": True},
+        headers=vendor_user["headers"],
+    )
+    assert bad_res.status_code == 400
+
+    # Marking v10 as main storefront price with base_price succeeds and unmarks v14
+    ok_res = await client.put(
+        f"/api/v1/products/{sample_product.id}/variants/{v10.id}",
+        json={"price": "100.00", "inherits_price": True},
+        headers=vendor_user["headers"],
+    )
+    assert ok_res.status_code == 200, ok_res.text
+    await db_session.refresh(v10)
+    await db_session.refresh(v14)
+    assert v10.price == Decimal("100.00")
+    assert v10.inherits_price is True
+    assert v14.inherits_price is False

@@ -1596,4 +1596,158 @@ describe('Checkout M5 sequencing and recovery', () => {
     fireEvent.click(retryButton);
     expect(await screen.findByText(/No matching Google Maps addresses found/i)).toBeInTheDocument();
   });
+
+  it('requires explicit re-confirmation when review quote detects a price change from the bag price', async () => {
+    mocks.reviewOrder.mockResolvedValueOnce({
+      summary: {
+        currency: 'NGN',
+        subtotal: 49980,
+        shipping_cost: 8000,
+        tax_amount: 4348.5,
+        discount_amount: 0,
+        total_amount: 62328.5,
+        items_count: 1,
+      },
+      items: [
+        {
+          product_id: 'product-1',
+          product_title: 'Adaeze Trousers',
+          variant_id: 'variant-blue-10',
+          unit_price: 49980,
+          currency: 'NGN',
+          quantity: 1,
+          subtotal: 49980,
+          vendor_name: 'Shopsoma',
+          previous_unit_price: 60000,
+          price_changed: true,
+        },
+      ],
+      checkout_quote: {
+        quote_token: 'quote-review-49980',
+        issued_at: '2026-10-23T15:00:00Z',
+        expires_at: '2026-10-23T15:15:00Z',
+        ttl_seconds: 900,
+        currency: 'NGN',
+        subtotal: '49980.00',
+        shipping_cost: '8000.00',
+        tax_amount: '4348.50',
+        discount_amount: '0.00',
+        total_amount: '62328.50',
+        items: [
+          {
+            product_id: 'product-1',
+            variant_id: null,
+            product_title: 'Adaeze Trousers',
+            quantity: 1,
+            currency: 'NGN',
+            unit_price: '49980.00',
+            subtotal: '49980.00',
+            previous_unit_price: '60000.00',
+            price_changed: true,
+          },
+        ],
+        has_price_changes: true,
+        price_change_message:
+          'Item prices have changed since you last reviewed your bag. Please review and confirm the updated prices before placing your order.',
+      },
+    });
+
+    render(<MemoryRouter initialEntries={['/checkout']}><CheckoutTestRoutes /></MemoryRouter>);
+    await waitFor(() => expect(mocks.getAddresses).toHaveBeenCalled());
+    fireEvent.click(screen.getByRole('button', { name: 'Continue' }));
+    await screen.findByText('Standard');
+    const continueButtons = screen.getAllByRole('button', { name: 'Continue' });
+    fireEvent.click(continueButtons[continueButtons.length - 1]);
+    await waitFor(() => expect(mocks.reviewOrder).toHaveBeenCalledTimes(1));
+    expect(mocks.reviewOrder.mock.calls[0][0].items[0].expected_unit_price).toBe(60000);
+
+    // Price-change alert is shown and Purchase buttons are disabled until confirmed
+    expect(await screen.findByRole('alert')).toHaveTextContent(/Item prices have changed/i);
+    expect(screen.getByTestId('quoted-line-items')).toHaveTextContent('Adaeze Trousers × 1');
+    const purchaseButtons = screen.getAllByRole('button', { name: 'Purchase' });
+    purchaseButtons.forEach((btn) => expect(btn).toBeDisabled());
+    expect(mocks.createOrder).not.toHaveBeenCalled();
+
+    // Confirm updated price enables Purchase and submits the accepted quote token
+    fireEvent.click(screen.getByRole('button', { name: 'Confirm updated price' }));
+    await waitFor(() => expect(screen.getAllByRole('button', { name: 'Purchase' })[0]).toBeEnabled());
+    fireEvent.click(screen.getAllByRole('button', { name: 'Purchase' })[0]);
+
+    await waitFor(() => expect(mocks.createOrder).toHaveBeenCalledTimes(1));
+    expect(mocks.createOrder.mock.calls[0][0].checkout_quote_token).toBe('quote-review-49980');
+    expect(mocks.createOrder.mock.calls[0][0].items[0].expected_unit_price).toBe(49980);
+  });
+
+  it('blocks order creation on 409 price conflict and requires re-confirmation before creating the order', async () => {
+    mocks.createOrder
+      .mockRejectedValueOnce({
+        response: {
+          status: 409,
+          data: {
+            detail: {
+              code: 'checkout_price_changed',
+              message:
+                'Item prices have changed since you last reviewed your bag. Please review and confirm the updated prices before placing your order.',
+              price_changes: [
+                {
+                  product_id: 'product-1',
+                  variant_id: null,
+                  product_title: 'Dress',
+                  previous_unit_price: '60000.00',
+                  current_unit_price: '49980.00',
+                  currency: 'NGN',
+                },
+              ],
+              checkout_quote: {
+                quote_token: 'quote-409-fresh',
+                issued_at: '2026-10-23T15:00:00Z',
+                expires_at: '2026-10-23T15:15:00Z',
+                ttl_seconds: 900,
+                currency: 'NGN',
+                subtotal: '49980.00',
+                shipping_cost: '2500.00',
+                tax_amount: '3936.00',
+                discount_amount: '0.00',
+                total_amount: '56416.00',
+                items: [
+                  {
+                    product_id: 'product-1',
+                    variant_id: null,
+                    product_title: 'Dress',
+                    quantity: 1,
+                    currency: 'NGN',
+                    unit_price: '49980.00',
+                    subtotal: '49980.00',
+                    previous_unit_price: '60000.00',
+                    price_changed: true,
+                  },
+                ],
+                has_price_changes: true,
+                price_change_message:
+                  'Item prices have changed since you last reviewed your bag. Please review and confirm the updated prices before placing your order.',
+              },
+            },
+          },
+        },
+      })
+      .mockResolvedValueOnce({
+        ...order,
+        subtotal: 49980,
+        total_amount: 56416,
+      });
+
+    await reachPaymentStep();
+    expect(mocks.createCheckoutEstimate).not.toHaveBeenCalled();
+    expect(await screen.findByRole('alert')).toHaveTextContent(/Item prices have changed/i);
+    expect(screen.getAllByRole('button', { name: 'Purchase' })[0]).toBeDisabled();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Confirm updated price' }));
+    await waitFor(() => expect(screen.getAllByRole('button', { name: 'Purchase' })[0]).toBeEnabled());
+    fireEvent.click(screen.getAllByRole('button', { name: 'Purchase' })[0]);
+
+    await waitFor(() => expect(mocks.createOrder).toHaveBeenCalledTimes(2));
+    expect(mocks.createOrder.mock.calls[1][0].checkout_quote_token).toBe('quote-409-fresh');
+    expect(mocks.createOrder.mock.calls[1][0].items[0].expected_unit_price).toBe(49980);
+    expect(mocks.createCheckoutEstimate).toHaveBeenCalledTimes(1);
+  });
 });

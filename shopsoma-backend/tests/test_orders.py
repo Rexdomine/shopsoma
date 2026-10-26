@@ -603,3 +603,472 @@ async def test_review_order_with_bare_made_to_order_variation(
     assert response.json()["items"][0]["variant_details"]["variation_id"] == str(
         variation.id
     )
+
+
+@pytest.mark.asyncio
+async def test_review_order_returns_checkout_quote_and_detects_stale_cart_price(
+    client: AsyncClient,
+    db_session: AsyncSession,
+    vendor_user,
+):
+    """Review order should issue a server-authoritative quote and flag stale storefront/cart prices."""
+    from app.models.product import (
+        Product,
+        ProductStatus,
+        ModerationStatus,
+        Variation,
+        SizeStock,
+        SizeEnum,
+    )
+    from app.models.shipping_rate import ShippingRate
+    import uuid
+
+    product = Product(
+        id=uuid.uuid4(),
+        vendor_id=vendor_user["vendor"].id,
+        title="Adaeze Trousers",
+        description="Inherited sale price variation regression",
+        base_price=49980.00,
+        compare_at_price=99960.00,
+        currency="NGN",
+        total_stock=10,
+        status=ProductStatus.ACTIVE,
+        moderation_status=ModerationStatus.APPROVED,
+    )
+    variation = Variation(
+        id=uuid.uuid4(),
+        product_id=product.id,
+        title="Blue",
+        type="color",
+        color_hex="#0000FF",
+        price=99960.00,
+        sale_price=83300.00,
+        inherits_price=True,
+        inherits_sale_price=True,
+        is_active=True,
+    )
+    size_stock = SizeStock(
+        id=uuid.uuid4(),
+        variation_id=variation.id,
+        size=SizeEnum.M,
+        stock=5,
+    )
+    shipping_rate = ShippingRate(
+        id=uuid.uuid4(),
+        name="Standard",
+        description="Standard shipping",
+        base_rate=8000.00,
+        country="Nigeria",
+        state="Lagos",
+        is_active=True,
+        is_default=True,
+        priority=0,
+    )
+    db_session.add_all([product, variation, size_stock, shipping_rate])
+    await db_session.commit()
+
+    response = await client.post(
+        "/api/v1/orders/review",
+        json={
+            "currency": "NGN",
+            "items": [
+                {
+                    "product_id": str(product.id),
+                    "variant_id": str(size_stock.id),
+                    "quantity": 1,
+                    "expected_unit_price": 83300.00,
+                }
+            ],
+            "guest_address": {
+                "full_name": "Guest User",
+                "phone_number": "08000000000",
+                "address_line1": "123 Test Street",
+                "address_line2": "",
+                "city": "Lagos",
+                "state": "Lagos",
+                "postal_code": "100001",
+                "country": "Nigeria",
+            },
+        },
+    )
+
+    assert response.status_code == 200, response.text
+    data = response.json()
+    quote = data["checkout_quote"]
+    assert quote is not None
+    assert quote["has_price_changes"] is True
+    assert "changed" in quote["price_change_message"].lower()
+    assert quote["subtotal"] == "49980.00"
+    assert quote["shipping_cost"] == "8000.00"
+    assert quote["tax_amount"] == "4348.50"
+    assert quote["total_amount"] == "62328.50"
+    assert quote["items"][0]["unit_price"] == "49980.00"
+    assert quote["items"][0]["previous_unit_price"] == "83300.00"
+    assert quote["items"][0]["price_changed"] is True
+
+
+@pytest.mark.asyncio
+async def test_create_order_blocks_base_price_change_without_reconfirmation_and_succeeds_after_reconfirmation(
+    client: AsyncClient,
+    db_session: AsyncSession,
+    vendor_user,
+):
+    """Base-price change between review and order creation requires explicit re-confirmation."""
+    from app.models.order import Order
+    from app.models.product import Product, ProductStatus, ModerationStatus
+    from app.models.shipping_rate import ShippingRate
+    import uuid
+
+    product = Product(
+        id=uuid.uuid4(),
+        vendor_id=vendor_user["vendor"].id,
+        title="Base Price Dress",
+        description="Single product base price change test",
+        base_price=80000.00,
+        currency="NGN",
+        total_stock=5,
+        status=ProductStatus.ACTIVE,
+        moderation_status=ModerationStatus.APPROVED,
+    )
+    shipping_rate = ShippingRate(
+        id=uuid.uuid4(),
+        name="Standard",
+        description="Standard shipping",
+        base_rate=8000.00,
+        country="Nigeria",
+        state="Lagos",
+        is_active=True,
+        is_default=True,
+        priority=0,
+    )
+    db_session.add_all([product, shipping_rate])
+    await db_session.commit()
+
+    guest_address = {
+        "full_name": "Guest User",
+        "phone_number": "08000000000",
+        "address_line1": "123 Test Street",
+        "address_line2": "",
+        "city": "Lagos",
+        "state": "Lagos",
+        "postal_code": "100001",
+        "country": "Nigeria",
+    }
+
+    review_resp = await client.post(
+        "/api/v1/orders/review",
+        json={
+            "currency": "NGN",
+            "items": [
+                {
+                    "product_id": str(product.id),
+                    "quantity": 1,
+                    "expected_unit_price": 80000.00,
+                }
+            ],
+            "guest_address": guest_address,
+        },
+    )
+    assert review_resp.status_code == 200
+    initial_quote = review_resp.json()["checkout_quote"]
+    assert initial_quote["has_price_changes"] is False
+
+    # Base price changes in the database before order creation
+    product.base_price = 65000.00
+    await db_session.commit()
+
+    conflict_resp = await client.post(
+        "/api/v1/orders",
+        json={
+            "currency": "NGN",
+            "items": [
+                {
+                    "product_id": str(product.id),
+                    "quantity": 1,
+                    "expected_unit_price": 80000.00,
+                }
+            ],
+            "guest_address": guest_address,
+            "customer_email": "basechange@example.com",
+            "checkout_quote_token": initial_quote["quote_token"],
+        },
+    )
+    assert conflict_resp.status_code == 409, conflict_resp.text
+    detail = conflict_resp.json()["detail"]
+    assert detail["code"] == "checkout_price_changed"
+    assert detail["price_changes"][0]["previous_unit_price"] == "80000.00"
+    assert detail["price_changes"][0]["current_unit_price"] == "65000.00"
+
+    # Ensure no order was persisted and stock was not decremented
+    orders_in_db = (await db_session.execute(select(Order))).scalars().all()
+    assert len(orders_in_db) == 0
+    await db_session.refresh(product)
+    assert product.total_stock == 5
+
+    # Re-confirm with the updated quote returned in the 409 payload
+    updated_quote = detail["checkout_quote"]
+    confirmed_resp = await client.post(
+        "/api/v1/orders",
+        json={
+            "currency": "NGN",
+            "items": [
+                {
+                    "product_id": str(product.id),
+                    "quantity": 1,
+                    "expected_unit_price": 65000.00,
+                }
+            ],
+            "guest_address": guest_address,
+            "customer_email": "basechange@example.com",
+            "checkout_quote_token": updated_quote["quote_token"],
+        },
+    )
+    assert confirmed_resp.status_code == 201, confirmed_resp.text
+    created_order = confirmed_resp.json()
+    assert created_order["subtotal"] == updated_quote["subtotal"]
+    assert created_order["total_amount"] == updated_quote["total_amount"]
+    assert created_order["items"][0]["unit_price"] == "65000.00"
+
+
+@pytest.mark.asyncio
+async def test_create_order_blocks_variant_price_change_and_matches_accepted_quote_total(
+    client: AsyncClient,
+    db_session: AsyncSession,
+    vendor_user,
+):
+    """Variant/variation price change during checkout requires re-confirmation and persists the accepted quote total."""
+    from app.models.product import (
+        Product,
+        ProductStatus,
+        ModerationStatus,
+        Variation,
+        SizeStock,
+        SizeEnum,
+    )
+    from app.models.shipping_rate import ShippingRate
+    import uuid
+
+    product = Product(
+        id=uuid.uuid4(),
+        vendor_id=vendor_user["vendor"].id,
+        title="Adaeze Trousers",
+        description="Variant price change during checkout",
+        base_price=83300.00,
+        compare_at_price=99960.00,
+        currency="NGN",
+        total_stock=10,
+        status=ProductStatus.ACTIVE,
+        moderation_status=ModerationStatus.APPROVED,
+    )
+    variation = Variation(
+        id=uuid.uuid4(),
+        product_id=product.id,
+        title="Blue",
+        type="color",
+        color_hex="#0000FF",
+        price=99960.00,
+        sale_price=83300.00,
+        inherits_price=False,
+        inherits_sale_price=False,
+        is_active=True,
+    )
+    size_stock = SizeStock(
+        id=uuid.uuid4(),
+        variation_id=variation.id,
+        size=SizeEnum.S,
+        stock=4,
+    )
+    shipping_rate = ShippingRate(
+        id=uuid.uuid4(),
+        name="Standard",
+        description="Standard shipping",
+        base_rate=8000.00,
+        country="Nigeria",
+        state="Lagos",
+        is_active=True,
+        is_default=True,
+        priority=0,
+    )
+    db_session.add_all([product, variation, size_stock, shipping_rate])
+    await db_session.commit()
+
+    guest_address = {
+        "full_name": "Adaeze Shopper",
+        "phone_number": "08000000000",
+        "address_line1": "123 Test Street",
+        "address_line2": "",
+        "city": "Lagos",
+        "state": "Lagos",
+        "postal_code": "100001",
+        "country": "Nigeria",
+    }
+
+    review_resp = await client.post(
+        "/api/v1/orders/review",
+        json={
+            "currency": "NGN",
+            "items": [
+                {
+                    "product_id": str(product.id),
+                    "variant_id": str(size_stock.id),
+                    "quantity": 1,
+                    "expected_unit_price": 83300.00,
+                }
+            ],
+            "guest_address": guest_address,
+        },
+    )
+    assert review_resp.status_code == 200
+    initial_quote = review_resp.json()["checkout_quote"]
+    assert initial_quote["subtotal"] == "83300.00"
+
+    # Variant sale price changes to 49,980 before order creation
+    variation.sale_price = 49980.00
+    await db_session.commit()
+
+    conflict_resp = await client.post(
+        "/api/v1/orders",
+        json={
+            "currency": "NGN",
+            "items": [
+                {
+                    "product_id": str(product.id),
+                    "variant_id": str(size_stock.id),
+                    "quantity": 1,
+                    "expected_unit_price": 83300.00,
+                }
+            ],
+            "guest_address": guest_address,
+            "customer_email": "adaeze@example.com",
+            "checkout_quote_token": initial_quote["quote_token"],
+        },
+    )
+    assert conflict_resp.status_code == 409, conflict_resp.text
+    detail = conflict_resp.json()["detail"]
+    assert detail["code"] == "checkout_price_changed"
+    assert detail["price_changes"][0]["previous_unit_price"] == "83300.00"
+    assert detail["price_changes"][0]["current_unit_price"] == "49980.00"
+
+    updated_quote = detail["checkout_quote"]
+    assert updated_quote["subtotal"] == "49980.00"
+    assert updated_quote["shipping_cost"] == "8000.00"
+    assert updated_quote["tax_amount"] == "4348.50"
+    assert updated_quote["total_amount"] == "62328.50"
+
+    # Re-confirm with the accepted quote
+    confirmed_resp = await client.post(
+        "/api/v1/orders",
+        json={
+            "currency": "NGN",
+            "items": [
+                {
+                    "product_id": str(product.id),
+                    "variant_id": str(size_stock.id),
+                    "quantity": 1,
+                    "expected_unit_price": 49980.00,
+                }
+            ],
+            "guest_address": guest_address,
+            "customer_email": "adaeze@example.com",
+            "checkout_quote_token": updated_quote["quote_token"],
+        },
+    )
+    assert confirmed_resp.status_code == 201, confirmed_resp.text
+    order_data = confirmed_resp.json()
+    assert order_data["subtotal"] == "49980.00"
+    assert order_data["total_amount"] == "62328.50"
+    assert order_data["items"][0]["unit_price"] == "49980.00"
+
+
+@pytest.mark.asyncio
+async def test_create_order_rejects_expired_checkout_quote_token(
+    client: AsyncClient,
+    db_session: AsyncSession,
+    vendor_user,
+):
+    """An expired checkout quote token must be rejected with 409 and a fresh quote."""
+    from datetime import timedelta
+    from decimal import Decimal
+    from app.api.v1.orders import build_checkout_quote
+    from app.models.product import Product, ProductStatus, ModerationStatus
+    from app.models.shipping_rate import ShippingRate
+    import uuid
+
+    product = Product(
+        id=uuid.uuid4(),
+        vendor_id=vendor_user["vendor"].id,
+        title="Quote Expiry Product",
+        description="Product for expired quote test",
+        base_price=50000.00,
+        currency="NGN",
+        total_stock=5,
+        status=ProductStatus.ACTIVE,
+        moderation_status=ModerationStatus.APPROVED,
+    )
+    shipping_rate = ShippingRate(
+        id=uuid.uuid4(),
+        name="Standard",
+        description="Standard shipping",
+        base_rate=2000.00,
+        country="Nigeria",
+        state="Lagos",
+        is_active=True,
+        is_default=True,
+        priority=0,
+    )
+    db_session.add_all([product, shipping_rate])
+    await db_session.commit()
+
+    expired_quote = build_checkout_quote(
+        items=[
+            {
+                "product_id": str(product.id),
+                "variant_id": None,
+                "product_title": product.title,
+                "variant_details": None,
+                "quantity": 1,
+                "currency": "NGN",
+                "unit_price": Decimal("50000.00"),
+                "subtotal": Decimal("50000.00"),
+            }
+        ],
+        currency="NGN",
+        subtotal=Decimal("50000.00"),
+        shipping_cost=Decimal("2000.00"),
+        tax_amount=Decimal("3900.00"),
+        discount_amount=Decimal("0.00"),
+        total_amount=Decimal("55900.00"),
+        shipping_rate_id=str(shipping_rate.id),
+        now=datetime.now(timezone.utc) - timedelta(hours=1),
+    )
+
+    resp = await client.post(
+        "/api/v1/orders",
+        json={
+            "currency": "NGN",
+            "items": [
+                {
+                    "product_id": str(product.id),
+                    "quantity": 1,
+                    "expected_unit_price": 50000.00,
+                }
+            ],
+            "guest_address": {
+                "full_name": "Guest User",
+                "phone_number": "08000000000",
+                "address_line1": "123 Test Street",
+                "address_line2": "",
+                "city": "Lagos",
+                "state": "Lagos",
+                "postal_code": "100001",
+                "country": "Nigeria",
+            },
+            "customer_email": "expiredquote@example.com",
+            "checkout_quote_token": expired_quote.quote_token,
+        },
+    )
+    assert resp.status_code == 409, resp.text
+    detail = resp.json()["detail"]
+    assert detail["code"] == "checkout_quote_expired"
+    assert detail["checkout_quote"]["quote_token"] != expired_quote.quote_token
+

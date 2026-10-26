@@ -6,7 +6,7 @@ import { Link, useLocation, useNavigate } from 'react-router-dom';
 import Layout from '../../components/layout/Layout';
 import { ROUTES } from '../../config/constants';
 import { NIGERIA_STATES } from '../../config/nigeriaStates';
-import { checkoutService, type Address, type ShippingRate, type OrderReview, type CreateAddressData, type CheckoutEstimate, type Order } from '../../services/checkoutService';
+import { checkoutService, type Address, type ShippingRate, type OrderReview, type CreateAddressData, type CheckoutEstimate, type CheckoutQuote, type Order } from '../../services/checkoutService';
 import {
   fetchAddressSuggestions,
   resolveAddressSuggestion,
@@ -102,6 +102,7 @@ export default function Checkout() {
 
   // Use cart from store so it updates when synced after login
   const cart = useCartStore((state) => state.cart);
+  const syncItemPrices = useCartStore((state) => state.syncItemPrices);
 
   // Address state
   const [addresses, setAddresses] = useState<Address[]>([]);
@@ -317,6 +318,11 @@ export default function Checkout() {
 
   // Order review state
   const [orderReview, setOrderReview] = useState<OrderReview | null>(null);
+  const [checkoutQuote, setCheckoutQuote] = useState<CheckoutQuote | null>(null);
+  const [priceChangeNotice, setPriceChangeNotice] = useState<{
+    message: string;
+    quote: CheckoutQuote;
+  } | null>(null);
 
   // Payment state
   const [paymentMethod, setPaymentMethod] = useState<PaymentGateway>('paystack');
@@ -528,6 +534,37 @@ export default function Checkout() {
       // Reset form
       resetNewAddress();
     } catch (error: any) {
+      if (error?.response?.status === 401 || error?.response?.status === 403) {
+        // Session expired and could not be refreshed; fall back to guest checkout address so the customer can continue
+        const guestAddress: Address = {
+          id: 'guest-address',
+          user_id: 'guest',
+          full_name: newAddress.full_name.trim(),
+          phone_number: newAddress.phone_number.trim(),
+          address_line1: newAddress.address_line1.trim(),
+          address_line2: newAddress.address_line2?.trim() || '',
+          city: newAddress.city.trim(),
+          state: normalizedState,
+          postal_code: normalizedPostalCode,
+          country: normalizedCountry,
+          address_type: newAddress.address_type,
+          is_default: newAddress.is_default,
+          created_at: new Date().toISOString(),
+          updated_at: new Date().toISOString(),
+        };
+        setIsGuestCheckout(true);
+        setAddresses([guestAddress]);
+        setSelectedAddressId(guestAddress.id);
+        setShowNewAddressForm(false);
+        setEditingAddressId(null);
+        setShippingRates([]);
+        setSelectedShippingRateId('');
+        setOrderReview(null);
+        setCurrentOrderId('');
+        setStep('address');
+        resetAutocompleteState();
+        return;
+      }
       console.error('Error creating address:', error);
       alert(error.response?.data?.detail || 'Failed to create address. Please try again.');
     } finally {
@@ -605,6 +642,113 @@ export default function Checkout() {
     }
   };
 
+  const getExpectedUnitPrice = (item: (typeof cart.items)[number]): number => {
+    const normalizedVariantId =
+      !item.variant?.id || item.variant.id.startsWith('default-') ? null : item.variant.id;
+    const quotedItem = checkoutQuote?.items?.find(
+      (qi) =>
+        qi.product_id === item.product_id &&
+        (qi.variant_id || null) === normalizedVariantId
+    );
+    if (quotedItem && checkoutQuote?.currency === currency) {
+      return Number(quotedItem.unit_price);
+    }
+    const reviewedItem = orderReview?.items?.find(
+      (ri) =>
+        ri.product_id === item.product_id &&
+        (ri.variant_id || null) === normalizedVariantId
+    );
+    if (reviewedItem && orderReview?.summary?.currency === currency) {
+      return Number(reviewedItem.unit_price);
+    }
+    return convertCurrencyWithRates(
+      Number(item.price),
+      item.product?.currency || 'NGN',
+      currency,
+      exchangeRates
+    );
+  };
+
+  const syncCartFromQuote = (quote: CheckoutQuote) => {
+    if (!quote?.items?.length || !syncItemPrices) return;
+    const updates = cart.items
+      .map((cartItem) => {
+        const normalizedVariantId =
+          !cartItem.variant?.id || cartItem.variant.id.startsWith('default-')
+            ? null
+            : cartItem.variant.id;
+        const match = quote.items.find(
+          (qi) =>
+            qi.product_id === cartItem.product_id &&
+            (qi.variant_id || null) === normalizedVariantId
+        );
+        if (!match) return null;
+        const itemCurrency = cartItem.product?.currency || 'NGN';
+        const priceInItemCurrency = convertCurrencyWithRates(
+          Number(match.unit_price),
+          quote.currency,
+          itemCurrency,
+          exchangeRates
+        );
+        return {
+          product_id: cartItem.product_id,
+          variant_id: cartItem.variant?.id,
+          unit_price: priceInItemCurrency,
+        };
+      })
+      .filter((u): u is NonNullable<typeof u> => u !== null);
+    syncItemPrices(updates);
+  };
+
+  const handleConfirmUpdatedPrice = () => {
+    if (!priceChangeNotice) return;
+    const acceptedQuote = priceChangeNotice.quote;
+    setCheckoutQuote({
+      ...acceptedQuote,
+      has_price_changes: false,
+      price_change_message: null,
+    });
+    syncCartFromQuote(acceptedQuote);
+    if (orderReview || !secureShipping) {
+      setOrderReview((prev) => ({
+        summary: {
+          currency: acceptedQuote.currency,
+          subtotal: Number(acceptedQuote.subtotal),
+          shipping_cost: Number(acceptedQuote.shipping_cost),
+          tax_amount: Number(acceptedQuote.tax_amount),
+          discount_amount: Number(acceptedQuote.discount_amount),
+          total_amount: Number(acceptedQuote.total_amount),
+          items_count: acceptedQuote.items.reduce((sum, i) => sum + i.quantity, 0),
+          estimated_delivery_days: prev?.summary.estimated_delivery_days,
+        },
+        items: acceptedQuote.items.map((item) => ({
+          product_id: item.product_id,
+          product_title: item.product_title,
+          variant_id: item.variant_id ?? undefined,
+          variant_details: item.variant_details ?? undefined,
+          unit_price: Number(item.unit_price),
+          currency: acceptedQuote.currency,
+          quantity: item.quantity,
+          subtotal: Number(item.subtotal),
+          vendor_name: '',
+          previous_unit_price:
+            item.previous_unit_price !== null && item.previous_unit_price !== undefined
+              ? Number(item.previous_unit_price)
+              : null,
+          price_changed: false,
+        })),
+        shipping_rate: prev?.shipping_rate,
+        applied_promo: prev?.applied_promo,
+        checkout_quote: {
+          ...acceptedQuote,
+          has_price_changes: false,
+          price_change_message: null,
+        },
+      }));
+    }
+    setPriceChangeNotice(null);
+  };
+
   const handleReviewOrder = async (): Promise<OrderReview | null> => {
     if (!selectedAddressId) return null;
 
@@ -613,6 +757,7 @@ export default function Checkout() {
         product_id: item.product_id,
         variant_id: !item.variant?.id || item.variant.id.startsWith('default-') ? null : item.variant.id,
         quantity: item.quantity,
+        expected_unit_price: getExpectedUnitPrice(item),
       }));
 
       // Get selected address
@@ -624,6 +769,7 @@ export default function Checkout() {
         currency,
         shipping_rate_id: secureShipping ? undefined : selectedShippingRateId || undefined,
         promo_code: appliedPromo?.code,
+        ...(checkoutQuote?.quote_token ? { quote_token: checkoutQuote.quote_token } : {}),
       };
 
       if (isGuestCheckout && selectedAddress && selectedAddress.id === 'guest-address') {
@@ -644,6 +790,23 @@ export default function Checkout() {
       }
 
       const review = await checkoutService.reviewOrder(reviewRequest);
+
+      if (review?.checkout_quote) {
+        setCheckoutQuote(review.checkout_quote);
+        syncCartFromQuote(review.checkout_quote);
+        if (review.checkout_quote.has_price_changes) {
+          setPriceChangeNotice({
+            message:
+              review.checkout_quote.price_change_message ||
+              'Item prices have changed since you last reviewed your bag. Please review and confirm the updated prices before placing your order.',
+            quote: review.checkout_quote,
+          });
+        } else {
+          setPriceChangeNotice(null);
+        }
+      } else {
+        setPriceChangeNotice(null);
+      }
 
       setOrderReview(review);
       return review;
@@ -671,6 +834,8 @@ export default function Checkout() {
     setEnforcedOrder(null);
     setLegacyOrderNeedsConfirmation(false);
     setCheckoutEstimate(null);
+    setCheckoutQuote(null);
+    setPriceChangeNotice(null);
     setShowStripePaymentModal(false);
     setStripeClientSecret('');
     setStripePaymentIntentId('');
@@ -696,6 +861,8 @@ export default function Checkout() {
       }
       discardExpiredCheckout();
       setOrderReview(null);
+      setCheckoutQuote(null);
+      setPriceChangeNotice(null);
       setSelectedShippingRateId('');
       setCurrency(nextCurrency);
       setStep(selectedAddressId ? 'shipping' : 'address');
@@ -704,6 +871,8 @@ export default function Checkout() {
       if (terminalAuthorization) {
         discardExpiredCheckout();
         setOrderReview(null);
+        setCheckoutQuote(null);
+        setPriceChangeNotice(null);
         setSelectedShippingRateId('');
         setCurrency(nextCurrency);
         setStep(selectedAddressId ? 'shipping' : 'address');
@@ -895,7 +1064,7 @@ export default function Checkout() {
   };
 
   const handlePurchase = async () => {
-    if (!selectedAddressId || (!secureShipping && !orderReview) || enforcedOrder) return;
+    if (!selectedAddressId || (!secureShipping && !orderReview) || enforcedOrder || priceChangeNotice) return;
 
     setIsCreatingOrder(true);
     try {
@@ -903,13 +1072,16 @@ export default function Checkout() {
         product_id: item.product_id,
         variant_id: !item.variant?.id || item.variant.id.startsWith('default-') ? null : item.variant.id,
         quantity: item.quantity,
+        expected_unit_price: getExpectedUnitPrice(item),
       }));
       const selectedAddress = addresses.find(addr => addr.id === selectedAddressId);
+      const quoteToken = checkoutQuote?.quote_token || orderReview?.checkout_quote?.quote_token;
       const orderRequest: any = {
         items,
         currency,
         shipping_rate_id: secureShipping ? undefined : selectedShippingRateId || undefined,
         promo_code: appliedPromo?.code,
+        ...(quoteToken ? { checkout_quote_token: quoteToken } : {}),
       };
 
       if (isGuestCheckout && selectedAddress?.id === 'guest-address') {
@@ -960,6 +1132,53 @@ export default function Checkout() {
         discardExpiredCheckout();
       }
       const detail = error.response?.data?.detail;
+      if (error.response?.status === 409 && detail && typeof detail === 'object' && detail.checkout_quote) {
+        const quote = detail.checkout_quote as CheckoutQuote;
+        setCheckoutQuote(quote);
+        syncCartFromQuote(quote);
+        if (orderReview || !secureShipping) {
+          setOrderReview((prev) => ({
+            summary: {
+              currency: quote.currency,
+              subtotal: Number(quote.subtotal),
+              shipping_cost: Number(quote.shipping_cost),
+              tax_amount: Number(quote.tax_amount),
+              discount_amount: Number(quote.discount_amount),
+              total_amount: Number(quote.total_amount),
+              items_count: quote.items.reduce((sum, i) => sum + i.quantity, 0),
+              estimated_delivery_days: prev?.summary.estimated_delivery_days,
+            },
+            items: quote.items.map((item) => ({
+              product_id: item.product_id,
+              product_title: item.product_title,
+              variant_id: item.variant_id ?? undefined,
+              variant_details: item.variant_details ?? undefined,
+              unit_price: Number(item.unit_price),
+              currency: quote.currency,
+              quantity: item.quantity,
+              subtotal: Number(item.subtotal),
+              vendor_name: '',
+              previous_unit_price:
+                item.previous_unit_price !== null && item.previous_unit_price !== undefined
+                  ? Number(item.previous_unit_price)
+                  : null,
+              price_changed: Boolean(item.price_changed),
+            })),
+            shipping_rate: prev?.shipping_rate,
+            applied_promo: prev?.applied_promo,
+            checkout_quote: quote,
+          }));
+        }
+        setPriceChangeNotice({
+          message:
+            detail.message ||
+            quote.price_change_message ||
+            'Item prices have changed since you last reviewed your bag. Please review and confirm the updated prices before placing your order.',
+          quote,
+        });
+        setIsCreatingOrder(false);
+        return;
+      }
       const errorMessage = typeof detail === 'string'
         ? detail
         : detail?.message || error.message || 'Failed to create order. Please try again.';
@@ -1017,6 +1236,8 @@ export default function Checkout() {
       );
       discardExpiredCheckout();
       setOrderReview(null);
+      setCheckoutQuote(null);
+      setPriceChangeNotice(null);
       setSelectedShippingRateId('');
       setStep('address');
     } catch (error: any) {
@@ -1024,6 +1245,8 @@ export default function Checkout() {
       if (terminalAuthorization) {
         discardExpiredCheckout();
         setOrderReview(null);
+        setCheckoutQuote(null);
+        setPriceChangeNotice(null);
         setSelectedShippingRateId('');
         setStep('address');
       }
@@ -1171,7 +1394,7 @@ export default function Checkout() {
   );
   const hasSelectedAddress = !!selectedAddressId;
   const hasSelectedShipping = !!selectedShippingRateId;
-  const canPurchase = paymentOptions.length > 0 && step === 'payment' && hasEmail && hasSelectedAddress && (secureShipping || (hasSelectedShipping && orderReview)) && !enforcedOrder;
+  const canPurchase = paymentOptions.length > 0 && step === 'payment' && hasEmail && hasSelectedAddress && (secureShipping || (hasSelectedShipping && orderReview)) && !enforcedOrder && !priceChangeNotice;
 
   const selectedShippingRate = shippingRates.find(rate => rate.id === selectedShippingRateId);
   const shippingRateInSelectedCurrency = selectedShippingRate
@@ -1180,10 +1403,15 @@ export default function Checkout() {
   const promoDiscountInSelectedCurrency = appliedPromo
     ? convertCurrencyWithRates(Number(appliedPromo.discount_amount || 0), 'NGN', currency, exchangeRates)
     : 0;
-  const reviewSummaryCurrency = orderReview?.summary.currency ?? 'NGN';
+  const reviewSummaryCurrency = orderReview?.summary.currency ?? checkoutQuote?.currency ?? 'NGN';
   const committedLegacyOrder = enforcedOrder?.workflow_cohort !== 'domestic_checkout_v1'
     ? enforcedOrder
     : null;
+  const quotedLineItems = checkoutQuote?.items?.length
+    ? checkoutQuote.items
+    : orderReview?.items?.length
+      ? orderReview.items
+      : [];
 
   // Calculate tax and total for checkout display (before order review is available)
   const TAX_RATE = 0.075; // 7.5% VAT
@@ -1192,6 +1420,7 @@ export default function Checkout() {
       return Number(checkoutEstimate.server_tax_amount);
     }
     if (orderReview) return orderReview.summary.tax_amount;
+    if (checkoutQuote) return Number(checkoutQuote.tax_amount);
     // Calculate tax on subtotal (before order review is created)
     const subtotal = cartSubtotalInSelectedCurrency;
     return Math.round(subtotal * TAX_RATE * 100) / 100;
@@ -1199,6 +1428,7 @@ export default function Checkout() {
 
   const calculateCheckoutTotal = () => {
     if (orderReview) return orderReview.summary.total_amount;
+    if (checkoutQuote) return Number(checkoutQuote.total_amount);
     // Calculate total (before order review is created)
     const subtotal = Number(cartSubtotalInSelectedCurrency);
     const shipping = Number(shippingRateInSelectedCurrency);
@@ -1936,7 +2166,7 @@ export default function Checkout() {
                         <button
                           type="button"
                           onClick={() => void handlePurchase()}
-                          disabled={isCreatingOrder || !hasEmail || !isEmailConfirmed}
+                          disabled={isCreatingOrder || !hasEmail || !isEmailConfirmed || Boolean(priceChangeNotice)}
                           className="w-full py-3 rounded-sm bg-primary text-white text-sm font-semibold disabled:opacity-50"
                         >
                           {shippingProvider === 'combined'
@@ -2033,6 +2263,59 @@ export default function Checkout() {
                     <p className="text-gray-300 text-sm">Shipping Method</p>
                   )}
                 </div>
+
+                {priceChangeNotice && (
+                  <div className="space-y-3 rounded-sm border border-amber-300 bg-amber-50 p-4" role="alert">
+                    <p className="text-sm font-semibold text-amber-900">
+                      {priceChangeNotice.message}
+                    </p>
+                    <ul className="space-y-1.5 text-sm text-gray-800">
+                      {priceChangeNotice.quote.items.map((item) => (
+                        <li
+                          key={`${item.product_id}-${item.variant_id || 'base'}`}
+                          className="flex items-center justify-between gap-2"
+                        >
+                          <span>
+                            {item.product_title} × {item.quantity}
+                          </span>
+                          <span className="font-medium">
+                            {item.previous_unit_price !== null &&
+                              item.previous_unit_price !== undefined && (
+                                <span className="mr-2 line-through text-gray-500">
+                                  {formatPrice(
+                                    Number(item.previous_unit_price),
+                                    priceChangeNotice.quote.currency
+                                  )}
+                                </span>
+                              )}
+                            <span>
+                              {formatPrice(
+                                Number(item.unit_price),
+                                priceChangeNotice.quote.currency
+                              )}
+                            </span>
+                          </span>
+                        </li>
+                      ))}
+                    </ul>
+                    <div className="flex items-center justify-between border-t border-amber-200 pt-2 text-sm font-semibold text-gray-900">
+                      <span>Updated subtotal</span>
+                      <span>
+                        {formatPrice(
+                          Number(priceChangeNotice.quote.subtotal),
+                          priceChangeNotice.quote.currency
+                        )}
+                      </span>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={handleConfirmUpdatedPrice}
+                      className="w-full py-2.5 rounded-sm bg-primary text-white text-sm font-semibold"
+                    >
+                      Confirm updated price
+                    </button>
+                  </div>
+                )}
 
                 {/* Payment Step */}
                 <div className="space-y-4">
@@ -2183,6 +2466,26 @@ export default function Checkout() {
                 <span>Order</span>
                 <span className="text-xs text-gray-500">Currency: {displayCurrency}</span>
               </div>
+              {quotedLineItems.length > 0 && (
+                <div className="space-y-2 border-b border-gray-100 pb-3 text-xs text-gray-700" data-testid="quoted-line-items">
+                  {quotedLineItems.map((item) => (
+                    <div
+                      key={`${item.product_id}-${item.variant_id || 'base'}`}
+                      className="flex items-start justify-between gap-2"
+                    >
+                      <span className="min-w-0 break-words">
+                        {item.product_title} × {item.quantity}
+                      </span>
+                      <span className="shrink-0 whitespace-nowrap font-medium">
+                        {formatPrice(
+                          Number(item.unit_price),
+                          (item.currency as Currency) || reviewSummaryCurrency
+                        )}
+                      </span>
+                    </div>
+                  ))}
+                </div>
+              )}
               <div className="text-sm text-gray-700 space-y-2">
                 <div className="flex items-center justify-between">
                   <span>Subtotal</span>
@@ -2190,10 +2493,11 @@ export default function Checkout() {
                     enforcedOrder?.subtotal
                       ?? committedLegacyOrder?.subtotal
                       ?? orderReview?.summary.subtotal
+                      ?? (checkoutQuote ? Number(checkoutQuote.subtotal) : undefined)
                       ?? cartSubtotalInSelectedCurrency,
                     enforcedOrder?.currency
                       ?? committedLegacyOrder?.currency
-                      ?? (orderReview ? reviewSummaryCurrency : currency),
+                      ?? (orderReview || checkoutQuote ? reviewSummaryCurrency : currency),
                   )}</span>
                 </div>
                 <div className="flex items-start justify-between gap-3">

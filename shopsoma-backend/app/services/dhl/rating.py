@@ -164,6 +164,102 @@ class DHLDomesticRateResult:
             raise ValueError("no_service cannot contain offers")
 
 
+NIGERIA_DHL_STATE_CAPITAL_FALLBACKS: dict[str, tuple[str, str]] = {
+    "abia": ("Umuahia", "440001"),
+    "adamawa": ("Yola", "640001"),
+    "akwa ibom": ("Uyo", "520001"),
+    "anambra": ("Awka", "420001"),
+    "bauchi": ("Bauchi", "740001"),
+    "bayelsa": ("Yenagoa", "560001"),
+    "benue": ("Makurdi", "970001"),
+    "borno": ("Maiduguri", "600001"),
+    "cross river": ("Calabar", "540001"),
+    "delta": ("Asaba", "320001"),
+    "ebonyi": ("Abakaliki", "480001"),
+    "edo": ("Benin City", "300001"),
+    "ekiti": ("Ado Ekiti", "360001"),
+    "enugu": ("Enugu", "400001"),
+    "fct": ("Abuja", "900001"),
+    "federal capital territory": ("Abuja", "900001"),
+    "abuja": ("Abuja", "900001"),
+    "gombe": ("Gombe", "760001"),
+    "imo": ("Owerri", "460001"),
+    "jigawa": ("Dutse", "720001"),
+    "kaduna": ("Kaduna", "800001"),
+    "kano": ("Kano", "700001"),
+    "katsina": ("Katsina", "820001"),
+    "kebbi": ("Birnin Kebbi", "860001"),
+    "kogi": ("Lokoja", "260001"),
+    "kwara": ("Ilorin", "240001"),
+    "lagos": ("Lagos", "100001"),
+    "nasarawa": ("Lafia", "950001"),
+    "nassarawa": ("Lafia", "950001"),
+    "niger": ("Minna", "920001"),
+    "ogun": ("Abeokuta", "110001"),
+    "ondo": ("Akure", "340001"),
+    "osun": ("Osogbo", "230001"),
+    "oyo": ("Ibadan", "200001"),
+    "plateau": ("Jos", "930001"),
+    "rivers": ("Port Harcourt", "500001"),
+    "sokoto": ("Sokoto", "840001"),
+    "taraba": ("Jalingo", "660001"),
+    "yobe": ("Damaturu", "620001"),
+    "zamfara": ("Gusau", "880001"),
+}
+
+
+def resolve_nigeria_dhl_state_fallback(state: object) -> tuple[str, str] | None:
+    if not isinstance(state, str):
+        return None
+    normalized = (
+        state.lower()
+        .replace("-", " ")
+        .replace("_", " ")
+        .replace(".", " ")
+        .strip()
+    )
+    normalized = " ".join(normalized.split())
+    if normalized.endswith(" state"):
+        normalized = normalized[:-6].strip()
+    if normalized in NIGERIA_DHL_STATE_CAPITAL_FALLBACKS:
+        return NIGERIA_DHL_STATE_CAPITAL_FALLBACKS[normalized]
+    if "federal capital territory" in normalized or "fct" in normalized.split() or "abuja" in normalized.split():
+        return NIGERIA_DHL_STATE_CAPITAL_FALLBACKS["fct"]
+    return None
+
+
+def _fallback_nigeria_dhl_rate_payload(
+    payload: dict[str, object],
+) -> dict[str, object] | None:
+    customer_details = payload.get("customerDetails")
+    if not isinstance(customer_details, dict):
+        return None
+    changed = False
+    updated_customer_details = dict(customer_details)
+    for role in ("shipperDetails", "receiverDetails"):
+        party = customer_details.get(role)
+        if not isinstance(party, dict) or party.get("countryCode") != "NG":
+            continue
+        fallback = resolve_nigeria_dhl_state_fallback(party.get("provinceCode"))
+        if fallback is None:
+            continue
+        capital_city, canonical_postal = fallback
+        if (
+            party.get("cityName") != capital_city
+            or party.get("postalCode") != canonical_postal
+        ):
+            updated_party = dict(party)
+            updated_party["cityName"] = capital_city
+            updated_party["postalCode"] = canonical_postal
+            updated_customer_details[role] = updated_party
+            changed = True
+    if not changed:
+        return None
+    updated_payload = dict(payload)
+    updated_payload["customerDetails"] = updated_customer_details
+    return updated_payload
+
+
 class DHLDomesticRateAdapter:
     """Nigerian hub-to-customer merchandise rating through exactly POST /rates."""
 
@@ -271,6 +367,20 @@ class DHLDomesticRateAdapter:
         try:
             response = await self._client.request_json("POST", "/rates", json=payload)
         except DHLAPIError as exc:
+            fallback_payload = (
+                _fallback_nigeria_dhl_rate_payload(payload)
+                if exc.status_code in (400, 422)
+                else None
+            )
+            if fallback_payload is not None:
+                try:
+                    response = await self._client.request_json(
+                        "POST", "/rates", json=fallback_payload
+                    )
+                except DHLAPIError as retry_exc:
+                    exc = retry_exc
+                else:
+                    return self._parse_response(response, request, resolved_hub)
             message = (
                 "DHL returned an invalid rate response"
                 if str(exc) == "DHL API returned an invalid response"

@@ -230,4 +230,60 @@ describe('ProductSizeOptionsManager', () => {
     // Error should be visible inside the modal
     expect(await screen.findByText('Database validation failed for this size')).toBeInTheDocument();
   });
+
+  it('allows vendor to mark a size variant as the main storefront price matching basePrice', async () => {
+    const mockVariants = [
+      {
+        id: 'var-10',
+        product_id: 'p-1',
+        size: '10',
+        stock: 10,
+        price: 60,
+        is_available: true,
+        inherits_price: false,
+      },
+      {
+        id: 'var-14',
+        product_id: 'p-1',
+        size: '14',
+        stock: 10,
+        price: 100,
+        is_available: true,
+        inherits_price: true,
+      },
+    ];
+
+    productMocks.updateVariant.mockResolvedValueOnce({
+      ...mockVariants[0],
+      price: 100,
+      inherits_price: true,
+    });
+    productMocks.getProductVariants.mockResolvedValueOnce([
+      { ...mockVariants[0], price: 100, inherits_price: true },
+      { ...mockVariants[1], price: 100, inherits_price: false },
+    ]);
+
+    render(
+      <ProductSizeOptionsManager
+        productId="p-1"
+        initialVariants={mockVariants as any}
+        basePrice={100}
+        currency="USD"
+        isAdmin={false}
+      />
+    );
+
+    expect(screen.getByText(/Main Storefront Price \(Default\)/i)).toBeInTheDocument();
+
+    // Click "Set as Main Price" on Size 10
+    fireEvent.click(screen.getByRole('button', { name: /Set as Main Price/i }));
+
+    expect(productMocks.updateVariant).toHaveBeenCalledWith('p-1', 'var-10', {
+      size: '10',
+      stock: 10,
+      price: 100,
+      is_available: true,
+      inherits_price: true,
+    });
+  });
 });

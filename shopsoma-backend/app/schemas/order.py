@@ -20,7 +20,44 @@ class OrderItemBase(BaseModel):
 class OrderItemCreate(OrderItemBase):
     """Schema for creating an order item"""
 
-    pass
+    expected_unit_price: Optional[Decimal] = Field(
+        None,
+        ge=0,
+        description="Unit price in checkout currency last reviewed by the shopper",
+    )
+
+
+class CheckoutQuoteItem(BaseModel):
+    """Server-authoritative quoted line item"""
+
+    product_id: str
+    variant_id: Optional[str] = None
+    product_title: str
+    variant_details: Optional[Dict[str, Any]] = None
+    quantity: int
+    currency: str = Field("NGN", pattern="^(NGN|USD)$")
+    unit_price: Decimal
+    subtotal: Decimal
+    previous_unit_price: Optional[Decimal] = None
+    price_changed: bool = False
+
+
+class CheckoutQuote(BaseModel):
+    """Short-lived server-authoritative checkout price quote"""
+
+    quote_token: str
+    issued_at: datetime
+    expires_at: datetime
+    ttl_seconds: int
+    currency: str = Field("NGN", pattern="^(NGN|USD)$")
+    subtotal: Decimal
+    shipping_cost: Decimal
+    tax_amount: Decimal
+    discount_amount: Decimal
+    total_amount: Decimal
+    items: list[CheckoutQuoteItem]
+    has_price_changes: bool = False
+    price_change_message: Optional[str] = None
 
 
 class OrderItemResponse(BaseModel):
@@ -85,6 +122,12 @@ class OrderCreate(BaseModel):
     )
     promo_code: Optional[str] = Field(None, description="Promo code to apply")
     currency: str = Field("NGN", pattern="^(NGN|USD)$", description="Checkout currency")
+    checkout_quote_token: Optional[str] = Field(
+        None, description="Accepted short-lived checkout quote token"
+    )
+    require_quote: Optional[bool] = Field(
+        None, description="Require a valid checkout quote token to create the order"
+    )
 
 
 class OrderSummary(BaseModel):
@@ -109,6 +152,9 @@ class OrderReviewRequest(BaseModel):
     shipping_rate_id: Optional[UUID] = None
     promo_code: Optional[str] = None
     currency: str = Field("NGN", pattern="^(NGN|USD)$", description="Checkout currency")
+    quote_token: Optional[str] = Field(
+        None, description="Prior checkout quote token for re-validation"
+    )
 
 
 class OrderReviewResponse(BaseModel):
@@ -118,6 +164,7 @@ class OrderReviewResponse(BaseModel):
     items: list[Dict[str, Any]]  # Product details with pricing
     shipping_rate: Optional[Dict[str, Any]]
     applied_promo: Optional[Dict[str, Any]]
+    checkout_quote: Optional[CheckoutQuote] = None
 
 
 class OrderUpdate(BaseModel):
