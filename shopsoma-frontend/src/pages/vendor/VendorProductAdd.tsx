@@ -1257,11 +1257,12 @@ export default function VendorProductAdd() {
               <div className="flex items-center border border-gray-200 rounded-lg overflow-hidden">
                 <button
                   type="button"
-                  onClick={() => setProductCurrency('USD')}
-                  className={`px-3 sm:px-4 py-2 text-xs sm:text-sm font-medium transition ${
+                  disabled
+                  aria-disabled="true"
+                  className={`px-3 sm:px-4 py-2 text-xs sm:text-sm font-medium transition disabled:opacity-50 disabled:cursor-not-allowed ${
                     productCurrency === 'USD'
                       ? 'bg-[#105E53] text-white'
-                      : 'bg-white text-gray-700 hover:bg-gray-50'
+                      : 'bg-gray-100 text-gray-400'
                   }`}
                 >
                   USD ($)
