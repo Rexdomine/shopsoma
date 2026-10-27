@@ -180,6 +180,9 @@ class DesignerResponse(BaseModel):
     id: UUID4
     business_name: str
     logo_url: Optional[str]
+    business_description: Optional[str] = None
+    featured_storefront_image_url: Optional[str] = None
+    is_featured_storefront: bool = False
     total_products: int
     total_orders: int
     created_at: datetime

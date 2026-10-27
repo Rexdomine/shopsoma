@@ -1,11 +1,13 @@
 import { useEffect, useRef, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
-import { Bookmark, Menu, Search, User, X, Package, LogOut } from 'lucide-react';
+import { Bookmark, Menu, Search, User, X, Package, LogOut, ChevronRight } from 'lucide-react';
 import { ROUTES } from '../../config/constants';
 import { useCartStore } from '../../store/cartStore';
 import { useAuth } from '../../context/AuthContext';
 import { useCurrencyStore, type Currency } from '../../store/currencyStore';
 import { usePreferenceStore } from '../../store/preferenceStore';
+import { DEFAULT_MEN_SUBCATEGORIES, DEFAULT_WOMEN_SUBCATEGORIES } from '../../config/categoryNavigation';
+import MobileClothingMenu from './MobileClothingMenu';
 
 export default function Header() {
   const [searchOpen, setSearchOpen] = useState(false);
@@ -261,6 +263,7 @@ export default function Header() {
             <Link to={ROUTES.MEN} className="hover:text-primary-dark">Men</Link>
             <Link to={ROUTES.WOMEN} className="hover:text-primary-dark">Women</Link>
             <Link to={ROUTES.SHOP_EDITS} className="hover:text-primary-dark">Shop Edits</Link>
+            <Link to={ROUTES.DESIGNERS} className="hover:text-primary-dark">Designers</Link>
           </div>
         </nav>
 
@@ -270,12 +273,21 @@ export default function Header() {
               <Link to={ROUTES.MEN} className="block" onClick={() => setMobileMenuOpen(false)}>
                 Men
               </Link>
+              <div className="pl-3 space-y-2 text-lg">
+                <MobileClothingMenu label="Men’s clothing" route={ROUTES.MEN} categories={DEFAULT_MEN_SUBCATEGORIES} onNavigate={() => setMobileMenuOpen(false)} />
+                <Link to={`${ROUTES.MEN}?category=${encodeURIComponent("men-accessories")}`} className="flex justify-between items-center min-h-11" onClick={() => setMobileMenuOpen(false)}>Accessories<ChevronRight size={20} aria-hidden="true" /></Link>
+              </div>
               <Link to={ROUTES.WOMEN} className="block" onClick={() => setMobileMenuOpen(false)}>
                 Women
               </Link>
+              <div className="pl-3 space-y-2 text-lg">
+                <MobileClothingMenu label="Women’s clothing" route={ROUTES.WOMEN} categories={DEFAULT_WOMEN_SUBCATEGORIES} onNavigate={() => setMobileMenuOpen(false)} />
+                <Link to={`${ROUTES.WOMEN}?category=${encodeURIComponent("women-accessories")}`} className="flex justify-between items-center min-h-11" onClick={() => setMobileMenuOpen(false)}>Accessories<ChevronRight size={20} aria-hidden="true" /></Link>
+              </div>
               <Link to={ROUTES.SHOP_EDITS} className="block" onClick={() => setMobileMenuOpen(false)}>
                 Shop Edits
               </Link>
+              <Link to={ROUTES.DESIGNERS} className="block" onClick={() => setMobileMenuOpen(false)}>Designers</Link>
             </div>
 
             <div className="border-t border-[#1E5053]/30 mt-6 pt-6 space-y-3 font-ui text-sm text-primary">
