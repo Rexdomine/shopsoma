@@ -1,0 +1,5 @@
+{
+  "pull_request": 213,
+  "sha": "777e89e223d6e0b9c6ec9ea5061c2f429bd96014",
+  "recorded_reason": "REX-70 initial pin, rechecked against PR 213 before implementation. A changed head requires a reviewed pin and fresh evidence."
+}
