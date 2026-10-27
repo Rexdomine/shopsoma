@@ -94,7 +94,7 @@ describe('AdminProductEdit - Variable vs Single Product Flow', () => {
     adminMocks.getProductShopEdits.mockResolvedValue([]);
   });
 
-  it('renders ProductSizeOptionsManager with isAdmin=true for single products', async () => {
+  it('does not render Size Options & Inventory or Variations Manager for single products', async () => {
     adminMocks.getProduct.mockResolvedValueOnce(mockSingleAdminProduct);
 
     render(
@@ -106,9 +106,8 @@ describe('AdminProductEdit - Variable vs Single Product Flow', () => {
     );
 
     await waitFor(() => {
-      const singleEl = screen.getByTestId('mock-admin-size-options');
-      expect(singleEl).toBeInTheDocument();
-      expect(singleEl.getAttribute('data-is-admin')).toBe('true');
+      expect(screen.getByDisplayValue('Single Cotton Towel')).toBeInTheDocument();
+      expect(screen.queryByTestId('mock-admin-size-options')).not.toBeInTheDocument();
       expect(screen.queryByTestId('mock-admin-variations-manager')).not.toBeInTheDocument();
     });
   });

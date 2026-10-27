@@ -8,7 +8,6 @@ import { useToast } from '../../hooks/useToast';
 import ToastContainer from '../../components/ui/ToastContainer';
 import type { Product, ProductImage } from '../../types';
 import { normalizeProductImageUrl } from '../../utils/productImages';
-import ProductSizeOptionsManager from '../../components/product/ProductSizeOptionsManager';
 import ProductVariationsManager from '../../components/product/ProductVariationsManager';
 import PriceInput from '../../components/common/PriceInput';
 import { cleanNumberString } from '../../utils/pricing';
@@ -517,51 +516,32 @@ export default function VendorProductEdit() {
               </div>
             </div>
 
-            {/* Variations / Size Options Management */}
-            {id && (
+            {/* Variations Management (Variable Products Only) */}
+            {id && product?.product_type === 'variable' && (
               <div className="mt-6">
-                {product?.product_type === 'variable' ? (
-                  <ProductVariationsManager
-                    productId={id}
-                    initialVariations={product?.variations || []}
-                    productImages={images}
-                    basePrice={parseFloat(cleanNumberString(basePrice)) || 0}
-                    compareAtPrice={parseFloat(cleanNumberString(comparePrice)) || undefined}
-                    currency={currencyDisplay}
-                    isAdmin={false}
-                    onVariationsUpdated={(updatedVariations) => {
-                      const newTotalStock = updatedVariations.reduce(
-                        (sum, v) => sum + (v.size_stocks || []).reduce((sSum, s) => sSum + (s.stock || 0), 0),
-                        0
-                      );
-                      setStock(newTotalStock.toString());
-                      if (product) {
-                        setProduct({
-                          ...product,
-                          total_stock: newTotalStock,
-                          variations: updatedVariations,
-                        });
-                      }
-                    }}
-                  />
-                ) : (
-                  <ProductSizeOptionsManager
-                    productId={id}
-                    initialVariants={product?.variants || []}
-                    basePrice={parseFloat(cleanNumberString(basePrice)) || 0}
-                    currency={currencyDisplay}
-                    madeToOrder={madeToOrder}
-                    isAdmin={false}
-                    onVariantsUpdated={(updatedVariants) => {
-                      if (product) {
-                        setProduct({
-                          ...product,
-                          variants: updatedVariants,
-                        });
-                      }
-                    }}
-                  />
-                )}
+                <ProductVariationsManager
+                  productId={id}
+                  initialVariations={product?.variations || []}
+                  productImages={images}
+                  basePrice={parseFloat(cleanNumberString(basePrice)) || 0}
+                  compareAtPrice={parseFloat(cleanNumberString(comparePrice)) || undefined}
+                  currency={currencyDisplay}
+                  isAdmin={false}
+                  onVariationsUpdated={(updatedVariations) => {
+                    const newTotalStock = updatedVariations.reduce(
+                      (sum, v) => sum + (v.size_stocks || []).reduce((sSum, s) => sSum + (s.stock || 0), 0),
+                      0
+                    );
+                    setStock(newTotalStock.toString());
+                    if (product) {
+                      setProduct({
+                        ...product,
+                        total_stock: newTotalStock,
+                        variations: updatedVariations,
+                      });
+                    }
+                  }}
+                />
               </div>
             )}
 
