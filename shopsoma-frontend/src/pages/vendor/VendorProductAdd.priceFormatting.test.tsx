@@ -158,5 +158,16 @@ describe('VendorProductAdd price formatting and humanization', () => {
     expect(callPayload.base_price).toBe(60000);
     expect(typeof callPayload.compare_at_price).toBe('number');
     expect(callPayload.compare_at_price).toBe(75000);
+    expect(callPayload.currency).toBe('NGN');
+  });
+
+  it('disables the USD ($) option so vendors cannot select it', async () => {
+    await mount();
+
+    const usdButton = screen.getByRole('button', { name: 'USD ($)' });
+    const ngnButton = screen.getByRole('button', { name: 'NGN (₦)' });
+
+    expect(usdButton).toBeDisabled();
+    expect(ngnButton).not.toBeDisabled();
   });
 });

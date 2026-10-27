@@ -9,7 +9,6 @@ import { categoryService } from '../../services/categoryService';
 import { useToast } from '../../hooks/useToast';
 import ToastContainer from '../../components/ui/ToastContainer';
 import type { Category, Product } from '../../types';
-import ProductSizeOptionsManager from '../../components/product/ProductSizeOptionsManager';
 import ProductVariationsManager from '../../components/product/ProductVariationsManager';
 
 function resolveCategoryLineage(
@@ -664,50 +663,31 @@ export default function AdminProductEdit() {
             </div>
           </div>
 
-          {/* Variations / Size Options Management */}
-          {id && (
-            product?.product_type === 'variable' ? (
-              <ProductVariationsManager
-                productId={id}
-                initialVariations={product?.variations || []}
-                productImages={product?.images || []}
-                basePrice={parseFloat(basePrice) || 0}
-                compareAtPrice={comparePrice ? parseFloat(comparePrice) : undefined}
-                currency={currencyDisplay}
-                isAdmin={true}
-                onVariationsUpdated={(updatedVariations) => {
-                  const newTotalStock = updatedVariations.reduce(
-                    (sum, v) => sum + (v.size_stocks || []).reduce((sSum, s) => sSum + (s.stock || 0), 0),
-                    0
-                  );
-                  setTotalStock(newTotalStock.toString());
-                  if (product) {
-                    setProduct({
-                      ...product,
-                      total_stock: newTotalStock,
-                      variations: updatedVariations,
-                    });
-                  }
-                }}
-              />
-            ) : (
-              <ProductSizeOptionsManager
-                productId={id}
-                initialVariants={product?.variants || []}
-                basePrice={parseFloat(basePrice) || 0}
-                currency={currencyDisplay}
-                madeToOrder={Boolean(product?.made_to_order)}
-                isAdmin={true}
-                onVariantsUpdated={(updatedVariants) => {
-                  if (product) {
-                    setProduct({
-                      ...product,
-                      variants: updatedVariants,
-                    });
-                  }
-                }}
-              />
-            )
+          {/* Variations Management (Variable Products Only) */}
+          {id && product?.product_type === 'variable' && (
+            <ProductVariationsManager
+              productId={id}
+              initialVariations={product?.variations || []}
+              productImages={product?.images || []}
+              basePrice={parseFloat(basePrice) || 0}
+              compareAtPrice={comparePrice ? parseFloat(comparePrice) : undefined}
+              currency={currencyDisplay}
+              isAdmin={true}
+              onVariationsUpdated={(updatedVariations) => {
+                const newTotalStock = updatedVariations.reduce(
+                  (sum, v) => sum + (v.size_stocks || []).reduce((sSum, s) => sSum + (s.stock || 0), 0),
+                  0
+                );
+                setTotalStock(newTotalStock.toString());
+                if (product) {
+                  setProduct({
+                    ...product,
+                    total_stock: newTotalStock,
+                    variations: updatedVariations,
+                  });
+                }
+              }}
+            />
           )}
 
           {/* Product Status & Settings */}

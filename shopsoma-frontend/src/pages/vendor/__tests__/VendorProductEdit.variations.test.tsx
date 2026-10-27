@@ -81,7 +81,7 @@ describe('VendorProductEdit - Variable vs Single Product Flow', () => {
     vi.clearAllMocks();
   });
 
-  it('renders ProductSizeOptionsManager for single products preserving existing flow', async () => {
+  it('does not render Size Options & Inventory or Variations Manager for single products', async () => {
     (productService.getVendorProduct as any).mockResolvedValueOnce(mockSingleProduct);
 
     render(
@@ -93,7 +93,8 @@ describe('VendorProductEdit - Variable vs Single Product Flow', () => {
     );
 
     await waitFor(() => {
-      expect(screen.getByTestId('mock-size-options-manager')).toBeInTheDocument();
+      expect(screen.getByDisplayValue('Handmade Silk Blouse')).toBeInTheDocument();
+      expect(screen.queryByTestId('mock-size-options-manager')).not.toBeInTheDocument();
       expect(screen.queryByTestId('mock-variations-manager')).not.toBeInTheDocument();
     });
   });
