@@ -43,6 +43,18 @@ vi.mock('../../store/cartStore', () => ({
 }));
 
 describe('Header Account Navigation', () => {
+  it('offers real clothing categories and distinct accessory destinations in the mobile menu', () => {
+    render(<MemoryRouter><Header /></MemoryRouter>);
+    fireEvent.click(screen.getByLabelText('Open menu'));
+    const menClothing = screen.getByLabelText('Men’s clothing');
+    fireEvent.click(menClothing);
+    expect(screen.getByRole('link', { name: 'Tops' })).toHaveAttribute('href', '/men?category=men-tops');
+    const accessoryLinks = screen.getAllByRole('link', { name: 'Accessories' });
+    expect(accessoryLinks.map(link => link.getAttribute('href'))).toEqual(['/men?category=men-accessories', '/women?category=women-accessories']);
+    fireEvent.click(accessoryLinks[0]);
+    expect(screen.getByLabelText('Open menu')).toBeInTheDocument();
+  });
+
   beforeEach(() => {
     vi.clearAllMocks();
   });
