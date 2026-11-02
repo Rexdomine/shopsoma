@@ -117,6 +117,7 @@ async def send_order_confirmation_after_payment(db: AsyncSession, order_id: UUID
                 "full_name": order.shipping_address.full_name,
                 "address_line_1": order.shipping_address.address_line1,
                 "address_line_2": order.shipping_address.address_line2,
+                "house_number": order.shipping_address.house_number,
                 "city": order.shipping_address.city,
                 "state": order.shipping_address.state,
                 "postal_code": order.shipping_address.postal_code,

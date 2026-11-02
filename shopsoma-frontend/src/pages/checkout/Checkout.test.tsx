@@ -401,7 +401,7 @@ describe('Checkout M5 sequencing and recovery', () => {
     expect(screen.queryByRole('radio', { name: /Stripe/ })).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: 'Continue to delivery options' }));
     await screen.findByRole('button', { name: 'Select Standard delivery' });
-    expect(screen.getByRole('button', { name: 'Edit delivery address' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Edit delivery address' })).toBeEnabled();
     expect(mocks.createOrder).toHaveBeenCalledWith(expect.objectContaining({ customer_email: 'guest@example.com', guest_address: expect.objectContaining({ state: 'Lagos', postal_code: '100001' }) }));
     expect(mocks.createCheckoutEstimate).toHaveBeenCalledWith('order-1', expect.any(String), 'guest-manual-capability');
     expect(sessionStorage.getItem('shopsoma_checkout_capability:ORDER-1')).toBe('guest-manual-capability');
@@ -1749,5 +1749,412 @@ describe('Checkout M5 sequencing and recovery', () => {
     expect(mocks.createOrder.mock.calls[1][0].checkout_quote_token).toBe('quote-409-fresh');
     expect(mocks.createOrder.mock.calls[1][0].items[0].expected_unit_price).toBe(49980);
     expect(mocks.createCheckoutEstimate).toHaveBeenCalledTimes(1);
+  });
+
+  it('lets a customer select a different saved address from the shipping step, invalidates old shipping data, recalculates rates, and completes checkout', async () => {
+    const abujaAddress = {
+      ...address,
+      id: 'address-abuja',
+      full_name: 'Buyer Abuja',
+      address_line1: '10 Maitama Way',
+      city: 'Abuja',
+      state: 'Abuja',
+      is_default: false,
+    };
+    const abujaRate = {
+      id: 'rate-abuja-express',
+      name: 'Abuja Express',
+      description: 'Interstate express delivery',
+      base_rate: 6500,
+      min_delivery_days: 2,
+      max_delivery_days: 4,
+    };
+    const abujaReview = {
+      ...review,
+      summary: {
+        ...review.summary,
+        shipping_cost: 6500,
+        total_amount: 71000,
+      },
+      checkout_quote: {
+        quote_token: 'quote-abuja-71000',
+        issued_at: '2026-10-23T15:00:00Z',
+        expires_at: '2026-10-23T15:15:00Z',
+        ttl_seconds: 900,
+        currency: 'NGN' as const,
+        subtotal: '60000.00',
+        shipping_cost: '6500.00',
+        tax_amount: '4500.00',
+        discount_amount: '0.00',
+        total_amount: '71000.00',
+        items: [],
+        has_price_changes: false,
+        price_change_message: null,
+      },
+    };
+    mocks.getAddresses.mockResolvedValueOnce({ addresses: [address, abujaAddress] });
+    mocks.calculateShipping
+      .mockResolvedValueOnce({ available_rates: [rate], recommended_rate: rate })
+      .mockResolvedValueOnce({ available_rates: [abujaRate], recommended_rate: abujaRate });
+    mocks.reviewOrder
+      .mockResolvedValueOnce({
+        ...review,
+        checkout_quote: {
+          quote_token: 'stale-lagos-quote',
+          issued_at: '2026-10-23T15:00:00Z',
+          expires_at: '2026-10-23T15:15:00Z',
+          ttl_seconds: 900,
+          currency: 'NGN',
+          subtotal: '60000.00',
+          shipping_cost: '2500.00',
+          tax_amount: '4500.00',
+          discount_amount: '0.00',
+          total_amount: '67000.00',
+          items: [],
+          has_price_changes: false,
+          price_change_message: null,
+        },
+      })
+      .mockResolvedValueOnce(abujaReview);
+
+    render(<MemoryRouter initialEntries={['/checkout']}><CheckoutTestRoutes /></MemoryRouter>);
+    await waitFor(() => expect(mocks.getAddresses).toHaveBeenCalled());
+
+    // Step 1: Proceed to shipping with initial Lagos address
+    fireEvent.click(screen.getByRole('button', { name: 'Continue' }));
+    await screen.findByText('Standard');
+    expect(mocks.calculateShipping).toHaveBeenCalledWith(expect.objectContaining({ state: 'Lagos' }));
+
+    // Advance to payment review so a quote exists for the first address
+    const shippingContinueButtons = screen.getAllByRole('button', { name: 'Continue' });
+    fireEvent.click(shippingContinueButtons[shippingContinueButtons.length - 1]);
+    await waitFor(() => expect(mocks.reviewOrder).toHaveBeenCalledTimes(1));
+
+    // Step 2: Select the second saved address (Abuja) without reloading the page
+    fireEvent.click(screen.getByText(/10 Maitama Way/));
+
+    // Old shipping option and quote are invalidated, and user is prompted to continue to recalculate
+    expect(screen.queryByText('Standard')).not.toBeInTheDocument();
+    expect(screen.getByText(/Delivery address updated\. Continue to recalculate shipping options/i)).toBeInTheDocument();
+    const addressContinue = screen.getByRole('button', { name: 'Continue' });
+    expect(addressContinue).toBeEnabled();
+
+    // Step 3: Recalculate shipping for the newly selected Abuja address
+    fireEvent.click(addressContinue);
+    await screen.findByText('Abuja Express');
+    expect(mocks.calculateShipping).toHaveBeenCalledTimes(2);
+    expect(mocks.calculateShipping).toHaveBeenLastCalledWith(expect.objectContaining({ state: 'Abuja' }));
+    expect(screen.getByText(/Shipping options have been recalculated for your updated delivery address/i)).toBeInTheDocument();
+    expect(screen.getAllByText('₦6,500').length).toBeGreaterThan(0);
+
+    // Step 4: Confirm new shipping option and complete order creation with consistent Abuja state
+    const updatedContinueButtons = screen.getAllByRole('button', { name: 'Continue' });
+    fireEvent.click(updatedContinueButtons[updatedContinueButtons.length - 1]);
+    await waitFor(() => expect(mocks.reviewOrder).toHaveBeenCalledTimes(2));
+    // Stale quote token from Lagos must NOT be sent when reviewing Abuja
+    expect(mocks.reviewOrder.mock.calls[1][0].quote_token).toBeUndefined();
+    expect(mocks.reviewOrder.mock.calls[1][0]).toEqual(expect.objectContaining({
+      shipping_address_id: 'address-abuja',
+      shipping_rate_id: 'rate-abuja-express',
+    }));
+
+    fireEvent.click(screen.getAllByRole('button', { name: 'Purchase' })[0]);
+    await waitFor(() => expect(mocks.createOrder).toHaveBeenCalledWith(expect.objectContaining({
+      shipping_address_id: 'address-abuja',
+      billing_address_id: 'address-abuja',
+      shipping_rate_id: 'rate-abuja-express',
+      checkout_quote_token: 'quote-abuja-71000',
+    })));
+  });
+
+  it('lets an authenticated customer edit the selected address from the shipping step, recalculates shipping, and uses the updated details', async () => {
+    const editedAddress = {
+      ...address,
+      address_line1: '25 Wuse Zone 4',
+      city: 'Abuja',
+      state: 'Federal Capital Territory',
+    };
+    const editedRate = {
+      id: 'rate-edited-abuja',
+      name: 'Abuja Doorstep',
+      description: 'Updated delivery',
+      base_rate: 5500,
+      min_delivery_days: 2,
+      max_delivery_days: 3,
+    };
+    mocks.calculateShipping
+      .mockResolvedValueOnce({ available_rates: [rate], recommended_rate: rate })
+      .mockResolvedValueOnce({ available_rates: [editedRate], recommended_rate: editedRate });
+    mocks.updateAddress.mockResolvedValueOnce(editedAddress);
+
+    render(<MemoryRouter initialEntries={['/checkout']}><CheckoutTestRoutes /></MemoryRouter>);
+    await waitFor(() => expect(mocks.getAddresses).toHaveBeenCalled());
+
+    // Reach shipping step with initial Lagos address
+    fireEvent.click(screen.getByRole('button', { name: 'Continue' }));
+    await screen.findByText('Standard');
+    expect(mocks.calculateShipping).toHaveBeenCalledTimes(1);
+
+    // Click Edit on the selected address from the shipping step
+    const editButton = screen.getByRole('button', { name: 'Edit delivery address' });
+    expect(editButton).toBeEnabled();
+    fireEvent.click(editButton);
+
+    expect(screen.getByRole('heading', { name: 'Edit Address' })).toBeInTheDocument();
+    // Update City and State on the saved address and save correction
+    fireEvent.change(screen.getByLabelText('City'), { target: { value: 'Abuja' } });
+    fireEvent.change(screen.getByRole('combobox', { name: 'State' }), { target: { value: 'Federal Capital Territory' } });
+    const saveChangesBtn = screen.getByRole('button', { name: 'Save changes' });
+    expect(saveChangesBtn).toBeEnabled();
+    fireEvent.click(saveChangesBtn);
+
+    await waitFor(() => expect(mocks.updateAddress).toHaveBeenCalledWith('address-1', expect.objectContaining({
+      city: 'Abuja',
+      state: 'Federal Capital Territory',
+    })));
+
+    // Previous shipping rate is invalidated and Address Continue button is re-enabled
+    expect(screen.queryByText('Standard')).not.toBeInTheDocument();
+    expect(screen.getByText(/Delivery address updated\. Continue to recalculate shipping options/i)).toBeInTheDocument();
+    const continueButton = screen.getByRole('button', { name: 'Continue' });
+    expect(continueButton).toBeEnabled();
+
+    // Recalculate shipping for the edited address
+    fireEvent.click(continueButton);
+    await screen.findByText('Abuja Doorstep');
+    expect(mocks.calculateShipping).toHaveBeenCalledTimes(2);
+    expect(mocks.calculateShipping).toHaveBeenLastCalledWith(expect.objectContaining({ state: 'Federal Capital Territory' }));
+  });
+
+  it('lets a guest customer edit their address from the shipping step, invalidates old shipping rates, and recalculates for the edited address', async () => {
+    mocks.auth.isAuthenticated = false;
+    const ogunRate = {
+      id: 'rate-ogun',
+      name: 'Ogun Express',
+      description: 'Interstate delivery',
+      base_rate: 4500,
+      min_delivery_days: 1,
+      max_delivery_days: 3,
+    };
+    mocks.calculateShipping
+      .mockResolvedValueOnce({ available_rates: [rate], recommended_rate: rate })
+      .mockResolvedValueOnce({ available_rates: [ogunRate], recommended_rate: ogunRate });
+
+    render(<MemoryRouter initialEntries={['/checkout']}><CheckoutTestRoutes /></MemoryRouter>);
+    fireEvent.change(await screen.findByPlaceholderText('you@example.com'), { target: { value: 'guest@example.com' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Confirm' }));
+    fireEvent.click(screen.getByRole('button', { name: '+ Add New Address' }));
+
+    fireEvent.change(screen.getByLabelText('Full Name'), { target: { value: 'Guest Buyer' } });
+    fireEvent.change(screen.getByPlaceholderText('08012345678'), { target: { value: '08012345678' } });
+    fireEvent.change(screen.getByLabelText('Street Address'), { target: { value: '1 Test Street' } });
+    fireEvent.click(await screen.findByRole('button', { name: /1 Test Street/i }));
+    await waitFor(() => expect(screen.getByText(/Verified with Google Maps/i)).toBeInTheDocument());
+    fireEvent.click(screen.getByRole('button', { name: /Save Address/i }));
+
+    // Proceed to shipping step
+    fireEvent.click(screen.getByRole('button', { name: 'Continue' }));
+    await screen.findByText('Standard');
+    expect(mocks.calculateShipping).toHaveBeenCalledTimes(1);
+
+    // Edit guest address from the shipping step
+    fireEvent.click(screen.getByRole('button', { name: 'Edit delivery address' }));
+    fireEvent.change(screen.getByLabelText('City'), { target: { value: 'Abeokuta' } });
+    fireEvent.change(screen.getByRole('combobox', { name: 'State' }), { target: { value: 'Ogun' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Save changes' }));
+
+    // Old shipping rate is cleared and guest can continue to recalculate shipping
+    expect(screen.queryByText('Standard')).not.toBeInTheDocument();
+    const continueBtn = screen.getByRole('button', { name: 'Continue' });
+    expect(continueBtn).toBeEnabled();
+    fireEvent.click(continueBtn);
+
+    await screen.findByText('Ogun Express');
+    expect(mocks.calculateShipping).toHaveBeenCalledTimes(2);
+    expect(mocks.calculateShipping).toHaveBeenLastCalledWith(expect.objectContaining({ state: 'Ogun' }));
+  });
+
+  it('lets a customer edit or change their address after live delivery estimates are loaded by cancelling the unpaid order and recalculating', async () => {
+    const secondary = {
+      ...address,
+      id: 'address-2',
+      address_line1: '50 Admiralty Way',
+      city: 'Lekki',
+      state: 'Lagos',
+      postal_code: '106104',
+      is_default: false,
+    };
+    const secondOrder = { ...order, id: 'order-2', order_number: 'ORDER-2' };
+    const secondEstimate = {
+      ...estimate,
+      id: 'estimate-2',
+      order_id: 'order-2',
+      options: [
+        {
+          ...estimate.options[0],
+          option_id: 'option-lekki',
+          service_label: 'Lekki Same Day',
+          amount: '4000.00',
+        },
+      ],
+    };
+    mocks.getAddresses.mockResolvedValueOnce({ addresses: [address, secondary] });
+    mocks.getShippingProviderSettings.mockResolvedValue({ provider: 'shipbubble', checkout_estimates_required: true });
+    mocks.createOrder
+      .mockResolvedValueOnce(order)
+      .mockResolvedValueOnce(secondOrder);
+    mocks.createCheckoutEstimate
+      .mockResolvedValueOnce(estimate)
+      .mockResolvedValueOnce(secondEstimate);
+
+    render(<MemoryRouter initialEntries={['/checkout']}><CheckoutTestRoutes /></MemoryRouter>);
+    await waitFor(() => expect(mocks.getAddresses).toHaveBeenCalled());
+
+    // Reach shipping and calculate live courier rates for address-1
+    fireEvent.click(screen.getByRole('button', { name: 'Continue' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Calculate live courier rates' }));
+    await screen.findByRole('button', { name: 'Select Standard delivery' });
+    expect(mocks.createOrder).toHaveBeenCalledTimes(1);
+    expect(mocks.createOrder).toHaveBeenLastCalledWith(expect.objectContaining({ shipping_address_id: 'address-1' }));
+
+    // Address controls remain enabled before payment is initialized
+    const editButtons = screen.getAllByRole('button', { name: 'Edit delivery address' });
+    expect(editButtons[0]).toBeEnabled();
+    expect(editButtons[1]).toBeEnabled();
+    expect(screen.getByRole('button', { name: '+ Add New Address' })).toBeEnabled();
+    expect(screen.getByRole('button', { name: 'Change delivery address' })).toBeEnabled();
+
+    // Select the second saved address (50 Admiralty Way)
+    fireEvent.click(screen.getByText(/50 Admiralty Way/));
+
+    // Unpaid order-1 is cancelled and old estimate options are invalidated
+    await waitFor(() => expect(mocks.cancelOrder).toHaveBeenCalledWith(
+      'order-1',
+      'Customer changed delivery address before payment',
+      undefined,
+    ));
+    expect(screen.queryByRole('button', { name: 'Select Standard delivery' })).not.toBeInTheDocument();
+    const continueBtn = await screen.findByRole('button', { name: 'Continue' });
+    expect(continueBtn).toBeEnabled();
+
+    // Continue with the newly selected address and recalculate live delivery options
+    fireEvent.click(continueBtn);
+    fireEvent.click(await screen.findByRole('button', { name: 'Calculate live courier rates' }));
+    await screen.findByRole('button', { name: 'Select Lekki Same Day' });
+
+    expect(mocks.createOrder).toHaveBeenCalledTimes(2);
+    expect(mocks.createOrder).toHaveBeenLastCalledWith(expect.objectContaining({ shipping_address_id: 'address-2' }));
+    expect(mocks.createCheckoutEstimate).toHaveBeenLastCalledWith('order-2', expect.stringMatching(/^estimate-/), undefined);
+  });
+
+  it('allows entering an optional House number when adding or editing a checkout address and carries it with the delivery address', async () => {
+    mocks.auth.isAuthenticated = false;
+    render(<MemoryRouter initialEntries={['/checkout']}><CheckoutTestRoutes /></MemoryRouter>);
+
+    fireEvent.change(await screen.findByPlaceholderText('you@example.com'), { target: { value: 'guest@example.com' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Confirm' }));
+    fireEvent.click(screen.getByRole('button', { name: '+ Add New Address' }));
+
+    const houseNumberInput = screen.getByLabelText('House number');
+    expect(houseNumberInput).toBeInTheDocument();
+    expect(houseNumberInput).not.toBeRequired();
+
+    fireEvent.change(screen.getByLabelText('Full Name'), { target: { value: 'Guest Buyer' } });
+    fireEvent.change(screen.getByPlaceholderText('08012345678'), { target: { value: '08012345678' } });
+    fireEvent.change(houseNumberInput, { target: { value: 'House 14B' } });
+    fireEvent.change(screen.getByLabelText('Street Address'), { target: { value: '1 Test Street' } });
+    fireEvent.click(await screen.findByRole('button', { name: /1 Test Street/i }));
+    await waitFor(() => expect(screen.getByText(/Verified with Google Maps/i)).toBeInTheDocument());
+
+    // Selecting a Google Maps street suggestion preserves the customer's House number
+    expect(screen.getByLabelText('House number')).toHaveValue('House 14B');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Save Address' }));
+    expect(await screen.findByText(/House 14B, 1 Test Street/i)).toBeInTheDocument();
+
+    // Edit the address and update the House number without invalidating verification
+    fireEvent.click(screen.getByRole('button', { name: 'Edit delivery address' }));
+    expect(screen.getByLabelText('House number')).toHaveValue('House 14B');
+    fireEvent.change(screen.getByLabelText('House number'), { target: { value: 'Plot 22A' } });
+    expect(screen.getByRole('button', { name: 'Save changes' })).toBeEnabled();
+    fireEvent.click(screen.getByRole('button', { name: 'Save changes' }));
+    expect(await screen.findByText(/Plot 22A, 1 Test Street/i)).toBeInTheDocument();
+
+    // Continue through checkout and verify guest_address carries house_number and address_line2
+    fireEvent.click(screen.getByRole('button', { name: 'Continue' }));
+    await screen.findByText('Standard');
+    fireEvent.click(screen.getAllByRole('button', { name: 'Continue' })[1]);
+
+    await waitFor(() => expect(mocks.reviewOrder).toHaveBeenCalledWith(expect.objectContaining({
+      guest_address: expect.objectContaining({
+        address_line1: '1 Test Street',
+        address_line2: 'Plot 22A',
+        house_number: 'Plot 22A',
+      }),
+    })));
+
+    const purchaseButtons = await screen.findAllByRole('button', { name: 'Purchase' });
+    fireEvent.click(purchaseButtons[0]);
+    await waitFor(() => expect(mocks.createOrder).toHaveBeenCalledWith(expect.objectContaining({
+      customer_email: 'guest@example.com',
+      guest_address: expect.objectContaining({
+        address_line1: '1 Test Street',
+        address_line2: 'Plot 22A',
+        house_number: 'Plot 22A',
+      }),
+    })));
+  });
+
+  it('saves and updates House number for authenticated customer addresses while allowing blank House number', async () => {
+    const savedWithHouseNumber = {
+      ...address,
+      id: 'address-hn-1',
+      address_line1: '10 Maitama Way',
+      address_line2: 'Flat 3B',
+      house_number: 'Flat 3B',
+      is_default: false,
+    };
+    const updatedWithoutHouseNumber = {
+      ...savedWithHouseNumber,
+      address_line2: '',
+      house_number: '',
+    };
+    mocks.createAddress.mockResolvedValueOnce(savedWithHouseNumber);
+    mocks.updateAddress.mockResolvedValueOnce(updatedWithoutHouseNumber);
+
+    render(<MemoryRouter initialEntries={['/checkout']}><CheckoutTestRoutes /></MemoryRouter>);
+    await waitFor(() => expect(mocks.getAddresses).toHaveBeenCalled());
+
+    // Add new address with House number
+    fireEvent.click(screen.getByRole('button', { name: '+ Add New Address' }));
+    fireEvent.change(screen.getByLabelText('Full Name'), { target: { value: 'Buyer' } });
+    fireEvent.change(screen.getByPlaceholderText('08012345678'), { target: { value: '08012345678' } });
+    fireEvent.change(screen.getByLabelText('Street Address'), { target: { value: '10 Maitama Way' } });
+    fireEvent.click(await screen.findByRole('button', { name: /10 Maitama Way/i }));
+    await waitFor(() => expect(screen.getByText(/Verified with Google Maps/i)).toBeInTheDocument());
+    fireEvent.change(screen.getByLabelText('House number'), { target: { value: 'Flat 3B' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Save Address' }));
+
+    await waitFor(() => expect(mocks.createAddress).toHaveBeenCalledWith(expect.objectContaining({
+      address_line1: '10 Maitama Way',
+      address_line2: 'Flat 3B',
+      house_number: 'Flat 3B',
+    })));
+    expect(await screen.findByText(/Flat 3B, 10 Maitama Way/i)).toBeInTheDocument();
+
+    // Edit the address and clear House number (leaving it blank)
+    const editButtons = screen.getAllByRole('button', { name: 'Edit delivery address' });
+    fireEvent.click(editButtons[1]);
+    expect(screen.getByLabelText('House number')).toHaveValue('Flat 3B');
+    fireEvent.change(screen.getByLabelText('House number'), { target: { value: '' } });
+    expect(screen.getByRole('button', { name: 'Save changes' })).toBeEnabled();
+    fireEvent.click(screen.getByRole('button', { name: 'Save changes' }));
+
+    await waitFor(() => expect(mocks.updateAddress).toHaveBeenCalledWith('address-hn-1', expect.objectContaining({
+      address_line1: '10 Maitama Way',
+      address_line2: '',
+      house_number: '',
+    })));
+    expect(screen.queryByText(/Flat 3B, 10 Maitama Way/i)).not.toBeInTheDocument();
   });
 });

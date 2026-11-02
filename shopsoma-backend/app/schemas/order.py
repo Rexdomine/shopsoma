@@ -1,6 +1,6 @@
 """Order schemas"""
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 from typing import Optional, Dict, Any
 from uuid import UUID
 from datetime import datetime, date
@@ -93,10 +93,20 @@ class GuestAddressData(BaseModel):
     phone_number: str
     address_line1: str
     address_line2: Optional[str] = None
+    house_number: Optional[str] = None
     city: str
     state: str
     postal_code: Optional[str] = None
     country: str = "Nigeria"
+
+    @model_validator(mode="after")
+    def sync_house_number_and_address_line2(self) -> "GuestAddressData":
+        hn = self.house_number.strip() if isinstance(self.house_number, str) else None
+        l2 = self.address_line2.strip() if isinstance(self.address_line2, str) else None
+        resolved = hn or l2 or None
+        self.house_number = resolved
+        self.address_line2 = resolved
+        return self
 
 
 # Order Schemas

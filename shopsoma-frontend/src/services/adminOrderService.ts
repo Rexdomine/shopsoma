@@ -58,6 +58,9 @@ export interface AddressInfo {
   full_name: string;
   phone: string;
   street_address: string;
+  address_line1?: string | null;
+  address_line2?: string | null;
+  house_number?: string | null;
   city: string;
   state: string;
   country: string;

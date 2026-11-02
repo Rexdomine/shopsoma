@@ -22,6 +22,7 @@ export interface Address {
   phone_number: string;
   address_line1: string;
   address_line2?: string;
+  house_number?: string;
   city: string;
   state: string;
   postal_code: string;
@@ -37,6 +38,7 @@ export interface CreateAddressData {
   phone_number: string;
   address_line1: string;
   address_line2?: string;
+  house_number?: string;
   city: string;
   state: string;
   postal_code: string;

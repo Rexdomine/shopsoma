@@ -116,6 +116,9 @@ class AddressInfo(BaseModel):
     full_name: str
     phone: str
     street_address: str
+    address_line1: Optional[str] = None
+    address_line2: Optional[str] = None
+    house_number: Optional[str] = None
     city: str
     state: str
     country: str

@@ -302,7 +302,7 @@ async def build_shipbubble_tracking_payload(
     dest_city = dest_addr.city if dest_addr else "Lagos"
     dest_state = dest_addr.state if dest_addr else "Lagos"
     dest_address_str = (
-        f"{dest_addr.address_line1}, {dest_addr.city}, {dest_addr.state}, {dest_addr.country or 'Nigeria'}"
+        f"{dest_addr.address_line1}{f', {dest_addr.address_line2.strip()}' if dest_addr.address_line2 and dest_addr.address_line2.strip() else ''}, {dest_addr.city}, {dest_addr.state}, {dest_addr.country or 'Nigeria'}"
         if dest_addr
         else "Customer Delivery Address, Nigeria"
     )
