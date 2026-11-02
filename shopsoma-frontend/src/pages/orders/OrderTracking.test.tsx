@@ -1,5 +1,6 @@
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { STORAGE_KEYS } from '../../config/constants';
 import OrderTracking from './OrderTracking';
 
 const { getOrderTracking, getOrder, routeParams } = vi.hoisted(() => ({
@@ -9,7 +10,19 @@ const { getOrderTracking, getOrder, routeParams } = vi.hoisted(() => ({
 }));
 
 vi.mock('react-router-dom', () => ({
-  Link: ({ children, ...props }: { children: React.ReactNode }) => <a {...props}>{children}</a>,
+  Link: ({
+    children,
+    to,
+    ...props
+  }: {
+    children: React.ReactNode;
+    to?: string;
+    state?: unknown;
+  }) => (
+    <a href={to} {...props}>
+      {children}
+    </a>
+  ),
   useNavigate: () => vi.fn(),
   useParams: () => routeParams,
 }));
@@ -50,17 +63,45 @@ describe('OrderTracking', () => {
     getOrderTracking.mockRejectedValue({ response: { status: 404 } });
   });
 
-  it('does not show fabricated tracking data when guest read access expires', async () => {
+  it('shows a not-logged-in message and login button without fabricated tracking data when unauthenticated', async () => {
     render(<OrderTracking />);
 
-    expect(await screen.findByRole('status')).toHaveTextContent(
-      'Tracking information is unavailable for this order.',
+    const statusRegion = await screen.findByRole('status');
+    expect(statusRegion).toHaveTextContent('You are not logged in');
+    expect(statusRegion).toHaveTextContent(
+      'Please log in to your account to view tracking information for this order.',
     );
+    const loginLink = screen.getByRole('link', { name: /log in/i });
+    expect(loginLink).toHaveAttribute('href', '/login');
     expect(screen.queryByText(/85,000|latest available information/i)).not.toBeInTheDocument();
+    expect(
+      screen.queryByText('Tracking information is unavailable. Please try again later.'),
+    ).not.toBeInTheDocument();
     await waitFor(() => expect(getOrderTracking).toHaveBeenCalledWith('order-1', undefined));
   });
 
-  it('clears previously loaded tracking when a protected poll loses authorization', async () => {
+  it('shows tracking unavailable message when an authenticated user cannot load an order', async () => {
+    const storage = {
+      clear: vi.fn(),
+      getItem: vi.fn((key: string) =>
+        key === STORAGE_KEYS.ACCESS_TOKEN ? 'valid-jwt-token' : null,
+      ),
+      setItem: vi.fn(),
+      removeItem: vi.fn(),
+    };
+    Object.defineProperty(window, 'localStorage', { configurable: true, value: storage });
+
+    render(<OrderTracking />);
+
+    expect(await screen.findByRole('status')).toHaveTextContent(
+      'Tracking information is unavailable for this order. Please try again later.',
+    );
+    expect(
+      screen.getByText('Tracking information is unavailable. Please try again later.'),
+    ).toBeInTheDocument();
+  });
+
+  it('clears previously loaded tracking and prompts login when a guest poll loses authorization', async () => {
     getOrderTracking
       .mockResolvedValueOnce({
         current_status: 'in_transit',
@@ -77,7 +118,8 @@ describe('OrderTracking', () => {
 
     await new Promise((resolve) => setTimeout(resolve, 10050));
 
-    expect(await screen.findByText('Tracking information is unavailable. Please try again later.')).toBeInTheDocument();
+    expect(await screen.findByText('You are not logged in')).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: /log in/i })).toHaveAttribute('href', '/login');
     expect(screen.queryByText('In Transit')).not.toBeInTheDocument();
   }, 15000);
 
@@ -130,6 +172,7 @@ describe('OrderTracking', () => {
 
       expect(screen.getAllByText('In Transit').length).toBeGreaterThan(0);
       expect(screen.queryByText('Tracking information is unavailable. Please try again later.')).not.toBeInTheDocument();
+      expect(screen.queryByText('You are not logged in')).not.toBeInTheDocument();
     } finally {
       vi.useRealTimers();
     }

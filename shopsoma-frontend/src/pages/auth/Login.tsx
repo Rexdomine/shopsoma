@@ -125,7 +125,12 @@ export default function Login() {
       const userStr = localStorage.getItem('shopsoma_user');
       const userData = userStr ? JSON.parse(userStr) : null;
 
-      // Redirect based on user role
+      const fromState = (location.state as any)?.from;
+      const from = typeof fromState === 'string' ? fromState : fromState?.pathname;
+      if (from && from.startsWith('/track')) {
+        navigate(from, { replace: true });
+        return;
+      }
       if (userData?.role === 'admin') {
         navigate('/admin/vendor-applications', { replace: true });
       } else if (userData?.role === 'vendor') {

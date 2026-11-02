@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useLocation, useNavigate, useParams, useSearchParams } from 'react-router-dom';
-import { ROUTES } from '../../config/constants';
+import { ROUTES, STORAGE_KEYS } from '../../config/constants';
+import { useOptionalAuth } from '../../context/AuthContext';
 import {
   orderService,
   type OrderStatus,
@@ -78,14 +79,19 @@ export default function OrderMapTracking() {
   const location = useLocation();
   const [searchParams] = useSearchParams();
   const { user } = useAuthStore();
+  const auth = useOptionalAuth();
 
   const [tracking, setTracking] = useState<OrderTracking | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [requiresAuth, setRequiresAuth] = useState(false);
   const [isSyncing, setIsSyncing] = useState(false);
   const [isSimulating, setIsSimulating] = useState(false);
   const [isSimModalOpen, setIsSimModalOpen] = useState(false);
   const requestSeqRef = useRef(0);
+
+  const isUserAuthenticated = () =>
+    Boolean(user || auth?.isAuthenticated || localStorage.getItem(STORAGE_KEYS.ACCESS_TOKEN));
 
   const fetchTracking = async (silent = false) => {
     if (!orderId) return;
@@ -95,10 +101,19 @@ export default function OrderMapTracking() {
       const data = await orderService.getOrderTracking(orderId, loadCheckoutCapability(orderId));
       if (seq !== requestSeqRef.current) return;
       setTracking(data);
+      setRequiresAuth(false);
       setError(null);
-    } catch {
+    } catch (err) {
       if (seq !== requestSeqRef.current) return;
-      setError('Unable to load live map tracking for this order.');
+      const status = (err as { response?: { status?: number } })?.response?.status;
+      const isTransientServerError = typeof status === 'number' && status >= 500;
+      if (!isUserAuthenticated() && !isTransientServerError) {
+        setRequiresAuth(true);
+        setError(null);
+      } else {
+        setRequiresAuth(false);
+        setError('Unable to load live map tracking for this order.');
+      }
     } finally {
       if (seq === requestSeqRef.current && !silent) {
         setLoading(false);
@@ -112,7 +127,7 @@ export default function OrderMapTracking() {
       void fetchTracking(true);
     }, 12000);
     return () => window.clearInterval(interval);
-  }, [orderId]);
+  }, [orderId, auth?.isAuthenticated, user]);
 
   const handleSyncShipbubble = async () => {
     if (!orderId || isSyncing) return;
@@ -244,6 +259,26 @@ export default function OrderMapTracking() {
         <div className="flex-1 flex items-center justify-center p-8">
           <div className="text-center space-y-2">
             <p className="text-sm text-gray-500">Fetching latest map tracking updates...</p>
+          </div>
+        </div>
+      ) : requiresAuth ? (
+        <div className="flex-1 flex items-center justify-center p-8">
+          <div className="max-w-md w-full bg-white rounded-sm border border-gray-100 p-6 text-center space-y-4 shadow-sm" role="status">
+            <div className="space-y-2">
+              <h2 className="text-base sm:text-lg font-semibold text-gray-900">
+                You are not logged in
+              </h2>
+              <p className="text-sm text-gray-600">
+                Please log in to your account to view live map tracking for this order.
+              </p>
+            </div>
+            <Link
+              to={ROUTES.LOGIN}
+              state={{ from: location }}
+              className="inline-flex items-center justify-center px-6 py-2.5 rounded-sm bg-primary text-white text-xs sm:text-sm font-semibold uppercase tracking-[0.15em] hover:bg-primary-dark transition"
+            >
+              Log In
+            </Link>
           </div>
         </div>
       ) : error || !tracking || !sbData ? (
