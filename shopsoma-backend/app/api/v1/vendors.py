@@ -620,6 +620,9 @@ async def list_vendor_orders(
             "customer_email": order.customer.email if order.customer else "Unknown",
             "shipping_address": {
                 "address_line1": order.shipping_address.address_line1 if order.shipping_address else None,
+                "address_line2": order.shipping_address.address_line2 if order.shipping_address else None,
+                "house_number": order.shipping_address.house_number if order.shipping_address else None,
+                "postal_code": order.shipping_address.postal_code if order.shipping_address else None,
                 "city": order.shipping_address.city if order.shipping_address else None,
                 "state": order.shipping_address.state if order.shipping_address else None,
                 "country": order.shipping_address.country if order.shipping_address else None,
@@ -719,6 +722,7 @@ async def get_vendor_order(
         "shipping_address": {
             "address_line1": order.shipping_address.address_line1 if order.shipping_address else None,
             "address_line2": order.shipping_address.address_line2 if order.shipping_address else None,
+            "house_number": order.shipping_address.house_number if order.shipping_address else None,
             "city": order.shipping_address.city if order.shipping_address else None,
             "state": order.shipping_address.state if order.shipping_address else None,
             "postal_code": order.shipping_address.postal_code if order.shipping_address else None,

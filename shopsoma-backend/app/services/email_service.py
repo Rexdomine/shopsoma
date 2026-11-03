@@ -506,7 +506,7 @@ class EmailService:
                 [
                     shipping_address.get('full_name'),
                     _addr('address_line_1'),
-                    _addr('address_line_2'),
+                    _addr('address_line_2') or shipping_address.get('house_number'),
                     f"{shipping_address.get('city', '')}, {shipping_address.get('state', '')} {shipping_address.get('postal_code', '')}",
                     shipping_address.get('country', 'Nigeria'),
                     f"Phone: {shipping_address.get('phone_number', '')}",
@@ -937,7 +937,7 @@ class EmailService:
                 [
                     shipping_address.get('full_name'),
                     _addr('address_line_1'),
-                    _addr('address_line_2'),
+                    _addr('address_line_2') or shipping_address.get('house_number'),
                     f"{shipping_address.get('city', '')}, {shipping_address.get('state', '')} {shipping_address.get('postal_code', '')}",
                     shipping_address.get('country', 'Nigeria'),
                     f"Phone: {shipping_address.get('phone_number', '')}",

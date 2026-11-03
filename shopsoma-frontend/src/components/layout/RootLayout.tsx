@@ -2,10 +2,12 @@ import { useEffect, useState } from 'react';
 import { Outlet, useLocation } from 'react-router-dom';
 import ComingSoon from '../../pages/ComingSoon';
 import { getComingSoonSettings, type ComingSoonSettings } from '../../services/settingsService';
+import { captureNavigationContext } from '../../services/googleAnalytics';
 import { useAuth } from '../../context/AuthContext';
 import type { User } from '../../types';
 import Loading from '../common/Loading';
 import CookieConsentBanner from '../common/CookieConsentBanner';
+import GoogleAnalyticsTracker from '../common/GoogleAnalyticsTracker';
 
 const AUTH_ENTRY_PATHS = new Set([
   '/login',
@@ -96,6 +98,10 @@ export default function RootLayout() {
     window.scrollTo(0, 0);
   }, [pathname]);
 
+  useEffect(() => {
+    captureNavigationContext({ pathname, search });
+  }, [pathname, search]);
+
   const bypassComingSoon = shouldBypassComingSoon(pathname, user?.role);
   const gateScope = bypassComingSoon ? 'bypass' : 'public';
   const locationKey = gateLocationKey(pathname, search);
@@ -142,8 +148,8 @@ export default function RootLayout() {
   }
 
   if (gateState === 'closed' && !bypassComingSoon) {
-    return <><ComingSoon initialSettings={resolvedSettings ?? undefined} onReleased={() => setGateState('open')} /><CookieConsentBanner /></>;
+    return <><GoogleAnalyticsTracker /><ComingSoon initialSettings={resolvedSettings ?? undefined} onReleased={() => setGateState('open')} /><CookieConsentBanner /></>;
   }
 
-  return <><Outlet /><CookieConsentBanner /></>;
+  return <><GoogleAnalyticsTracker /><Outlet /><CookieConsentBanner /></>;
 }

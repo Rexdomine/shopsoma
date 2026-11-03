@@ -157,6 +157,7 @@ async def update_address(
 
     # Update address fields
     update_data = address_data.model_dump(exclude_unset=True)
+    update_data.pop("house_number", None)
     for field, value in update_data.items():
         setattr(address, field, value)
 

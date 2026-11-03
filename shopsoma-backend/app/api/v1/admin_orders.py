@@ -209,6 +209,9 @@ def build_address_info(address: Address) -> AddressInfo:
             full_name=address.full_name,
             phone=address.phone_number,  # Address model has phone_number, not phone
             street_address=street_address,  # Combine address_line1 and address_line2
+            address_line1=address.address_line1,
+            address_line2=address.address_line2,
+            house_number=address.house_number,
             city=address.city,
             state=address.state,
             country=address.country,

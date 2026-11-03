@@ -42,6 +42,7 @@ interface NewAddress {
   phone_number: string;
   address_line1: string;
   address_line2?: string;
+  house_number?: string;
   city: string;
   state: string;
   postal_code?: string;
@@ -114,6 +115,7 @@ export default function Checkout() {
     phone_number: '',
     address_line1: '',
     address_line2: '',
+    house_number: '',
     city: '',
     state: '',
     postal_code: '',
@@ -222,15 +224,19 @@ export default function Checkout() {
     try {
       const normalized = await resolveAddressSuggestion(suggestion);
       if (autocompleteRequestSeq.current !== requestId) return;
-      setNewAddress(prev => ({
-        ...prev,
-        address_line1: normalized.addressLine1,
-        address_line2: normalized.addressLine2 || prev.address_line2,
-        city: normalized.city,
-        state: normalized.state,
-        postal_code: normalized.postalCode || prev.postal_code || '',
-        country: normalized.country || 'Nigeria',
-      }));
+      setNewAddress(prev => {
+        const nextHouseNumber = prev.house_number?.trim() || prev.address_line2?.trim() || normalized.addressLine2 || '';
+        return {
+          ...prev,
+          address_line1: normalized.addressLine1,
+          address_line2: nextHouseNumber,
+          house_number: nextHouseNumber,
+          city: normalized.city,
+          state: normalized.state,
+          postal_code: normalized.postalCode || prev.postal_code || '',
+          country: normalized.country || 'Nigeria',
+        };
+      });
       setVerifiedAddressSelection(normalized);
       setAddressSuggestions([]);
       setHasSearchedSuggestions(false);
@@ -254,6 +260,7 @@ export default function Checkout() {
     phone_number: user?.phone_number || '',
     address_line1: '',
     address_line2: '',
+    house_number: '',
     city: '',
     state: '',
     postal_code: '',
@@ -305,6 +312,7 @@ export default function Checkout() {
   // Shipping state
   const [shippingRates, setShippingRates] = useState<ShippingRate[]>([]);
   const [selectedShippingRateId, setSelectedShippingRateId] = useState<string>('');
+  const [addressChangedAfterShipping, setAddressChangedAfterShipping] = useState(false);
 
   // Promo code state
   const [promo, setPromo] = useState('');
@@ -369,6 +377,7 @@ export default function Checkout() {
   const [isSavingAddress, setIsSavingAddress] = useState(false);
   const [isSwitchingCurrency, setIsSwitchingCurrency] = useState(false);
   const isCheckoutRequestPending = isLoadingShipping || isReviewingOrder || isCreatingOrder || isSavingAddress;
+  const isPaymentLocked = Boolean(currentPaymentGateway) || showStripePaymentModal;
 
   // Email validation state
   const [emailError, setEmailError] = useState('');
@@ -460,10 +469,21 @@ export default function Checkout() {
   };
 
   const handleCreateAddress = async () => {
-    if (enforcedOrder || !isAddressVerified || isResolvingSuggestion) return;
+    if (isPaymentLocked || !isAddressVerified || isResolvingSuggestion || isCheckoutRequestPending || isSwitchingCurrency) return;
     const normalizedState = normalizeNigerianState(newAddress.state) || newAddress.state.trim();
     const normalizedCountry = normalizeCountryName(newAddress.country);
     const normalizedPostalCode = (newAddress.postal_code || '').trim().slice(0, 12);
+    const normalizedHouseNumber = (newAddress.house_number ?? newAddress.address_line2 ?? '').trim();
+
+    if (enforcedOrder) {
+      setIsSavingAddress(true);
+      const cancelled = await cancelUnpaidEnforcedOrderForAddressChange();
+      if (!cancelled) {
+        setIsSavingAddress(false);
+        return;
+      }
+    }
+
     // For guest checkout, just use the address locally without saving to backend
     if (isGuestCheckout) {
       const guestAddress: Address = {
@@ -472,7 +492,8 @@ export default function Checkout() {
         full_name: newAddress.full_name.trim(),
         phone_number: newAddress.phone_number.trim(),
         address_line1: newAddress.address_line1.trim(),
-        address_line2: newAddress.address_line2?.trim() || '',
+        address_line2: normalizedHouseNumber,
+        house_number: normalizedHouseNumber,
         city: newAddress.city.trim(),
         state: normalizedState,
         postal_code: normalizedPostalCode,
@@ -487,6 +508,9 @@ export default function Checkout() {
       setSelectedAddressId(guestAddress.id);
       setShowNewAddressForm(false);
       setEditingAddressId(null);
+      resetShippingAndReviewState(true);
+      setStep('address');
+      setIsSavingAddress(false);
       resetAutocompleteState();
       return;
     }
@@ -498,7 +522,8 @@ export default function Checkout() {
         full_name: newAddress.full_name.trim(),
         phone_number: newAddress.phone_number.trim(),
         address_line1: newAddress.address_line1.trim(),
-        address_line2: newAddress.address_line2?.trim() || '',
+        address_line2: normalizedHouseNumber,
+        house_number: normalizedHouseNumber,
         city: newAddress.city.trim(),
         state: normalizedState,
         postal_code: normalizedPostalCode,
@@ -509,25 +534,50 @@ export default function Checkout() {
 
       if (editingAddressId) {
         const updated = await checkoutService.updateAddress(editingAddressId, addressData);
+        const resolvedHouseNumber = (
+          updated.house_number !== undefined
+            ? updated.house_number
+            : updated.address_line2 !== undefined
+              ? updated.address_line2
+              : normalizedHouseNumber
+        ) || '';
+        const normalizedUpdated: Address = {
+          ...updated,
+          address_line2: resolvedHouseNumber,
+          house_number: resolvedHouseNumber,
+        };
         setAddresses(addresses.map(address => {
-          if (address.id === updated.id) return updated;
-          if (updated.is_default && address.address_type === updated.address_type) {
+          if (address.id === normalizedUpdated.id) return normalizedUpdated;
+          if (normalizedUpdated.is_default && address.address_type === normalizedUpdated.address_type) {
             return { ...address, is_default: false };
           }
           return address;
         }));
-        setSelectedAddressId(updated.id);
-        // A destination change invalidates all location-derived delivery and review state.
-        setShippingRates([]);
-        setSelectedShippingRateId('');
-        setOrderReview(null);
-        setCurrentOrderId('');
-        setStep('address');
+        setSelectedAddressId(normalizedUpdated.id);
       } else {
         const created = await checkoutService.createAddress(addressData);
-        setAddresses([...addresses, created]);
-        setSelectedAddressId(created.id);
+        const resolvedHouseNumber = (
+          created.house_number !== undefined
+            ? created.house_number
+            : created.address_line2 !== undefined
+              ? created.address_line2
+              : normalizedHouseNumber
+        ) || '';
+        const normalizedCreated: Address = {
+          ...created,
+          address_line2: resolvedHouseNumber,
+          house_number: resolvedHouseNumber,
+        };
+        setAddresses(
+          normalizedCreated.is_default
+            ? [...addresses.map(address => address.address_type === normalizedCreated.address_type ? { ...address, is_default: false } : address), normalizedCreated]
+            : [...addresses, normalizedCreated]
+        );
+        setSelectedAddressId(normalizedCreated.id);
       }
+      // A destination change invalidates all location-derived delivery and review state.
+      resetShippingAndReviewState(true);
+      setStep('address');
       setShowNewAddressForm(false);
       setEditingAddressId(null);
 
@@ -542,7 +592,8 @@ export default function Checkout() {
           full_name: newAddress.full_name.trim(),
           phone_number: newAddress.phone_number.trim(),
           address_line1: newAddress.address_line1.trim(),
-          address_line2: newAddress.address_line2?.trim() || '',
+          address_line2: normalizedHouseNumber,
+          house_number: normalizedHouseNumber,
           city: newAddress.city.trim(),
           state: normalizedState,
           postal_code: normalizedPostalCode,
@@ -557,10 +608,7 @@ export default function Checkout() {
         setSelectedAddressId(guestAddress.id);
         setShowNewAddressForm(false);
         setEditingAddressId(null);
-        setShippingRates([]);
-        setSelectedShippingRateId('');
-        setOrderReview(null);
-        setCurrentOrderId('');
+        resetShippingAndReviewState(true);
         setStep('address');
         resetAutocompleteState();
         return;
@@ -774,11 +822,13 @@ export default function Checkout() {
 
       if (isGuestCheckout && selectedAddress && selectedAddress.id === 'guest-address') {
         // For guest checkout, send address data directly
+        const guestHouseNumber = (selectedAddress.house_number ?? selectedAddress.address_line2 ?? '').trim();
         reviewRequest.guest_address = {
           full_name: selectedAddress.full_name,
           phone_number: selectedAddress.phone_number,
           address_line1: selectedAddress.address_line1,
-          address_line2: selectedAddress.address_line2,
+          address_line2: guestHouseNumber,
+          house_number: guestHouseNumber,
           city: selectedAddress.city,
           state: selectedAddress.state,
           postal_code: selectedAddress.postal_code,
@@ -831,6 +881,7 @@ export default function Checkout() {
 
   const discardExpiredCheckout = () => {
     clearCheckoutCapability();
+    selectionKeys.clear();
     setEnforcedOrder(null);
     setLegacyOrderNeedsConfirmation(false);
     setCheckoutEstimate(null);
@@ -841,6 +892,93 @@ export default function Checkout() {
     setStripePaymentIntentId('');
     setCurrentPaymentGateway(null);
     setCurrentOrderId('');
+  };
+
+  const resetShippingAndReviewState = (markAddressChanged = false) => {
+    if (
+      markAddressChanged &&
+      (step !== 'address' ||
+        shippingRates.length > 0 ||
+        Boolean(orderReview) ||
+        Boolean(checkoutEstimate) ||
+        Boolean(enforcedOrder))
+    ) {
+      setAddressChangedAfterShipping(true);
+    }
+    setSelectedShippingRateId('');
+    setShippingRates([]);
+    setOrderReview(null);
+    setCheckoutQuote(null);
+    setPriceChangeNotice(null);
+    setCurrentOrderId('');
+  };
+
+  const cancelUnpaidEnforcedOrderForAddressChange = async (): Promise<boolean> => {
+    if (!enforcedOrder) return true;
+    try {
+      await checkoutService.cancelOrder(
+        enforcedOrder.id,
+        'Customer changed delivery address before payment',
+        checkoutCapability,
+      );
+      discardExpiredCheckout();
+      return true;
+    } catch (error: any) {
+      const terminalAuthorization = error.response?.status === 404 || error.response?.status === 410;
+      if (terminalAuthorization) {
+        discardExpiredCheckout();
+        return true;
+      }
+      alert(error.response?.data?.detail || error.message || 'We could not safely change the delivery address. Please retry.');
+      return false;
+    }
+  };
+
+  const handleSelectSavedAddress = async (addressId: string) => {
+    if (isPaymentLocked || isCheckoutRequestPending || isSwitchingCurrency) return;
+    if (addressId === selectedAddressId && step === 'address' && !showNewAddressForm) return;
+
+    if (enforcedOrder) {
+      setIsCreatingOrder(true);
+      try {
+        const cancelled = await cancelUnpaidEnforcedOrderForAddressChange();
+        if (!cancelled) return;
+      } finally {
+        setIsCreatingOrder(false);
+      }
+    }
+
+    setShowNewAddressForm(false);
+    setEditingAddressId(null);
+    resetAutocompleteState();
+    if (addressId !== selectedAddressId) {
+      setSelectedAddressId(addressId);
+      resetShippingAndReviewState(true);
+      setStep('address');
+    } else if (step !== 'address') {
+      resetShippingAndReviewState(true);
+      setStep('address');
+    }
+  };
+
+  const handleReturnToAddressSelection = async () => {
+    if (isPaymentLocked || isCheckoutRequestPending || isSwitchingCurrency) return;
+
+    if (enforcedOrder) {
+      setIsCreatingOrder(true);
+      try {
+        const cancelled = await cancelUnpaidEnforcedOrderForAddressChange();
+        if (!cancelled) return;
+      } finally {
+        setIsCreatingOrder(false);
+      }
+    }
+
+    setShowNewAddressForm(false);
+    setEditingAddressId(null);
+    resetAutocompleteState();
+    resetShippingAndReviewState(true);
+    setStep('address');
   };
 
   const changeCheckoutCurrency = async (nextCurrency: Currency) => {
@@ -1064,7 +1202,7 @@ export default function Checkout() {
   };
 
   const handlePurchase = async () => {
-    if (!selectedAddressId || (!secureShipping && !orderReview) || enforcedOrder || priceChangeNotice) return;
+    if (!selectedAddressId || showNewAddressForm || (!secureShipping && !orderReview) || enforcedOrder || priceChangeNotice) return;
 
     setIsCreatingOrder(true);
     try {
@@ -1085,11 +1223,13 @@ export default function Checkout() {
       };
 
       if (isGuestCheckout && selectedAddress?.id === 'guest-address') {
+        const guestHouseNumber = (selectedAddress.house_number ?? selectedAddress.address_line2 ?? '').trim();
         orderRequest.guest_address = {
           full_name: selectedAddress.full_name,
           phone_number: selectedAddress.phone_number,
           address_line1: selectedAddress.address_line1,
-          address_line2: selectedAddress.address_line2,
+          address_line2: guestHouseNumber,
+          house_number: guestHouseNumber,
           city: selectedAddress.city,
           state: selectedAddress.state,
           postal_code: selectedAddress.postal_code,
@@ -1269,6 +1409,7 @@ export default function Checkout() {
         selectionKey,
         checkoutCapability,
       );
+      setAddressChangedAfterShipping(false);
       setCheckoutEstimate(selectedEstimate);
       return selectedEstimate;
     } catch (error: any) {
@@ -1394,7 +1535,7 @@ export default function Checkout() {
   );
   const hasSelectedAddress = !!selectedAddressId;
   const hasSelectedShipping = !!selectedShippingRateId;
-  const canPurchase = paymentOptions.length > 0 && step === 'payment' && hasEmail && hasSelectedAddress && (secureShipping || (hasSelectedShipping && orderReview)) && !enforcedOrder && !priceChangeNotice;
+  const canPurchase = paymentOptions.length > 0 && step === 'payment' && hasEmail && hasSelectedAddress && !showNewAddressForm && (secureShipping || (hasSelectedShipping && orderReview)) && !enforcedOrder && !priceChangeNotice;
 
   const selectedShippingRate = shippingRates.find(rate => rate.id === selectedShippingRateId);
   const shippingRateInSelectedCurrency = selectedShippingRate
@@ -1483,10 +1624,12 @@ export default function Checkout() {
   };
 
   const handleShippingSave = async () => {
+    if (showNewAddressForm) return;
     setIsReviewingOrder(true);
     try {
       const review = await handleReviewOrder();
       if (review) {
+        setAddressChangedAfterShipping(false);
         setStep('payment');
       }
     } finally {
@@ -1676,37 +1819,31 @@ export default function Checkout() {
                             >
                               <button
                                 type="button"
-                                disabled={!!enforcedOrder || isCheckoutRequestPending}
-                                onClick={() => {
-                                  if (addr.id !== selectedAddressId) {
-                                    setSelectedAddressId(addr.id);
-                                    setSelectedShippingRateId('');
-                                    setShippingRates([]);
-                                    setOrderReview(null);
-                                    setStep('address');
-                                  }
-                                }}
+                                disabled={isPaymentLocked || isCheckoutRequestPending || isSwitchingCurrency}
+                                onClick={() => void handleSelectSavedAddress(addr.id)}
                                 className="flex-1 text-left"
                               >
                                 <p className="text-sm font-semibold text-gray-800">{addr.full_name}</p>
                                 <p className="text-xs text-gray-600">
-                                  {addr.address_line1}, {addr.city}, {addr.state}, {addr.country}
+                                  {(addr.house_number || addr.address_line2) ? `${addr.house_number || addr.address_line2}, ${addr.address_line1}` : addr.address_line1}, {addr.city}, {addr.state}, {addr.country}
                                 </p>
                                 <p className="text-xs text-gray-500">{addr.phone_number}</p>
                               </button>
                               <button
                                 type="button"
                                 aria-label="Edit delivery address"
-                                disabled={!!enforcedOrder || isCheckoutRequestPending}
+                                disabled={isPaymentLocked || isCheckoutRequestPending || isSwitchingCurrency}
                                 onClick={() => {
                                   const normalizedAddrState = normalizeNigerianState(addr.state) || addr.state;
                                   const normalizedAddrCountry = normalizeCountryName(addr.country);
+                                  const existingHouseNumber = addr.house_number ?? addr.address_line2 ?? '';
                                   resetAutocompleteState();
                                   setNewAddress({
                                     full_name: addr.full_name,
                                     phone_number: addr.phone_number,
                                     address_line1: addr.address_line1,
-                                    address_line2: addr.address_line2 || '',
+                                    address_line2: existingHouseNumber,
+                                    house_number: existingHouseNumber,
                                     city: addr.city,
                                     state: normalizedAddrState,
                                     postal_code: addr.postal_code || '',
@@ -1714,12 +1851,12 @@ export default function Checkout() {
                                     address_type: addr.address_type,
                                     is_default: addr.is_default,
                                   });
-                                  if (addr.address_line1.trim() && addr.city.trim() && normalizedAddrState.trim()) {
+                                  if (addr.address_line1.trim()) {
                                     setVerifiedAddressSelection({
                                       placeId: `saved-${addr.id}`,
                                       formattedAddress: [addr.address_line1, addr.city, normalizedAddrState, normalizedAddrCountry].filter(Boolean).join(', '),
                                       addressLine1: addr.address_line1,
-                                      addressLine2: addr.address_line2 || undefined,
+                                      addressLine2: existingHouseNumber || undefined,
                                       city: addr.city,
                                       state: normalizedAddrState,
                                       postalCode: addr.postal_code || '',
@@ -1819,7 +1956,23 @@ export default function Checkout() {
                                     onChange={(e) => {
                                       const nextValue = e.target.value;
                                       setNewAddress(prev => ({ ...prev, address_line1: nextValue }));
-                                      setVerifiedAddressSelection(null);
+                                      const editingAddr = editingAddressId ? addresses.find(a => a.id === editingAddressId) : null;
+                                      if (editingAddr && nextValue.trim() === editingAddr.address_line1.trim()) {
+                                        const normalizedEditState = normalizeNigerianState(newAddress.state) || newAddress.state;
+                                        const normalizedEditCountry = normalizeCountryName(newAddress.country);
+                                        setVerifiedAddressSelection({
+                                          placeId: `saved-${editingAddr.id}`,
+                                          formattedAddress: [editingAddr.address_line1, newAddress.city, normalizedEditState, normalizedEditCountry].filter(Boolean).join(', '),
+                                          addressLine1: editingAddr.address_line1,
+                                          addressLine2: newAddress.address_line2 || undefined,
+                                          city: newAddress.city,
+                                          state: normalizedEditState,
+                                          postalCode: newAddress.postal_code || '',
+                                          country: normalizedEditCountry,
+                                        });
+                                      } else {
+                                        setVerifiedAddressSelection(null);
+                                      }
                                       triggerAddressAutocomplete(nextValue);
                                     }}
                                     onKeyDown={(e) => {
@@ -1966,6 +2119,27 @@ export default function Checkout() {
                                   )
                                 )}
                               </div>
+                              <div>
+                                <label className="text-xs text-gray-500" htmlFor="checkout-house-number">
+                                  House number
+                                </label>
+                                <input
+                                  id="checkout-house-number"
+                                  type="text"
+                                  aria-label="House number"
+                                  value={newAddress.house_number ?? newAddress.address_line2 ?? ''}
+                                  onChange={(e) => {
+                                    const nextHouseNumber = e.target.value;
+                                    setNewAddress(prev => ({
+                                      ...prev,
+                                      house_number: nextHouseNumber,
+                                      address_line2: nextHouseNumber,
+                                    }));
+                                  }}
+                                  className="w-full border-b border-gray-300 focus:border-primary focus:outline-none py-2 text-sm"
+                                  placeholder="Optional (e.g. 12B, Plot 4, Flat 2)"
+                                />
+                              </div>
                               <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 sm:gap-4">
                                 <div>
                                   <label className="text-xs text-gray-500">City</label>
@@ -1976,8 +2150,11 @@ export default function Checkout() {
                                     onChange={(e) => {
                                       const nextCity = e.target.value;
                                       setNewAddress({ ...newAddress, city: nextCity });
-                                      if (verifiedAddressSelection && nextCity.trim().toLowerCase() !== verifiedAddressSelection.city.trim().toLowerCase()) {
-                                        setVerifiedAddressSelection(null);
+                                      if (verifiedAddressSelection) {
+                                        setVerifiedAddressSelection({
+                                          ...verifiedAddressSelection,
+                                          city: nextCity,
+                                        });
                                       }
                                     }}
                                     className="w-full border-b border-gray-300 focus:border-primary focus:outline-none py-2 text-sm"
@@ -1992,8 +2169,11 @@ export default function Checkout() {
                                     onChange={(e) => {
                                       const nextState = e.target.value;
                                       setNewAddress({ ...newAddress, state: nextState });
-                                      if (verifiedAddressSelection && nextState.trim() !== verifiedAddressSelection.state.trim()) {
-                                        setVerifiedAddressSelection(null);
+                                      if (verifiedAddressSelection) {
+                                        setVerifiedAddressSelection({
+                                          ...verifiedAddressSelection,
+                                          state: nextState,
+                                        });
                                       }
                                     }}
                                     className="w-full border-b border-gray-300 bg-white focus:border-primary focus:outline-none py-2 text-sm"
@@ -2069,7 +2249,7 @@ export default function Checkout() {
                           ) : !isGuestCheckout || addresses.length === 0 ? (
                             <button
                               type="button"
-                              disabled={!!enforcedOrder || isCheckoutRequestPending}
+                              disabled={isPaymentLocked || isCheckoutRequestPending || isSwitchingCurrency}
                               onClick={() => {
                                 setEditingAddressId(null);
                                 resetNewAddress();
@@ -2101,10 +2281,15 @@ export default function Checkout() {
                                 {selectedAddressPostalCodeGuidance}
                               </p>
                             )}
+                            {step === 'address' && addressChangedAfterShipping && !showNewAddressForm && !selectedAddressNeedsPostalCode && (
+                              <p className="mb-3 text-xs text-amber-800 bg-amber-50 border border-amber-200 rounded-sm px-3 py-2" role="status">
+                                Delivery address updated. Continue to recalculate shipping options for this address.
+                              </p>
+                            )}
                             <button
                               type="button"
                               onClick={handleAddressSave}
-                              disabled={step !== 'address' || showNewAddressForm || !hasSelectedAddress || selectedAddressNeedsPostalCode || isCheckoutRequestPending || !shippingConfigLoaded || shippingConfigError || !!enforcedOrder}
+                              disabled={step !== 'address' || showNewAddressForm || !hasSelectedAddress || selectedAddressNeedsPostalCode || isCheckoutRequestPending || !shippingConfigLoaded || shippingConfigError || isPaymentLocked || isSwitchingCurrency}
                               className="w-full py-3 rounded-sm bg-primary text-white text-sm font-semibold disabled:opacity-50"
                             >
                               {isLoadingShipping ? 'Calculating Shipping...' : 'Continue'}
@@ -2120,9 +2305,26 @@ export default function Checkout() {
 
                 {/* Shipping Step */}
                 <div className="space-y-4">
-                  {renderStepTitle('Shipping Method', step === 'shipping' || step === 'payment')}
+                  <div className="flex items-center justify-between gap-2 max-w-2xl">
+                    {renderStepTitle('Shipping Method', step === 'shipping' || step === 'payment')}
+                    {(step === 'shipping' || step === 'payment') && !isPaymentLocked && (
+                      <button
+                        type="button"
+                        onClick={() => void handleReturnToAddressSelection()}
+                        disabled={isCheckoutRequestPending || isSwitchingCurrency}
+                        className="text-xs font-semibold text-primary underline hover:text-primary-dark disabled:opacity-50"
+                      >
+                        Change delivery address
+                      </button>
+                    )}
+                  </div>
                   {secureShipping ? step === 'shipping' ? (
                     <div className="space-y-3 rounded-sm border border-gray-200 p-4">
+                      {addressChangedAfterShipping && (
+                        <p className="text-xs text-amber-800 bg-amber-50 border border-amber-200 rounded-sm px-3 py-2" role="status">
+                          Shipping options must be recalculated for your updated delivery address.
+                        </p>
+                      )}
                       {shippingProvider === 'combined' ? (
                         <div>
                           <div className="flex items-center gap-2 mb-1.5">
@@ -2166,7 +2368,7 @@ export default function Checkout() {
                         <button
                           type="button"
                           onClick={() => void handlePurchase()}
-                          disabled={isCreatingOrder || !hasEmail || !isEmailConfirmed || Boolean(priceChangeNotice)}
+                          disabled={isCreatingOrder || showNewAddressForm || !hasEmail || !isEmailConfirmed || Boolean(priceChangeNotice)}
                           className="w-full py-3 rounded-sm bg-primary text-white text-sm font-semibold disabled:opacity-50"
                         >
                           {shippingProvider === 'combined'
@@ -2208,6 +2410,11 @@ export default function Checkout() {
                     <p className="text-sm text-gray-600">Choose a delivery option below before payment.</p>
                   ) : step === 'shipping' || step === 'payment' ? (
                     <div className="space-y-3">
+                      {addressChangedAfterShipping && step === 'shipping' && (
+                        <p className="text-xs text-amber-800 bg-amber-50 border border-amber-200 rounded-sm px-3 py-2" role="status">
+                          Shipping options have been recalculated for your updated delivery address. Please select a shipping option to continue.
+                        </p>
+                      )}
                       {shippingRates.map((rate) => (
                         <button
                           key={rate.id}
@@ -2245,7 +2452,7 @@ export default function Checkout() {
                       <button
                         type="button"
                         onClick={handleShippingSave}
-                        disabled={!hasSelectedShipping || isReviewingOrder || step !== 'shipping'}
+                        disabled={!hasSelectedShipping || isReviewingOrder || step !== 'shipping' || showNewAddressForm}
                         aria-busy={isReviewingOrder}
                         className="px-6 py-2 rounded-sm bg-primary text-white text-sm font-semibold disabled:opacity-50 flex items-center justify-center gap-2"
                       >
@@ -2327,9 +2534,9 @@ export default function Checkout() {
                           estimate={checkoutEstimate}
                           selectOption={selectCheckoutOption}
                           refreshEstimate={refreshCheckoutEstimate}
-                          isSubmitting={isCreatingOrder}
+                          isSubmitting={isCreatingOrder || showNewAddressForm}
                           onSelectionConfirmed={(selectedEstimate) => {
-                            if (isCreatingOrder) return;
+                            if (isCreatingOrder || showNewAddressForm) return;
                             const selectedOption = selectedEstimate.selected_option;
                             const validSelectedTruth = Boolean(
                               selectedOption

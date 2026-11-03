@@ -225,6 +225,7 @@ export interface VendorOrder {
   shipping_address: {
     address_line1: string | null;
     address_line2?: string | null;
+    house_number?: string | null;
     city: string | null;
     state: string | null;
     postal_code?: string | null;
