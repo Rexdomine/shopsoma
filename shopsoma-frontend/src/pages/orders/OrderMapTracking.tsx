@@ -85,16 +85,25 @@ export default function OrderMapTracking() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [requiresAuth, setRequiresAuth] = useState(false);
+  const [notOrderOwner, setNotOrderOwner] = useState(false);
   const [isSyncing, setIsSyncing] = useState(false);
   const [isSimulating, setIsSimulating] = useState(false);
   const [isSimModalOpen, setIsSimModalOpen] = useState(false);
   const requestSeqRef = useRef(0);
 
-  const isUserAuthenticated = () =>
-    Boolean(user || auth?.isAuthenticated || localStorage.getItem(STORAGE_KEYS.ACCESS_TOKEN));
+  const isUserAuthenticated = () => {
+    if (auth && !auth.isLoading) {
+      return auth.isAuthenticated;
+    }
+    return Boolean(user || auth?.isAuthenticated || localStorage.getItem(STORAGE_KEYS.ACCESS_TOKEN));
+  };
 
   const fetchTracking = async (silent = false) => {
     if (!orderId) return;
+    if (auth?.isLoading) {
+      if (!silent) setLoading(true);
+      return;
+    }
     const seq = ++requestSeqRef.current;
     if (!silent) setLoading(true);
     try {
@@ -102,6 +111,7 @@ export default function OrderMapTracking() {
       if (seq !== requestSeqRef.current) return;
       setTracking(data);
       setRequiresAuth(false);
+      setNotOrderOwner(false);
       setError(null);
     } catch (err) {
       if (seq !== requestSeqRef.current) return;
@@ -109,9 +119,15 @@ export default function OrderMapTracking() {
       const isTransientServerError = typeof status === 'number' && status >= 500;
       if (!isUserAuthenticated() && !isTransientServerError) {
         setRequiresAuth(true);
+        setNotOrderOwner(false);
+        setError(null);
+      } else if (isUserAuthenticated() && !isTransientServerError) {
+        setRequiresAuth(false);
+        setNotOrderOwner(true);
         setError(null);
       } else {
         setRequiresAuth(false);
+        setNotOrderOwner(false);
         setError('Unable to load live map tracking for this order.');
       }
     } finally {
@@ -127,7 +143,7 @@ export default function OrderMapTracking() {
       void fetchTracking(true);
     }, 12000);
     return () => window.clearInterval(interval);
-  }, [orderId, auth?.isAuthenticated, user]);
+  }, [orderId, auth?.isLoading, auth?.isAuthenticated, user]);
 
   const handleSyncShipbubble = async () => {
     if (!orderId || isSyncing) return;
@@ -279,6 +295,35 @@ export default function OrderMapTracking() {
             >
               Log In
             </Link>
+          </div>
+        </div>
+      ) : notOrderOwner ? (
+        <div className="flex-1 flex items-center justify-center p-8">
+          <div className="max-w-md w-full bg-white rounded-sm border border-gray-100 p-6 text-center space-y-4 shadow-sm" role="status">
+            <div className="space-y-2">
+              <h2 className="text-base sm:text-lg font-semibold text-gray-900">
+                Order not found on your account
+              </h2>
+              <p className="text-sm text-gray-600">
+                This order does not belong to the account you are currently logged in with
+                {auth?.user?.email ? ` (${auth.user.email})` : ''}, or could not be found. Please log in with the account used to place this order.
+              </p>
+            </div>
+            <div className="flex flex-wrap items-center justify-center gap-3">
+              <Link
+                to={ROUTES.LOGIN}
+                state={{ from: location }}
+                className="inline-flex items-center justify-center px-6 py-2.5 rounded-sm bg-primary text-white text-xs sm:text-sm font-semibold uppercase tracking-[0.15em] hover:bg-primary-dark transition"
+              >
+                Log In with Another Account
+              </Link>
+              <Link
+                to={ROUTES.ORDERS}
+                className="inline-flex items-center justify-center px-6 py-2.5 rounded-sm border border-gray-300 bg-white text-gray-700 text-xs sm:text-sm font-semibold uppercase tracking-[0.15em] hover:bg-gray-50 transition"
+              >
+                View My Orders
+              </Link>
+            </div>
           </div>
         </div>
       ) : error || !tracking || !sbData ? (

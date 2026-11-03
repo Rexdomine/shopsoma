@@ -55,6 +55,7 @@ export default function OrderTracking() {
   const [tracking, setTracking] = useState<OrderTracking | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [requiresAuth, setRequiresAuth] = useState(false);
+  const [notOrderOwner, setNotOrderOwner] = useState(false);
   const [loading, setLoading] = useState(true);
   const [showOrderModal, setShowOrderModal] = useState(false);
   const [orderDetails, setOrderDetails] = useState<any>(null);
@@ -69,8 +70,12 @@ export default function OrderTracking() {
   const formatOrderPrice = (amount: number) =>
     formatPriceWithConversion(amount, 'NGN', orderCurrency, exchangeRates);
 
-  const isUserAuthenticated = () =>
-    Boolean(auth?.isAuthenticated || localStorage.getItem(STORAGE_KEYS.ACCESS_TOKEN));
+  const isUserAuthenticated = () => {
+    if (auth && !auth.isLoading) {
+      return auth.isAuthenticated;
+    }
+    return Boolean(auth?.isAuthenticated || localStorage.getItem(STORAGE_KEYS.ACCESS_TOKEN));
+  };
 
   const loginRedirectLocation = useMemo(
     () => ({
@@ -90,6 +95,7 @@ export default function OrderTracking() {
     setTracking(null);
     setError(null);
     setRequiresAuth(false);
+    setNotOrderOwner(false);
     setOrderDetails(null);
     setShowOrderModal(false);
     setLoadingOrder(false);
@@ -104,6 +110,11 @@ export default function OrderTracking() {
       return;
     }
 
+    if (auth?.isLoading) {
+      setLoading(true);
+      return;
+    }
+
     let isMounted = true;
     (async () => {
       try {
@@ -112,6 +123,7 @@ export default function OrderTracking() {
           setTracking(data);
           setError(null);
           setRequiresAuth(false);
+          setNotOrderOwner(false);
         }
       } catch (err) {
         console.error('Failed to fetch tracking details', err);
@@ -120,9 +132,15 @@ export default function OrderTracking() {
           const isTransientServerError = typeof status === 'number' && status >= 500;
           if (!isUserAuthenticated() && !isTransientServerError) {
             setRequiresAuth(true);
+            setNotOrderOwner(false);
+            setError(null);
+          } else if (isUserAuthenticated() && !isTransientServerError) {
+            setRequiresAuth(false);
+            setNotOrderOwner(true);
             setError(null);
           } else {
             setRequiresAuth(false);
+            setNotOrderOwner(false);
             setError('Tracking information is unavailable. Please try again later.');
           }
           // Never replace an authorized response with fabricated order data.
@@ -138,11 +156,11 @@ export default function OrderTracking() {
     return () => {
       isMounted = false;
     };
-  }, [orderId, auth?.isAuthenticated]);
+  }, [orderId, auth?.isLoading, auth?.isAuthenticated]);
 
   // WebSocket connection for real-time updates
   useEffect(() => {
-    if (!orderId) return;
+    if (!orderId || auth?.isLoading) return;
 
     const requestGeneration = ++pollingGeneration.current;
     let isPollingEffectActive = true;
@@ -261,6 +279,7 @@ export default function OrderTracking() {
             latestSettledPollSequence = pollSequence;
             setTracking(data);
             setRequiresAuth(false);
+            setNotOrderOwner(false);
             setError(null);
             setLoading(false);
           }
@@ -277,10 +296,12 @@ export default function OrderTracking() {
             setTracking(null);
             if (!isUserAuthenticated()) {
               setRequiresAuth(true);
+              setNotOrderOwner(false);
               setError(null);
             } else {
               setRequiresAuth(false);
-              setError('Tracking information is unavailable. Please try again later.');
+              setNotOrderOwner(true);
+              setError(null);
             }
           }
         }
@@ -295,7 +316,7 @@ export default function OrderTracking() {
       clearInterval(pollInterval);
       setIsConnectedToWebSocket(false);
     };
-  }, [orderId, tracking?.order_id]);
+  }, [orderId, tracking?.order_id, auth?.isLoading]);
 
   const activeIndex = useMemo(() => {
     if (!tracking) return 0;
@@ -503,7 +524,7 @@ export default function OrderTracking() {
             </div>
           )}
 
-          {!requiresAuth && (
+          {!requiresAuth && !notOrderOwner && (
             <div className="rounded-sm border border-gray-100 bg-gray-50 px-4 sm:px-6 py-3.5 sm:py-5">
               <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2.5 sm:gap-4">
                 <p className="text-xs sm:text-sm font-semibold text-gray-800 break-words">
@@ -862,6 +883,33 @@ export default function OrderTracking() {
                     className="inline-flex items-center justify-center px-6 py-2.5 bg-primary text-white text-xs sm:text-sm font-semibold uppercase tracking-[0.15em] rounded-sm hover:bg-primary-dark transition"
                   >
                     Log In
+                  </Link>
+                </div>
+              </div>
+            ) : notOrderOwner ? (
+              <div className="text-center py-6 sm:py-8 space-y-4" role="status">
+                <div className="space-y-2 max-w-md mx-auto">
+                  <h2 className="text-base sm:text-lg font-semibold text-gray-900">
+                    Order not found on your account
+                  </h2>
+                  <p className="text-sm text-gray-600">
+                    This order does not belong to the account you are currently logged in with
+                    {auth?.user?.email ? ` (${auth.user.email})` : ''}, or could not be found. Please log in with the account used to place this order.
+                  </p>
+                </div>
+                <div className="flex flex-wrap items-center justify-center gap-3">
+                  <Link
+                    to={ROUTES.LOGIN}
+                    state={{ from: loginRedirectLocation }}
+                    className="inline-flex items-center justify-center px-6 py-2.5 bg-primary text-white text-xs sm:text-sm font-semibold uppercase tracking-[0.15em] rounded-sm hover:bg-primary-dark transition"
+                  >
+                    Log In with Another Account
+                  </Link>
+                  <Link
+                    to={ROUTES.ORDERS}
+                    className="inline-flex items-center justify-center px-6 py-2.5 border border-gray-300 bg-white text-gray-700 text-xs sm:text-sm font-semibold uppercase tracking-[0.15em] rounded-sm hover:bg-gray-50 transition"
+                  >
+                    View My Orders
                   </Link>
                 </div>
               </div>

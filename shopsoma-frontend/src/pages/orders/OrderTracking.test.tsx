@@ -80,7 +80,7 @@ describe('OrderTracking', () => {
     await waitFor(() => expect(getOrderTracking).toHaveBeenCalledWith('order-1', undefined));
   });
 
-  it('shows tracking unavailable message when an authenticated user cannot load an order', async () => {
+  it('shows order not found on your account message and switch account button when an authenticated user does not own the order', async () => {
     const storage = {
       clear: vi.fn(),
       getItem: vi.fn((key: string) =>
@@ -93,12 +93,21 @@ describe('OrderTracking', () => {
 
     render(<OrderTracking />);
 
-    expect(await screen.findByRole('status')).toHaveTextContent(
-      'Tracking information is unavailable for this order. Please try again later.',
+    const statusRegion = await screen.findByRole('status');
+    expect(statusRegion).toHaveTextContent('Order not found on your account');
+    expect(statusRegion).toHaveTextContent(
+      'This order does not belong to the account you are currently logged in with, or could not be found. Please log in with the account used to place this order.',
     );
     expect(
-      screen.getByText('Tracking information is unavailable. Please try again later.'),
-    ).toBeInTheDocument();
+      screen.getByRole('link', { name: /log in with another account/i }),
+    ).toHaveAttribute('href', '/login');
+    expect(screen.getByRole('link', { name: /view my orders/i })).toHaveAttribute(
+      'href',
+      '/orders',
+    );
+    expect(
+      screen.queryByText('Tracking information is unavailable. Please try again later.'),
+    ).not.toBeInTheDocument();
   });
 
   it('clears previously loaded tracking and prompts login when a guest poll loses authorization', async () => {
