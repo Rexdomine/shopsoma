@@ -1089,3 +1089,96 @@ def test_nested_size_stock_labels_must_be_unique_across_size_variations():
 
     with pytest.raises(ValueError, match="Nested size-stock labels"):
         validate_variation_inventory_shape([first, second])
+
+
+def test_made_to_order_product_marks_zero_stock_size_variants_available():
+    from app.api.v1.cart import resolve_cart_purchase_option, resolve_variant_response
+
+    now = datetime.now(timezone.utc)
+    product_id = uuid4()
+    variation_id = uuid4()
+    size_stock_id = uuid4()
+
+    size_stock = SizeStockResponse.model_construct(
+        id=size_stock_id,
+        variation_id=variation_id,
+        size="M",
+        stock=0,
+        created_at=now,
+        updated_at=now,
+    )
+    variation = VariationResponse.model_construct(
+        id=variation_id,
+        product_id=product_id,
+        title="Blue Hand-dyed",
+        type="color",
+        color_hex=None,
+        price=Decimal("188000.00"),
+        sale_price=None,
+        inherits_price=True,
+        inherits_sale_price=True,
+        images=[],
+        is_active=True,
+        created_at=now,
+        updated_at=now,
+        size_stocks=[size_stock],
+    )
+    product = ProductResponse.model_construct(
+        id=product_id,
+        base_price=Decimal("188000.00"),
+        compare_at_price=None,
+        product_type="variable",
+        made_to_order=True,
+        made_to_order_timeline="2 weeks",
+        total_stock=0,
+        variants=[],
+        variations=[variation],
+    )
+
+    product.generate_variants_from_variations()  # pyright: ignore[reportCallIssue]
+
+    assert len(product.variants) == 1
+    assert product.variants[0].stock == 0
+    assert product.variants[0].is_available is True
+
+    orm_product = SimpleNamespace(
+        id=product_id,
+        base_price=Decimal("188000.00"),
+        compare_at_price=None,
+        made_to_order=True,
+        total_stock=0,
+        variants=[],
+        variations=[
+            SimpleNamespace(
+                id=variation_id,
+                product_id=product_id,
+                title="Blue Hand-dyed",
+                type="color",
+                color_hex=None,
+                price=Decimal("188000.00"),
+                sale_price=None,
+                inherits_price=True,
+                inherits_sale_price=True,
+                is_active=True,
+                created_at=now,
+                updated_at=now,
+                size_stocks=[
+                    SimpleNamespace(
+                        id=size_stock_id,
+                        size="M",
+                        stock=0,
+                    )
+                ],
+            )
+        ],
+    )
+
+    variant_resp = resolve_variant_response(orm_product, str(size_stock_id))
+    assert variant_resp is not None
+    assert variant_resp.stock == 0
+    assert variant_resp.is_available is True
+
+    purchase_option = resolve_cart_purchase_option(orm_product, str(size_stock_id))
+    assert purchase_option is not None
+    assert purchase_option["is_available"] is True
+

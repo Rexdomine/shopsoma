@@ -1,4 +1,5 @@
 import { Link } from 'react-router-dom';
+import { getDesignerStorefrontPath } from '../../config/constants';
 
 interface VendorShowcaseCardProps {
   vendorName: string;
@@ -15,7 +16,7 @@ export default function VendorShowcaseCard({
 }: VendorShowcaseCardProps) {
   return (
     <Link
-      to={`/vendors/${vendorId}`}
+      to={getDesignerStorefrontPath(vendorId)}
       className="group block"
     >
       {/* Image Container */}

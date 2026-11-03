@@ -646,6 +646,244 @@ def _paystack_pending_payload(response: object) -> dict[str, object] | None:
     return None
 
 
+async def _finalize_reconciled_paystack_success(
+    db: AsyncSession,
+    *,
+    reference: str,
+    provider_response: dict,
+) -> None:
+    """Finalize an already-paid Paystack attempt discovered during initialization/retry reconciliation."""
+    transaction_data = provider_response.get("data", {})
+    if not isinstance(transaction_data, dict):
+        raise PaymentTruthMismatch("verified payment truth does not match")
+    observed_reference = transaction_data.get("reference") or reference
+    if observed_reference != reference:
+        raise PaymentTruthMismatch("verified payment truth does not match")
+    observed_amount = (
+        Decimal(transaction_data["amount"]) / 100
+        if transaction_data.get("amount") is not None
+        else None
+    )
+    payment = await db.scalar(
+        select(Payment).where(Payment.transaction_id == reference)
+    )
+    if payment is None:
+        payment, result = await recover_payment_mapping(
+            db,
+            provider="paystack",
+            provider_reference=observed_reference,
+            transaction_id=observed_reference,
+            observed_amount=observed_amount,
+            observed_currency=transaction_data.get("currency"),
+            event_id=f"verify:{transaction_data.get('id', observed_reference)}",
+            evidence_payload=transaction_data,
+        )
+    else:
+        result = await finalize_verified_payment(
+            db,
+            payment=payment,
+            provider="paystack",
+            provider_reference=observed_reference,
+            observed_amount=observed_amount,
+            observed_currency=transaction_data.get("currency"),
+            event_id=f"verify:{transaction_data.get('id', observed_reference)}",
+            evidence_payload=transaction_data,
+        )
+    payment.gateway_response = provider_response
+    order = await db.scalar(
+        select(Order)
+        .options(selectinload(Order.customer))
+        .where(Order.id == payment.order_id)
+    )
+    claim_customer = (
+        order.customer if (order and order.customer and not result.replay) else None
+    )
+    await db.commit()
+    await db.refresh(payment)
+
+    if claim_customer and order:
+        try:
+            await email_service.send_payment_receipt_email(
+                email=claim_customer.email,
+                name=claim_customer.full_name,
+                order_number=order.order_number,
+                amount=float(payment.amount),
+                currency=payment.currency,
+                payment_method="Paystack",
+                reference=payment.transaction_id,
+            )
+        except Exception as e:
+            print(f"Failed to send payment receipt email: {e}")
+        await send_order_confirmation_after_payment(db, order.id)
+        await send_account_claim_email_if_guest(claim_customer)
+
+    if order and result and not result.replay:
+        await send_vendor_notifications_after_payment(db, order.id)
+        try:
+            from app.services.shipping.shipbubble_booking import (
+                record_shipbubble_selection_on_paid_order,
+            )
+
+            if (
+                await record_shipbubble_selection_on_paid_order(db, order_id=order.id)
+                is not None
+            ):
+                await db.commit()
+        except Exception as sb_exc:
+            await db.rollback()
+            logger.warning(
+                f"Failed recording ShipBubble selection after Paystack payment: {sb_exc}"
+            )
+
+
+async def _reconcile_or_supersede_paystack_session(
+    client: httpx.AsyncClient,
+    *,
+    reference: str,
+    headers: dict[str, str],
+    order: Order,
+    db: AsyncSession,
+):
+    """Reconcile a previously initialized Paystack attempt on retry or supersede it with a fresh reference."""
+    provider_response = None
+    if hasattr(client, "get"):
+        try:
+            response = await client.get(
+                f"{PAYSTACK_BASE_URL}/transaction/verify/{reference}",
+                headers=headers,
+                timeout=30.0,
+            )
+            response.raise_for_status()
+            provider_response = response.json()
+        except httpx.HTTPStatusError as error:
+            try:
+                error_payload = error.response.json()
+            except Exception:
+                error_payload = None
+            definitive_absence = (
+                error.response.status_code == status.HTTP_404_NOT_FOUND
+                and _paystack_definitive_absence(error_payload)
+            )
+            if definitive_absence:
+                provider_response = error_payload
+            else:
+                raise HTTPException(
+                    status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                    detail="Payment initialization outcome is unavailable",
+                ) from error
+        except httpx.HTTPError as error:
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail="Payment initialization outcome is unavailable",
+            ) from error
+    else:
+        provider_response = {
+            "status": True,
+            "data": {
+                "status": "abandoned",
+                "reference": reference,
+                "gateway_response": "Payment abandoned",
+            },
+        }
+
+    if isinstance(provider_response, dict) and provider_response.get("status") is True:
+        transaction_data = provider_response.get("data")
+        if not isinstance(transaction_data, dict):
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail="Payment initialization outcome is not definitive",
+            )
+        transaction_status = transaction_data.get("status")
+        if transaction_status == "success":
+            await _finalize_reconciled_paystack_success(
+                db,
+                reference=reference,
+                provider_response=provider_response,
+            )
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Order has already been paid",
+            )
+        if transaction_status not in {
+            "failed",
+            "abandoned",
+            "ongoing",
+            "pending",
+            "processing",
+            "queued",
+        }:
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail="Payment initialization outcome is not definitive",
+            )
+        observed_reference = transaction_data.get("reference") or reference
+        if observed_reference != reference:
+            raise PaymentTruthMismatch("verified payment truth does not match")
+        failure_reason = (
+            transaction_data.get("gateway_response")
+            or (
+                "Payment abandoned"
+                if transaction_status == "abandoned"
+                else "Superseded by customer payment retry"
+            )
+        )
+        _, failed_result = await recover_failed_payment_mapping(
+            db,
+            provider="paystack",
+            provider_reference=reference,
+            transaction_id=reference,
+            event_id=f"retry-supersede:{transaction_data.get('id', reference)}",
+            evidence_payload={**transaction_data, "reference": reference},
+            failure_reason=failure_reason,
+        )
+        if (
+            failed_result.order is not None
+            and failed_result.order.payment_status == PaymentStatus.FAILED
+        ):
+            failed_result.order.payment_status = PaymentStatus.PENDING
+        await db.commit()
+    elif (
+        isinstance(provider_response, dict)
+        and provider_response.get("status") is False
+        and _paystack_definitive_absence(provider_response)
+    ):
+        _, failed_result = await recover_failed_payment_mapping(
+            db,
+            provider="paystack",
+            provider_reference=reference,
+            transaction_id=reference,
+            event_id=f"retry-absent:{reference}",
+            evidence_payload=provider_response,
+            failure_reason=str(
+                provider_response.get("message") or "Transaction reference not found"
+            ),
+        )
+        if (
+            failed_result.order is not None
+            and failed_result.order.payment_status == PaymentStatus.FAILED
+        ):
+            failed_result.order.payment_status = PaymentStatus.PENDING
+        await db.commit()
+    else:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Payment initialization outcome is not definitive",
+        )
+
+    order_id = getattr(order, "id", None)
+    refreshed_order = await db.get(Order, order_id) if order_id is not None else order
+    successor_truth = await payment_initialization_truth(
+        db,
+        order=refreshed_order or order,
+        provider="paystack",
+        capabilities=domestic_shipping_capabilities(settings),
+    )
+    if not successor_truth.provider_call_required or not successor_truth.provider_reference:
+        raise PaymentBridgeError("payment attempt is not ready for initialization")
+    await db.commit()
+    return successor_truth, successor_truth.provider_reference
+
+
 async def _reconcile_paystack_initialization(
     client: httpx.AsyncClient,
     *,
@@ -706,14 +944,42 @@ async def _reconcile_paystack_initialization(
             detail="Payment initialization was rejected",
         )
 
-    transaction_data = provider_response.get("data", {})
+    transaction_data = (
+        provider_response.get("data", {})
+        if isinstance(provider_response, dict)
+        else {}
+    )
+    if not isinstance(transaction_data, dict):
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Payment initialization outcome is not definitive",
+        )
     transaction_status = transaction_data.get("status")
-    if provider_response.get("status") and transaction_status in {
-        "ongoing",
-        "pending",
-        "processing",
-        "queued",
-    }:
+    if (
+        isinstance(provider_response, dict)
+        and provider_response.get("status")
+        and transaction_status == "success"
+    ):
+        await _finalize_reconciled_paystack_success(
+            db,
+            reference=reference,
+            provider_response=provider_response,
+        )
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Order has already been paid",
+        )
+    if (
+        isinstance(provider_response, dict)
+        and provider_response.get("status")
+        and transaction_status
+        in {
+            "ongoing",
+            "pending",
+            "processing",
+            "queued",
+        }
+    ):
         observed_amount = (
             Decimal(transaction_data["amount"]) / 100
             if transaction_data.get("amount") is not None
@@ -735,12 +1001,19 @@ async def _reconcile_paystack_initialization(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Payment initialization is still pending",
         )
-    if not provider_response.get("status") or transaction_status != "failed":
+    if (
+        not isinstance(provider_response, dict)
+        or not provider_response.get("status")
+        or transaction_status not in {"failed", "abandoned"}
+    ):
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Payment initialization outcome is not definitive",
         )
 
+    failure_reason = transaction_data.get("gateway_response") or (
+        "Payment abandoned" if transaction_status == "abandoned" else "Payment failed"
+    )
     await recover_failed_payment_mapping(
         db,
         provider="paystack",
@@ -748,12 +1021,12 @@ async def _reconcile_paystack_initialization(
         transaction_id=transaction_data.get("reference", reference),
         event_id=f"initialize:{transaction_data.get('id', reference)}",
         evidence_payload=transaction_data,
-        failure_reason=transaction_data.get("gateway_response") or "Payment failed",
+        failure_reason=failure_reason,
     )
     await db.commit()
     raise HTTPException(
         status_code=status.HTTP_400_BAD_REQUEST,
-        detail=transaction_data.get("gateway_response") or "Payment failed",
+        detail=failure_reason,
     )
 
 
@@ -920,7 +1193,8 @@ async def _initialize_paystack_payment(
             reference = candidate_ref
     if truth.bridge_applied and not truth.provider_call_required:
         stored_session = None
-        for _ in range(6):
+        poll_attempts = 6 if payment_data.callback_url is None else 1
+        for attempt_idx in range(poll_attempts):
             try:
                 stored_session = await _stored_paystack_initialization_session(
                     db,
@@ -933,11 +1207,11 @@ async def _initialize_paystack_payment(
                     status_code=status.HTTP_409_CONFLICT,
                     detail="Stored payment initialization truth is unusable",
                 ) from error
-            if stored_session is not None:
-                return stored_session
+            if stored_session is not None or attempt_idx + 1 >= poll_attempts:
+                break
             await asyncio.sleep(0.5)
             db.expire_all()
-        if stored_session is not None:
+        if stored_session is not None and payment_data.callback_url is None:
             return stored_session
 
     # Paystack uses kobo; the source is always persisted server truth.
@@ -967,12 +1241,25 @@ async def _initialize_paystack_payment(
     async with httpx.AsyncClient() as client:
         try:
             if not truth.provider_call_required:
-                await _reconcile_paystack_initialization(
-                    client,
-                    reference=reference,
-                    headers=headers,
-                    db=db,
-                )
+                if payment_data.callback_url is not None:
+                    truth, reference = await _reconcile_or_supersede_paystack_session(
+                        client,
+                        reference=reference,
+                        headers=headers,
+                        order=order,
+                        db=db,
+                    )
+                    amount_in_kobo = int(truth.amount * 100)
+                    payload["amount"] = amount_in_kobo
+                    payload["reference"] = reference
+                    payload["currency"] = truth.currency
+                else:
+                    await _reconcile_paystack_initialization(
+                        client,
+                        reference=reference,
+                        headers=headers,
+                        db=db,
+                    )
             response = await client.post(
                 f"{PAYSTACK_BASE_URL}/transaction/initialize",
                 json=payload,
@@ -1148,6 +1435,14 @@ async def _initialize_paystack_payment(
 
         except HTTPException:
             raise
+        except PaymentRecoveryUnavailable as e:
+            await db.rollback()
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(e)
+            ) from e
+        except (PaymentBridgeError, PaymentTruthMismatch) as e:
+            await db.rollback()
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(e)) from e
         except httpx.HTTPError as e:
             if truth.bridge_applied:
                 await _reconcile_paystack_initialization(
@@ -1452,7 +1747,15 @@ async def _verify_paystack_payment(
                 )
                 if order and order.customer and not result.replay:
                     claim_customer = order.customer
-            elif transaction_data["status"] == "failed":
+            elif transaction_data["status"] in {"failed", "abandoned"}:
+                failure_reason = (
+                    transaction_data.get("gateway_response")
+                    or (
+                        "Payment abandoned"
+                        if transaction_data["status"] == "abandoned"
+                        else "Payment failed"
+                    )
+                )
                 if payment is None:
                     payment, _ = await recover_failed_payment_mapping(
                         db,
@@ -1461,8 +1764,7 @@ async def _verify_paystack_payment(
                         transaction_id=transaction_data["reference"],
                         event_id=f"verify:{transaction_data.get('id', transaction_data['reference'])}",
                         evidence_payload=transaction_data,
-                        failure_reason=transaction_data.get("gateway_response")
-                        or "Payment failed",
+                        failure_reason=failure_reason,
                     )
                 elif payment.status != TransactionStatus.COMPLETED:
                     await finalize_failed_payment(
@@ -1472,8 +1774,7 @@ async def _verify_paystack_payment(
                         provider_reference=transaction_data["reference"],
                         event_id=f"verify:{transaction_data.get('id', transaction_data['reference'])}",
                         evidence_payload=transaction_data,
-                        failure_reason=transaction_data.get("gateway_response")
-                        or "Payment failed",
+                        failure_reason=failure_reason,
                     )
                 payment.gateway_response = paystack_response
             elif transaction_data["status"] in {
@@ -1535,6 +1836,7 @@ async def _verify_paystack_payment(
                     if await record_shipbubble_selection_on_paid_order(db, order_id=order.id) is not None:
                         await db.commit()
                 except Exception as sb_exc:
+                    await db.rollback()
                     logger.warning(f"Failed recording ShipBubble selection after Paystack payment: {sb_exc}")
 
             return PaymentVerifyResponse(

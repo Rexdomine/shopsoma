@@ -108,11 +108,12 @@ export default function OrderSuccess() {
     setIsRetrying(true);
     try {
       const email = (order as any).customer_email || (order as any).customer?.email || 'guest@shopsoma.com';
+      const enforced = (order as any).workflow_cohort === 'domestic_checkout_v1';
       const paymentData = await paymentService.initializePayment({
         order_id: order.id,
         email,
         payment_gateway: 'paystack',
-        currency: (order.currency as any) || 'NGN',
+        ...(enforced ? {} : { currency: (order.currency as any) || 'NGN' }),
         callback_url: `${window.location.origin}/payment/verify`,
       }, loadCheckoutCapability(order.id));
 
@@ -127,7 +128,13 @@ export default function OrderSuccess() {
             paymentService.verifyPayment({
               reference: response.reference,
               payment_gateway: 'paystack',
-            }).then(() => {
+            }).then((verification) => {
+              if (
+                verification?.status === false
+                || (verification?.data?.status && verification.data.status !== 'success')
+              ) {
+                throw new Error(verification?.message || 'Payment verification failed');
+              }
               clearCart();
               window.location.href = `${ROUTES.ORDER_SUCCESS}?orderId=${order.id}&payment=success`;
             }).catch((err) => {
@@ -144,8 +151,19 @@ export default function OrderSuccess() {
         window.location.href = paymentData.authorization_url;
       }
     } catch (err: any) {
-      console.error('Failed to initialize payment:', err);
       const detail = err.response?.data?.detail;
+      if (
+        err.response?.status === 400
+        && typeof detail === 'string'
+        && detail.toLowerCase().includes('already been paid')
+      ) {
+        clearCart();
+        setOrder({ ...order, payment_status: 'PAID' });
+        navigate(`${ROUTES.ORDER_SUCCESS}?orderId=${order.id}&payment=success`, { replace: true });
+        setIsRetrying(false);
+        return;
+      }
+      console.error('Failed to initialize payment:', err);
       const msg = typeof detail === 'string' ? detail : detail?.message || err.message || 'Unable to start payment.';
       alert(msg);
       setIsRetrying(false);
@@ -171,7 +189,8 @@ export default function OrderSuccess() {
   };
 
   const getStatusConfig = () => {
-    if (order?.fulfillment_status === 'cancelled') {
+    const normalizedPaymentStatus = order?.payment_status?.toLowerCase();
+    if (order?.fulfillment_status?.toLowerCase() === 'cancelled') {
       return {
         title: 'Order Cancelled',
         subtitle: 'This order has been cancelled',
@@ -179,7 +198,7 @@ export default function OrderSuccess() {
         iconColor: 'text-gray-500',
         message: 'No charge was made. You can browse and place a new order anytime.',
       };
-    } else if (paymentStatus === 'success' || order?.payment_status === 'paid') {
+    } else if (paymentStatus === 'success' || normalizedPaymentStatus === 'paid') {
       return {
         title: 'Payment Successful',
         subtitle: 'Your order has been confirmed',
@@ -187,7 +206,7 @@ export default function OrderSuccess() {
         iconColor: 'text-green-600',
         message: 'Thanks for your purchase. We are preparing your order.',
       };
-    } else if (paymentStatus === 'cancelled' || order?.payment_status === 'pending') {
+    } else if (paymentStatus === 'cancelled' || normalizedPaymentStatus === 'pending') {
       return {
         title: 'Payment Pending',
         subtitle: 'Order saved, awaiting payment',
@@ -195,13 +214,13 @@ export default function OrderSuccess() {
         iconColor: 'text-amber-600',
         message: 'Your items are reserved. Complete payment to process and ship your order, or cancel if you no longer wish to purchase.',
       };
-    } else if (paymentStatus === 'verification_failed') {
+    } else if (paymentStatus === 'verification_failed' || normalizedPaymentStatus === 'failed') {
       return {
         title: 'Payment Verification Failed',
         subtitle: 'We could not verify your payment',
         icon: '!',
         iconColor: 'text-red-600',
-        message: 'Please contact support if amount was deducted.',
+        message: 'Your order is saved. Retry payment to reconcile or complete your purchase, or contact support if amount was deducted.',
       };
     }
     return {
@@ -321,9 +340,9 @@ export default function OrderSuccess() {
                 <span className="text-gray-600">Payment Status:</span>
                 <span
                   className={`font-semibold uppercase ${
-                    order.payment_status === 'paid'
+                    order.payment_status?.toLowerCase() === 'paid'
                       ? 'text-green-600'
-                      : order.payment_status === 'failed'
+                      : order.payment_status?.toLowerCase() === 'failed'
                       ? 'text-red-600'
                       : 'text-yellow-600'
                   }`}
@@ -340,7 +359,7 @@ export default function OrderSuccess() {
 
           {/* Action Buttons */}
           <div className="space-y-3">
-            {order.fulfillment_status === 'cancelled' ? (
+            {order.fulfillment_status?.toLowerCase() === 'cancelled' ? (
               <>
                 <Link
                   to={ROUTES.HOME}
@@ -356,7 +375,7 @@ export default function OrderSuccess() {
                   View Order Status
                 </button>
               </>
-            ) : paymentStatus === 'cancelled' || order.payment_status?.toLowerCase() === 'pending' || order.payment_status?.toLowerCase() === 'failed' ? (
+            ) : order.payment_status?.toLowerCase() !== 'paid' && (paymentStatus === 'cancelled' || paymentStatus === 'verification_failed' || order.payment_status?.toLowerCase() === 'pending' || order.payment_status?.toLowerCase() === 'failed') ? (
               <>
                 <button
                   type="button"
