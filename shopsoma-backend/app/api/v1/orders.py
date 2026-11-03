@@ -1816,6 +1816,7 @@ async def create_order(
             "full_name": loaded_order.shipping_address.full_name,
             "address_line_1": loaded_order.shipping_address.address_line1,
             "address_line_2": loaded_order.shipping_address.address_line2,
+            "house_number": loaded_order.shipping_address.house_number,
             "city": loaded_order.shipping_address.city,
             "state": loaded_order.shipping_address.state,
             "postal_code": loaded_order.shipping_address.postal_code,

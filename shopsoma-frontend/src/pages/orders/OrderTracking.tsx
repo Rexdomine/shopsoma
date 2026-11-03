@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useParams, useNavigate } from 'react-router-dom';
 import { ROUTES, STORAGE_KEYS } from '../../config/constants';
+import { useOptionalAuth } from '../../context/AuthContext';
 import {
   orderService,
   type OrderTracking,
@@ -50,8 +51,10 @@ const formatDisplayDate = (value: string) => {
 export default function OrderTracking() {
   const navigate = useNavigate();
   const { orderId } = useParams<{ orderId: string }>();
+  const auth = useOptionalAuth();
   const [tracking, setTracking] = useState<OrderTracking | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [requiresAuth, setRequiresAuth] = useState(false);
   const [loading, setLoading] = useState(true);
   const [showOrderModal, setShowOrderModal] = useState(false);
   const [orderDetails, setOrderDetails] = useState<any>(null);
@@ -66,10 +69,27 @@ export default function OrderTracking() {
   const formatOrderPrice = (amount: number) =>
     formatPriceWithConversion(amount, 'NGN', orderCurrency, exchangeRates);
 
+  const isUserAuthenticated = () =>
+    Boolean(auth?.isAuthenticated || localStorage.getItem(STORAGE_KEYS.ACCESS_TOKEN));
+
+  const loginRedirectLocation = useMemo(
+    () => ({
+      pathname:
+        typeof window !== 'undefined' &&
+        window.location?.pathname &&
+        window.location.pathname !== '/'
+          ? window.location.pathname
+          : ROUTES.ORDER_TRACKING.replace(':orderId', orderId || ''),
+    }),
+    [orderId],
+  );
+
   // Never let data loaded for the previous route drive the next order's UI.
   useEffect(() => {
     detailRequestGeneration.current += 1;
     setTracking(null);
+    setError(null);
+    setRequiresAuth(false);
     setOrderDetails(null);
     setShowOrderModal(false);
     setLoadingOrder(false);
@@ -91,11 +111,20 @@ export default function OrderTracking() {
         if (isMounted) {
           setTracking(data);
           setError(null);
+          setRequiresAuth(false);
         }
       } catch (err) {
         console.error('Failed to fetch tracking details', err);
         if (isMounted) {
-          setError('Tracking information is unavailable. Please try again later.');
+          const status = (err as { response?: { status?: number } })?.response?.status;
+          const isTransientServerError = typeof status === 'number' && status >= 500;
+          if (!isUserAuthenticated() && !isTransientServerError) {
+            setRequiresAuth(true);
+            setError(null);
+          } else {
+            setRequiresAuth(false);
+            setError('Tracking information is unavailable. Please try again later.');
+          }
           // Never replace an authorized response with fabricated order data.
           setTracking(null);
         }
@@ -109,7 +138,7 @@ export default function OrderTracking() {
     return () => {
       isMounted = false;
     };
-  }, [orderId]);
+  }, [orderId, auth?.isAuthenticated]);
 
   // WebSocket connection for real-time updates
   useEffect(() => {
@@ -231,6 +260,7 @@ export default function OrderTracking() {
           ) {
             latestSettledPollSequence = pollSequence;
             setTracking(data);
+            setRequiresAuth(false);
             setError(null);
             setLoading(false);
           }
@@ -245,7 +275,13 @@ export default function OrderTracking() {
           ) {
             latestSettledPollSequence = pollSequence;
             setTracking(null);
-            setError('Tracking information is unavailable. Please try again later.');
+            if (!isUserAuthenticated()) {
+              setRequiresAuth(true);
+              setError(null);
+            } else {
+              setRequiresAuth(false);
+              setError('Tracking information is unavailable. Please try again later.');
+            }
           }
         }
       }
@@ -467,37 +503,39 @@ export default function OrderTracking() {
             </div>
           )}
 
-          <div className="rounded-sm border border-gray-100 bg-gray-50 px-4 sm:px-6 py-3.5 sm:py-5">
-            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2.5 sm:gap-4">
-              <p className="text-xs sm:text-sm font-semibold text-gray-800 break-words">
-                Tracking ID{' '}
-                <span className="text-primary font-mono ml-1">
-                  {tracking?.tracking_id || 'Loading...'}
-                </span>
-              </p>
-              {isPaymentPending && !isTerminalState ? (
-                <div className="flex items-center gap-1.5 text-xs text-amber-800 bg-amber-100/90 border border-amber-300 px-2.5 py-0.5 rounded-full font-medium shrink-0">
-                  <span className="h-1.5 w-1.5 rounded-full bg-amber-500"></span>
-                  <span>Awaiting Payment</span>
-                </div>
-              ) : isConnectedToWebSocket && !wsError ? (
-                <div className="flex items-center gap-2 text-xs text-emerald-600 shrink-0">
-                  <span className="relative flex h-2 w-2">
-                    <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
-                    <span className="relative inline-flex rounded-full h-2 w-2 bg-emerald-500"></span>
+          {!requiresAuth && (
+            <div className="rounded-sm border border-gray-100 bg-gray-50 px-4 sm:px-6 py-3.5 sm:py-5">
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2.5 sm:gap-4">
+                <p className="text-xs sm:text-sm font-semibold text-gray-800 break-words">
+                  Tracking ID{' '}
+                  <span className="text-primary font-mono ml-1">
+                    {tracking?.tracking_id || (loading ? 'Loading...' : orderId || '—')}
                   </span>
-                  <span>Live Updates Active</span>
-                </div>
-              ) : wsError ? (
-                <div className="flex items-center gap-2 text-xs text-amber-600 shrink-0">
-                  <span className="relative flex h-2 w-2">
-                    <span className="relative inline-flex rounded-full h-2 w-2 bg-amber-500"></span>
-                  </span>
-                  <span>Polling for Updates</span>
-                </div>
-              ) : null}
+                </p>
+                {isPaymentPending && !isTerminalState ? (
+                  <div className="flex items-center gap-1.5 text-xs text-amber-800 bg-amber-100/90 border border-amber-300 px-2.5 py-0.5 rounded-full font-medium shrink-0">
+                    <span className="h-1.5 w-1.5 rounded-full bg-amber-500"></span>
+                    <span>Awaiting Payment</span>
+                  </div>
+                ) : isConnectedToWebSocket && !wsError ? (
+                  <div className="flex items-center gap-2 text-xs text-emerald-600 shrink-0">
+                    <span className="relative flex h-2 w-2">
+                      <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
+                      <span className="relative inline-flex rounded-full h-2 w-2 bg-emerald-500"></span>
+                    </span>
+                    <span>Live Updates Active</span>
+                  </div>
+                ) : wsError && (loading || tracking) ? (
+                  <div className="flex items-center gap-2 text-xs text-amber-600 shrink-0">
+                    <span className="relative flex h-2 w-2">
+                      <span className="relative inline-flex rounded-full h-2 w-2 bg-amber-500"></span>
+                    </span>
+                    <span>Polling for Updates</span>
+                  </div>
+                ) : null}
+              </div>
             </div>
-          </div>
+          )}
 
           {/* Payment Pending Alert Banner */}
           {isPaymentPending && !isTerminalState && tracking && (
@@ -807,6 +845,26 @@ export default function OrderTracking() {
                   </div>
                 )}
               </>
+            ) : requiresAuth ? (
+              <div className="text-center py-6 sm:py-8 space-y-4" role="status">
+                <div className="space-y-2 max-w-md mx-auto">
+                  <h2 className="text-base sm:text-lg font-semibold text-gray-900">
+                    You are not logged in
+                  </h2>
+                  <p className="text-sm text-gray-600">
+                    Please log in to your account to view tracking information for this order.
+                  </p>
+                </div>
+                <div>
+                  <Link
+                    to={ROUTES.LOGIN}
+                    state={{ from: loginRedirectLocation }}
+                    className="inline-flex items-center justify-center px-6 py-2.5 bg-primary text-white text-xs sm:text-sm font-semibold uppercase tracking-[0.15em] rounded-sm hover:bg-primary-dark transition"
+                  >
+                    Log In
+                  </Link>
+                </div>
+              </div>
             ) : (
               <div className="text-center text-sm text-gray-600" role="status">
                 Tracking information is unavailable for this order. Please try again later.

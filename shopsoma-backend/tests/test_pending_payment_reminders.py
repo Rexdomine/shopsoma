@@ -568,6 +568,254 @@ async def test_extract_safe_payment_urls_contains_no_secrets(
         assert secret not in payment_url.lower()
         assert secret not in order_url.lower()
 
+    # If gateway_response inadvertently contains a secret token in authorization_url,
+    # extract_safe_payment_urls must fall back to the safe order_url
+    payment.gateway_response = {
+        "data": {
+            "authorization_url": "https://checkout.paystack.com/pay?client_secret=sk_live_abc123"
+        }
+    }
+    fallback_payment_url, fallback_order_url = extract_safe_payment_urls(order, payment)
+    assert fallback_payment_url == fallback_order_url
+    assert "sk_live_" not in fallback_payment_url
+    assert "client_secret" not in fallback_payment_url
+
+
+@pytest.mark.asyncio
+async def test_order_without_pending_payment_record_is_not_eligible(
+    db_session: AsyncSession,
+):
+    """Shoppers who have not created a pending payment record are ineligible."""
+    now = datetime.now(timezone.utc)
+    twenty_five_hours_ago = now - timedelta(hours=25)
+
+    order, payment, _ = await _create_test_order_with_payment(
+        db_session, created_at=twenty_five_hours_ago
+    )
+    # Remove the payment record so only the order exists
+    await db_session.delete(payment)
+    await db_session.commit()
+
+    is_eligible, reason = is_order_eligible_for_pending_reminder(order, None, now=now)
+    assert is_eligible is False
+    assert reason == "no_payment_record"
+
+    claimed = await scan_and_claim_pending_payment_reminders(
+        db_session, owner="worker-no-payment", now=now
+    )
+    assert len(claimed) == 0
+
+
+@pytest.mark.asyncio
+async def test_exact_24_hour_boundary_timing(
+    db_session: AsyncSession,
+):
+    """23h59m59s is ineligible; exact 24h00m00s is eligible."""
+    now = datetime.now(timezone.utc)
+    created_ts = now - timedelta(hours=24)
+
+    order, payment, _ = await _create_test_order_with_payment(
+        db_session, created_at=created_ts
+    )
+
+    one_second_early = created_ts + timedelta(hours=24) - timedelta(seconds=1)
+    eligible_early, reason_early = is_order_eligible_for_pending_reminder(
+        order, payment, now=one_second_early
+    )
+    assert eligible_early is False
+    assert "timing_not_elapsed" in reason_early
+
+    exact_24h = created_ts + timedelta(hours=24)
+    eligible_exact, reason_exact = is_order_eligible_for_pending_reminder(
+        order, payment, now=exact_24h
+    )
+    assert eligible_exact is True
+    assert reason_exact == "eligible"
+
+
+@pytest.mark.asyncio
+async def test_preexisting_pending_reminder_cancelled_when_paid_before_scan(
+    db_session: AsyncSession,
+):
+    """A pending reminder row whose order becomes PAID before the next scan is marked cancelled."""
+    now = datetime.now(timezone.utc)
+    twenty_five_hours_ago = now - timedelta(hours=25)
+
+    order, payment, user = await _create_test_order_with_payment(
+        db_session, created_at=twenty_five_hours_ago
+    )
+
+    # First attempt fails transiently so a 'pending' reminder row exists
+    mock_client, calls = _make_mock_email_service()
+    mock_client.should_fail = True
+    await dispatch_pending_payment_reminders_once(
+        session_factory=lambda: db_session,
+        owner="worker-1",
+        now=now,
+        email_client=mock_client,
+    )
+
+    reminder = (
+        await db_session.execute(
+            select(OrderPaymentReminder).where(
+                OrderPaymentReminder.order_id == order.id
+            )
+        )
+    ).scalar_one()
+    assert reminder.status == "pending"
+
+    # Shopper pays before the next scheduled scan
+    order_in_db = await db_session.get(Order, order.id)
+    payment_in_db = await db_session.get(Payment, payment.id)
+    order_in_db.payment_status = PaymentStatus.PAID
+    payment_in_db.status = TransactionStatus.COMPLETED
+    payment_in_db.completed_at = now + timedelta(minutes=2)
+    await db_session.commit()
+
+    mock_client.should_fail = False
+    counts = await dispatch_pending_payment_reminders_once(
+        session_factory=lambda: db_session,
+        owner="worker-2",
+        now=now + timedelta(minutes=5),
+        email_client=mock_client,
+    )
+    assert counts["claimed"] == 0
+    assert counts["sent"] == 0
+    assert len(calls) == 0
+
+    updated_reminder = await db_session.get(OrderPaymentReminder, reminder.id)
+    assert updated_reminder.status == "cancelled"
+
+
+@pytest.mark.asyncio
+async def test_multiple_payment_attempts_or_page_refreshes_send_only_once_per_order(
+    db_session: AsyncSession,
+):
+    """Repeated checkout page refreshes or multiple pending Payment rows send only 1 email per order."""
+    now = datetime.now(timezone.utc)
+    twenty_six_hours_ago = now - timedelta(hours=26)
+    twenty_five_hours_ago = now - timedelta(hours=25)
+
+    order, payment1, _ = await _create_test_order_with_payment(
+        db_session, created_at=twenty_six_hours_ago
+    )
+
+    # Simulate a second pending payment created on checkout refresh/retry for the same order
+    payment2 = Payment(
+        id=uuid.uuid4(),
+        order_id=order.id,
+        transaction_id=f"{order.order_number}-RETRY-1",
+        payment_gateway=PaymentGateway.PAYSTACK,
+        payment_method="paystack",
+        amount=Decimal("47000.00"),
+        currency="NGN",
+        status=TransactionStatus.PENDING,
+        created_at=twenty_five_hours_ago,
+    )
+    db_session.add(payment2)
+    await db_session.commit()
+
+    mock_client, calls = _make_mock_email_service()
+
+    counts1 = await dispatch_pending_payment_reminders_once(
+        session_factory=lambda: db_session,
+        owner="worker-1",
+        now=now,
+        email_client=mock_client,
+    )
+    assert counts1["claimed"] == 1
+    assert counts1["sent"] == 1
+    assert len(calls) == 1
+
+    # Simulate another page refresh / payment re-initialization later and scan again
+    payment3 = Payment(
+        id=uuid.uuid4(),
+        order_id=order.id,
+        transaction_id=f"{order.order_number}-RETRY-2",
+        payment_gateway=PaymentGateway.PAYSTACK,
+        payment_method="paystack",
+        amount=Decimal("47000.00"),
+        currency="NGN",
+        status=TransactionStatus.PENDING,
+        created_at=twenty_five_hours_ago,
+    )
+    db_session.add(payment3)
+    await db_session.commit()
+
+    counts2 = await dispatch_pending_payment_reminders_once(
+        session_factory=lambda: db_session,
+        owner="worker-2",
+        now=now + timedelta(hours=2),
+        email_client=mock_client,
+    )
+    assert counts2["claimed"] == 0
+    assert counts2["sent"] == 0
+    assert len(calls) == 1
+
+
+@pytest.mark.asyncio
+async def test_concurrent_worker_lease_contention_and_stale_lease_recovery(
+    db_session: AsyncSession,
+):
+    """Active worker lease blocks concurrent workers; expired lease can be recovered safely without double send."""
+    now = datetime.now(timezone.utc)
+    twenty_five_hours_ago = now - timedelta(hours=25)
+
+    order, payment, _ = await _create_test_order_with_payment(
+        db_session, created_at=twenty_five_hours_ago
+    )
+
+    # Worker A claims the reminder with a 300s lease
+    claimed_a = await scan_and_claim_pending_payment_reminders(
+        db_session, owner="worker-A", now=now, lease_seconds=300
+    )
+    await db_session.commit()
+    assert len(claimed_a) == 1
+    stale_token_a = claimed_a[0].claim_token
+
+    # Worker B scans 60s later while Worker A's lease is still active -> claims 0
+    claimed_b_early = await scan_and_claim_pending_payment_reminders(
+        db_session, owner="worker-B", now=now + timedelta(seconds=60), lease_seconds=300
+    )
+    await db_session.commit()
+    assert len(claimed_b_early) == 0
+
+    # Worker A's lease expires after 301s; Worker B scans and recovers the stale claim
+    after_expiry = now + timedelta(seconds=301)
+    claimed_b_recovered = await scan_and_claim_pending_payment_reminders(
+        db_session, owner="worker-B", now=after_expiry, lease_seconds=300
+    )
+    await db_session.commit()
+    assert len(claimed_b_recovered) == 1
+    valid_token_b = claimed_b_recovered[0].claim_token
+    assert valid_token_b != stale_token_a
+
+    mock_client, calls = _make_mock_email_service()
+
+    # Worker A wakes up late and tries to dispatch with its old claim_token -> rejected
+    sent_by_a = await dispatch_single_reminder(
+        session_factory=lambda: db_session,
+        reminder_id=claimed_a[0].id,
+        owner="worker-A",
+        claim_token=stale_token_a,
+        now=after_expiry + timedelta(seconds=5),
+        email_client=mock_client,
+    )
+    assert sent_by_a is False
+    assert len(calls) == 0
+
+    # Worker B dispatches with its active claim_token -> succeeds once
+    sent_by_b = await dispatch_single_reminder(
+        session_factory=lambda: db_session,
+        reminder_id=claimed_b_recovered[0].id,
+        owner="worker-B",
+        claim_token=valid_token_b,
+        now=after_expiry + timedelta(seconds=10),
+        email_client=mock_client,
+    )
+    assert sent_by_b is True
+    assert len(calls) == 1
+
 
 def test_celery_entrypoint_synchronous_wrapper():
     """Verify Celery task callable entrypoint exists and can be invoked."""

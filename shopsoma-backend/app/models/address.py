@@ -44,5 +44,19 @@ class Address(Base):
     # Relationships
     user = relationship("User", back_populates="addresses")
 
+    def __init__(self, **kwargs):
+        house_number = kwargs.pop("house_number", None)
+        if house_number is not None and not kwargs.get("address_line2"):
+            kwargs["address_line2"] = house_number
+        super().__init__(**kwargs)
+
+    @property
+    def house_number(self):
+        return self.address_line2
+
+    @house_number.setter
+    def house_number(self, value):
+        self.address_line2 = value
+
     def __repr__(self):
         return f"<Address {self.full_name} - {self.city}>"

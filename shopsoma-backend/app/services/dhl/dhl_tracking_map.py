@@ -187,10 +187,20 @@ async def build_dhl_live_tracking_payload(
     )
     dest_line1 = (
         (intent.destination_address_line1 if intent else None)
+        or (getattr(dest_addr, "address_line1", None) if dest_addr else None)
         or (getattr(dest_addr, "street_address", None) if dest_addr else None)
         or "Customer Delivery Address"
     )
-    dest_address_str = f"{dest_line1}, {dest_city}, {dest_state}, Nigeria"
+    dest_line2 = (
+        (intent.destination_address_line2 if intent else None)
+        or (getattr(dest_addr, "address_line2", None) if dest_addr else None)
+    )
+    dest_street = (
+        f"{dest_line1}, {dest_line2.strip()}"
+        if dest_line2 and dest_line2.strip()
+        else dest_line1
+    )
+    dest_address_str = f"{dest_street}, {dest_city}, {dest_state}, Nigeria"
     dest_lat, dest_lng = _resolve_coordinates_for_address(
         dest_city, dest_state, dest_address_str
     )

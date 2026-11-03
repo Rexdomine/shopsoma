@@ -798,8 +798,8 @@ export default function VendorOrderDetail() {
                   <div>
                     <p className="text-xs text-gray-500 mb-1">Shipping Address</p>
                     <p className="text-sm text-gray-700">{order.shipping_address.address_line1}</p>
-                    {order.shipping_address.address_line2 && (
-                      <p className="text-sm text-gray-700">{order.shipping_address.address_line2}</p>
+                    {(order.shipping_address.house_number || order.shipping_address.address_line2) && (
+                      <p className="text-sm text-gray-700">{order.shipping_address.house_number || order.shipping_address.address_line2}</p>
                     )}
                     <p className="text-sm text-gray-700">
                       {order.shipping_address.city}, {order.shipping_address.state} {order.shipping_address.postal_code}
