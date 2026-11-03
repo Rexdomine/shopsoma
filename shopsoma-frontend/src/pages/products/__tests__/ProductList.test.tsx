@@ -1,8 +1,9 @@
 import type { ReactNode } from 'react';
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
-import { MemoryRouter } from 'react-router-dom';
+import { Link, MemoryRouter } from 'react-router-dom';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import ProductList from '../ProductList';
+import type { Category } from '../../../types';
 
 const { getProductsMock, getSubcategoriesMock } = vi.hoisted(() => ({
   getProductsMock: vi.fn(),
@@ -45,6 +46,17 @@ vi.mock('../../../components/products/VendorShowcaseCard', () => ({
 }));
 
 describe('ProductList', () => {
+  it('resolves mobile category links to scoped API IDs on arrival and subsequent navigation', async () => {
+    const categories = [{ id: 'accessory-id', name: 'Accessories', slug: 'men-accessories', is_active: true, display_order: 1 }, { id: 'tops-id', name: 'Tops', slug: 'men-tops', is_active: true, display_order: 2 }] as Category[];
+    render(<MemoryRouter initialEntries={['/men?category=men-accessories']}>
+      <Link to='/men?category=men-tops'>Open clothing tops</Link>
+      <ProductList presetCategory='Men' categoryNav={categories} initialParams={{ category_id: 'men-id', vendor_id: 'vendor-id' }} />
+    </MemoryRouter>);
+    await waitFor(() => expect(getProductsMock).toHaveBeenLastCalledWith(expect.objectContaining({ category_id: 'accessory-id', vendor_id: 'vendor-id' })));
+    fireEvent.click(screen.getByRole('link', { name: 'Open clothing tops' }));
+    await waitFor(() => expect(getProductsMock).toHaveBeenLastCalledWith(expect.objectContaining({ category_id: 'tops-id', vendor_id: 'vendor-id' })));
+  });
+
   beforeEach(() => {
     getProductsMock.mockReset();
     getSubcategoriesMock.mockReset();
@@ -56,6 +68,24 @@ describe('ProductList', () => {
     getFeaturedRotationSettingsMock.mockResolvedValue({ rotation_minutes: 10 });
     window.sessionStorage.clear();
     window.scrollTo = vi.fn() as unknown as typeof window.scrollTo;
+  });
+
+  it('keeps designer vendor scope while category tabs filter locally', async () => {
+    getProductsMock.mockResolvedValue({ products: [
+      { id: 'dress', category_name: 'Dresses' },
+      { id: 'bag', category_name: 'Accessories' },
+    ] });
+    render(<MemoryRouter><ProductList initialParams={{ vendor_id: 'vendor-a' }} designerMode categoryNavAsTabs storefrontHeader={<h1>Vendor A</h1>} /></MemoryRouter>);
+    await screen.findAllByTestId('product-dress');
+    fireEvent.click(screen.getByRole('button', {name: 'Accessories'}));
+    expect(screen.queryByTestId('product-dress')).not.toBeInTheDocument();
+    expect(screen.getAllByTestId('product-bag').length).toBeGreaterThan(0);
+    fireEvent.click(screen.getByRole('button', {name: /All Items/}));
+    expect(screen.getAllByTestId('product-dress').length).toBeGreaterThan(0);
+    for (const [params] of getProductsMock.mock.calls) {
+      expect(params.vendor_id).toBe('vendor-a');
+      expect(params.category_id).toBeUndefined();
+    }
   });
 
   it('applies the responsive hero position override to the cover image', async () => {

@@ -1,3 +1,4 @@
+import type { ReactNode } from 'react';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useLocation, useNavigate, useSearchParams } from 'react-router-dom';
 import { ArrowLeft, ArrowRight, ChevronDown, ChevronLeft, ChevronRight, X } from 'lucide-react';
@@ -90,6 +91,8 @@ type HeroContent = {
 };
 
 type ProductListProps = {
+  storefrontHeader?: ReactNode;
+  designerMode?: boolean;
   presetCategory?: string;
   initialParams?: ProductListParams;
   /** The API has already applied the requested category association filter. */
@@ -141,6 +144,8 @@ const getProductPrice = (p: Product): number => {
 
 export default function ProductList({
   presetCategory,
+  storefrontHeader,
+  designerMode = false,
   initialParams,
   serverFilteredCategory = false,
   heroOverride,
@@ -428,7 +433,10 @@ export default function ProductList({
   // Update filters when URL params change
   useEffect(() => {
     if (presetCategory) {
-      setFilters((prev) => ({ ...prev, category: categoryNavAsTabs ? 'All' : presetCategory }));
+      const requestedCategory = categoryNav?.find(category => category.is_active &&
+        (category.slug === categoryParam || category.name === categoryParam));
+      setSelectedCategoryId(requestedCategory?.id ?? null);
+      setFilters((prev) => ({ ...prev, category: requestedCategory?.name ?? (categoryNavAsTabs ? 'All' : presetCategory) }));
     } else {
       setFilters(prev => ({
         ...prev,
@@ -438,11 +446,11 @@ export default function ProductList({
         setCuratedFilterApplied(false);
       }
     }
-  }, [categoryParam, presetCategory, categoryNavAsTabs]);
+  }, [categoryParam, presetCategory, categoryNavAsTabs, categoryNav]);
 
   // Sync filters.category when preference changes while curated filter is active
   useEffect(() => {
-    if (presetCategory) return;
+    if (presetCategory || designerMode) return;
     if (curatedFilterApplied) {
       if (interestCategory) {
         // Update to the new preference category
@@ -459,7 +467,7 @@ export default function ProductList({
         setCuratedFilterApplied(false);
       }
     }
-  }, [preferredInterest, interestCategory, curatedFilterApplied, presetCategory]);
+  }, [preferredInterest, interestCategory, curatedFilterApplied, presetCategory, designerMode]);
 
   const filterMenuRef = useRef<HTMLDivElement>(null);
 
@@ -1028,8 +1036,8 @@ const handleFilterChange = (key: keyof FilterState, value: string, categoryId?: 
 
   return (
     <Layout>
-      {/* Store Hero Section */}
-      <section
+      {/* Reuse the shell and shopping UI; only designer identity changes. */}
+      {storefrontHeader ?? <section
         className="relative w-full min-h-[50vh] overflow-hidden flex items-end"
       >
         <picture className="absolute inset-0" aria-hidden="true">
@@ -1067,7 +1075,7 @@ const handleFilterChange = (key: keyof FilterState, value: string, categoryId?: 
             </button>
           </div>
         </div>
-      </section>
+      </section>}
 
       {/* Filter Bar + Search Row */}
       <section className="bg-[var(--color-page-bg)] border-b border-gray-200 w-full overflow-hidden">
@@ -1088,8 +1096,8 @@ const handleFilterChange = (key: keyof FilterState, value: string, categoryId?: 
                     <button
                       key={item.id}
                       type="button"
-                      onClick={() => { setSelectedCategoryId(item.id); handleFilterChange('category', item.name); }}
-                      className={`text-xs sm:text-sm font-ui tracking-wide pb-1 border-b-2 whitespace-nowrap ${selectedCategoryId === item.id ? 'text-dark border-primary' : 'text-gray-500 border-transparent hover:text-dark hover:border-gray-300'}`}
+                      onClick={() => { if (categoryNav?.length) setSelectedCategoryId(item.id); handleFilterChange('category', item.name); }}
+                      className={`text-xs sm:text-sm font-ui tracking-wide pb-1 border-b-2 whitespace-nowrap ${(categoryNav?.length ? selectedCategoryId === item.id : activeCategory === item.name) ? 'text-dark border-primary' : 'text-gray-500 border-transparent hover:text-dark hover:border-gray-300'}`}
                     >
                       {item.name}
                     </button>
@@ -1443,7 +1451,7 @@ const handleFilterChange = (key: keyof FilterState, value: string, categoryId?: 
       <section className="bg-[var(--color-page-bg)] py-12">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
           <div className="space-y-8">
-              {preferredInterest && !showInterestBanner && (
+              {!designerMode && preferredInterest && !showInterestBanner && (
                 <div className="text-right">
                   <button
                     type="button"
@@ -1460,7 +1468,7 @@ const handleFilterChange = (key: keyof FilterState, value: string, categoryId?: 
                 </div>
               )}
 
-              {preferredInterest && showInterestBanner && (
+              {!designerMode && preferredInterest && showInterestBanner && (
                 <div className="border border-gray-200 rounded-sm p-4 text-sm text-gray-700 bg-gray-50">
                   <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
                     <div>
