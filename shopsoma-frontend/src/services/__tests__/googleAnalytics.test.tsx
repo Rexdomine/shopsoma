@@ -354,6 +354,72 @@ describe('Google Analytics 4 service & SOMA-19 consent integration', () => {
       expect(firstVisitPayload.campaign_medium).not.toBe(secondVisitPayload.campaign_medium);
       expect(firstVisitPayload.campaign_name).not.toBe(secondVisitPayload.campaign_name);
     });
+
+    it('tracks and distinguishes Lagos Fashion Week 2026 and CANEX 2026 QR campaign links on G-DMC8B3PDM5', () => {
+      useCookieConsentStore.getState().acceptAll();
+      const gtagSpy = vi.fn();
+      window.gtag = gtagSpy;
+      const propertyId = 'G-DMC8B3PDM5';
+
+      // 1. Lagos Fashion Week 2026 QR link
+      trackPageView({
+        pathname: '/',
+        search:
+          '?utm_source=lagos_fashion_week&utm_medium=offline_qr&utm_campaign=lagos_fashion_week_2026&utm_content=visit_shop_qr',
+        origin: 'https://shopsoma.com',
+        measurementId: propertyId,
+        debugMode: true,
+      });
+
+      // 2. CANEX 2026 QR link
+      trackPageView({
+        pathname: '/',
+        search:
+          '?utm_source=canex&utm_medium=offline_qr&utm_campaign=canex_2026&utm_content=visit_shop_qr',
+        origin: 'https://shopsoma.com',
+        measurementId: propertyId,
+        debugMode: true,
+      });
+
+      const pageViews = gtagSpy.mock.calls.filter(
+        (call) => call[0] === 'event' && call[1] === 'page_view',
+      );
+      expect(pageViews).toHaveLength(2);
+
+      expect(pageViews[0][2]).toMatchObject({
+        send_to: 'G-DMC8B3PDM5',
+        page_location:
+          'https://shopsoma.com/?utm_source=lagos_fashion_week&utm_medium=offline_qr&utm_campaign=lagos_fashion_week_2026&utm_content=visit_shop_qr',
+        page_path:
+          '/?utm_source=lagos_fashion_week&utm_medium=offline_qr&utm_campaign=lagos_fashion_week_2026&utm_content=visit_shop_qr',
+        campaign_source: 'lagos_fashion_week',
+        campaign_medium: 'offline_qr',
+        campaign_name: 'lagos_fashion_week_2026',
+        campaign_content: 'visit_shop_qr',
+        utm_source: 'lagos_fashion_week',
+        utm_medium: 'offline_qr',
+        utm_campaign: 'lagos_fashion_week_2026',
+        utm_content: 'visit_shop_qr',
+        debug_mode: true,
+      });
+
+      expect(pageViews[1][2]).toMatchObject({
+        send_to: 'G-DMC8B3PDM5',
+        page_location:
+          'https://shopsoma.com/?utm_source=canex&utm_medium=offline_qr&utm_campaign=canex_2026&utm_content=visit_shop_qr',
+        page_path:
+          '/?utm_source=canex&utm_medium=offline_qr&utm_campaign=canex_2026&utm_content=visit_shop_qr',
+        campaign_source: 'canex',
+        campaign_medium: 'offline_qr',
+        campaign_name: 'canex_2026',
+        campaign_content: 'visit_shop_qr',
+        utm_source: 'canex',
+        utm_medium: 'offline_qr',
+        utm_campaign: 'canex_2026',
+        utm_content: 'visit_shop_qr',
+        debug_mode: true,
+      });
+    });
   });
 
   describe('Personal information (PII) protection in URLs and event parameters', () => {
@@ -415,7 +481,7 @@ describe('Google Analytics 4 service & SOMA-19 consent integration', () => {
           category: 'dresses',
           email: 'hidden@example.com',
         },
-        { measurementId: TEST_MEASUREMENT_ID },
+        { measurementId: TEST_MEASUREMENT_ID, debugMode: false },
       );
 
       expect(gtagSpy).toHaveBeenCalledWith('event', 'filter_applied', {

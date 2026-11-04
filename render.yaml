@@ -248,4 +248,6 @@ services:
       - key: VITE_STRIPE_PUBLISHABLE_KEY
         sync: false
       - key: VITE_GA_MEASUREMENT_ID
-        sync: false
+        value: G-DMC8B3PDM5
+      - key: VITE_GA_DEBUG_MODE
+        value: "true"
