@@ -9,6 +9,7 @@ import uuid
 
 from fastapi import HTTPException
 from sqlalchemy import select, text, tuple_
+from sqlalchemy.orm import selectinload
 
 from app.models.checkout_shipping_estimate import (
     CheckoutShippingEstimate,
@@ -18,7 +19,7 @@ from app.models.checkout_shipping_estimate import (
 )
 from app.models.order import FulfillmentStatus, Order, PaymentStatus
 from app.models.product import Product, ProductVariant, SizeStock
-from app.models.stock_payment_persistence import StockReservation
+from app.models.stock_payment_persistence import PaymentAttempt, StockReservation
 from app.services.checkout.estimates import (
     _estimate_request_fingerprint,
     _planned_ship_date,
@@ -150,6 +151,90 @@ async def release_active_order_reservations(db, *, order: Order) -> None:
     await db.flush()
 
 
+_ACTIVE_OR_SETTLED_ATTEMPT_STATES = (
+    "pending",
+    "call_started",
+    "abandoned_unknown",
+    "verified",
+)
+
+
+async def reclaim_unattempted_reservations_for_subject(
+    db, item, *, current_order_id: uuid.UUID
+) -> int:
+    """Release active pre-payment reservations from abandoned checkouts that never started a payment attempt."""
+    if not hasattr(db, "execute"):
+        return 0
+    candidate_order_ids = (
+        (
+            await db.execute(
+                select(Order.id)
+                .join(StockReservation, StockReservation.order_id == Order.id)
+                .where(
+                    StockReservation.inventory_subject_kind
+                    == item.inventory_subject_kind,
+                    StockReservation.inventory_subject_id == item.inventory_subject_id,
+                    StockReservation.state == "active",
+                    StockReservation.workflow_cohort == "domestic_checkout_v1",
+                    StockReservation.order_id != current_order_id,
+                    Order.payment_status != PaymentStatus.PAID,
+                    ~select(PaymentAttempt.id)
+                    .where(
+                        PaymentAttempt.order_id == Order.id,
+                        PaymentAttempt.state.in_(_ACTIVE_OR_SETTLED_ATTEMPT_STATES),
+                    )
+                    .exists(),
+                )
+                .group_by(Order.id, Order.created_at)
+                .order_by(Order.created_at.asc(), Order.id.asc())
+            )
+        )
+        .scalars()
+        .all()
+    )
+
+    reclaimed = 0
+    for abandoned_order_id in candidate_order_ids:
+        abandoned_order = (
+            await db.execute(
+                select(Order)
+                .options(selectinload(Order.items))
+                .where(Order.id == abandoned_order_id)
+                .with_for_update()
+            )
+        ).scalar_one_or_none()
+        if (
+            abandoned_order is None
+            or abandoned_order.payment_status == PaymentStatus.PAID
+        ):
+            continue
+        has_attempt = (
+            await db.execute(
+                select(PaymentAttempt.id)
+                .where(
+                    PaymentAttempt.order_id == abandoned_order.id,
+                    PaymentAttempt.state.in_(_ACTIVE_OR_SETTLED_ATTEMPT_STATES),
+                )
+                .limit(1)
+            )
+        ).scalar_one_or_none()
+        if has_attempt is not None:
+            continue
+        await release_active_order_reservations(db, order=abandoned_order)
+        if abandoned_order.fulfillment_status != FulfillmentStatus.CANCELLED:
+            database_now = await db.scalar(select(text("clock_timestamp()")))
+            abandoned_order.fulfillment_status = FulfillmentStatus.CANCELLED
+            abandoned_order.cancelled_at = database_now
+            abandoned_order.cancellation_reason = (
+                "Superseded by a newer checkout before payment initialization"
+            )
+            await db.flush()
+        reclaimed += 1
+        if await _lock_and_available(db, item) >= item.quantity:
+            break
+    return reclaimed
+
+
 async def select_estimate_option(
     db,
     *,
@@ -256,7 +341,13 @@ async def select_estimate_option(
         subject_examples.setdefault(key, item)
     for key, required_quantity in required.items():
         if await _lock_and_available(db, subject_examples[key]) < required_quantity:
-            raise HTTPException(status_code=409, detail="insufficient stock")
+            await reclaim_unattempted_reservations_for_subject(
+                db,
+                subject_examples[key],
+                current_order_id=order.id,
+            )
+            if await _lock_and_available(db, subject_examples[key]) < required_quantity:
+                raise HTTPException(status_code=409, detail="insufficient stock")
 
     # Coordinator and inventory locks can wait. Re-read immutable quote truth
     # under lock and sample the database clock only after the final lock.

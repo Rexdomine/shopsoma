@@ -23,12 +23,16 @@ from app.models.checkout_shipping_estimate import (
     CheckoutShippingEstimateSelection,
     OrderInventoryCoverage,
 )
-from app.models.order import Order, OrderItem
+from app.models.order import FulfillmentStatus, Order, OrderItem
 from app.models.order_guest_capability import OrderGuestCapability
 from app.models.payment import Payment
 from app.models.product import ModerationStatus, Product, ProductStatus
 from app.models.shipping_rate import ShippingRate
-from app.models.stock_payment_persistence import StockReservation
+from app.models.stock_payment_persistence import (
+    PaymentAttempt,
+    PaymentAttemptReservation,
+    StockReservation,
+)
 from app.models.user import User, UserRole
 from app.models import VendorNotification
 from app.models.vendor_pickup import VendorPickup
@@ -1321,3 +1325,210 @@ async def test_gate_off_order_preserves_legacy_path_without_bridge_rows(
         )
         == 0
     )
+
+
+@pytest.mark.asyncio
+async def test_selecting_estimate_option_reclaims_unattempted_prepayment_reservation_on_one_stock_item(
+    client, db_session, vendor_user, customer_user, monkeypatch
+):
+    address, product = await _domestic_catalogue(db_session, vendor_user, customer_user)
+    product.total_stock = 1
+    await db_session.commit()
+    product_id = product.id
+    address_id = address.id
+    monkeypatch.setattr(settings, "DOMESTIC_CHECKOUT_PREREQUISITES_ENABLED", True)
+    monkeypatch.setattr(settings, "DOMESTIC_CHECKOUT_COHORT_PERCENTAGE", 100)
+
+    # First checkout pass selects a quote on a 1-stock item, then abandons before payment initialization
+    first_order_id, first_estimate = await _create_authenticated_estimate(
+        client,
+        customer_user,
+        SimpleNamespace(id=address_id),
+        SimpleNamespace(id=product_id),
+        key="pass-1-estimate",
+    )
+    first_select = await client.post(
+        f"/api/v1/orders/{first_order_id}/checkout-estimates/{first_estimate['id']}"
+        f"/options/{first_estimate['options'][0]['id']}/select",
+        headers={**customer_user["headers"], "X-Idempotency-Key": "pass-1-select"},
+    )
+    assert first_select.status_code == 200, first_select.text
+
+    # Second authenticated checkout pass on the same 1-stock item selects a quote cleanly
+    second_order_id, second_estimate = await _create_authenticated_estimate(
+        client,
+        customer_user,
+        SimpleNamespace(id=address_id),
+        SimpleNamespace(id=product_id),
+        key="pass-2-estimate",
+    )
+    second_select = await client.post(
+        f"/api/v1/orders/{second_order_id}/checkout-estimates/{second_estimate['id']}"
+        f"/options/{second_estimate['options'][0]['id']}/select",
+        headers={**customer_user["headers"], "X-Idempotency-Key": "pass-2-select"},
+    )
+    assert second_select.status_code == 200, second_select.text
+    assert (
+        second_select.json()["selected_option"]["id"]
+        == second_estimate["options"][0]["id"]
+    )
+
+    db_session.expire_all()
+    first_order = await db_session.get(Order, uuid.UUID(first_order_id))
+    assert first_order.fulfillment_status == FulfillmentStatus.CANCELLED
+    first_res = await db_session.scalar(
+        select(StockReservation).where(
+            StockReservation.order_id == uuid.UUID(first_order_id)
+        )
+    )
+    assert first_res.state == "released"
+    assert first_res.terminal_reason == "checkout_cancelled"
+
+    second_res = await db_session.scalar(
+        select(StockReservation).where(
+            StockReservation.order_id == uuid.UUID(second_order_id)
+        )
+    )
+    assert second_res.state == "active"
+
+    # Third pass: guest checkout on the same 1-stock item while pass 2 is still un-attempted
+    guest_created = await client.post(
+        "/api/v1/orders",
+        json=_guest_order_payload(product_id, "guest-pass3@example.test"),
+    )
+    assert guest_created.status_code == 201, guest_created.text
+    guest_order = guest_created.json()
+    guest_headers = {
+        "X-ShopSoma-Checkout-Capability": guest_order["checkout_capability"],
+        "X-Idempotency-Key": "pass-3-estimate",
+    }
+    guest_est_res = await client.post(
+        f"/api/v1/orders/{guest_order['id']}/checkout-estimates",
+        headers=guest_headers,
+    )
+    assert guest_est_res.status_code == 201, guest_est_res.text
+    guest_estimate = guest_est_res.json()
+
+    guest_select = await client.post(
+        f"/api/v1/orders/{guest_order['id']}/checkout-estimates/{guest_estimate['id']}"
+        f"/options/{guest_estimate['options'][0]['id']}/select",
+        headers={
+            "X-ShopSoma-Checkout-Capability": guest_order["checkout_capability"],
+            "X-Idempotency-Key": "pass-3-select",
+        },
+    )
+    assert guest_select.status_code == 200, guest_select.text
+    assert (
+        guest_select.json()["selected_option"]["id"]
+        == guest_estimate["options"][0]["id"]
+    )
+
+    db_session.expire_all()
+    second_order = await db_session.get(Order, uuid.UUID(second_order_id))
+    assert second_order.fulfillment_status == FulfillmentStatus.CANCELLED
+    await db_session.refresh(second_res)
+    assert second_res.state == "released"
+    guest_res = await db_session.scalar(
+        select(StockReservation).where(
+            StockReservation.order_id == uuid.UUID(guest_order["id"])
+        )
+    )
+    assert guest_res.state == "active"
+
+
+@pytest.mark.asyncio
+async def test_selecting_estimate_option_does_not_reclaim_reservation_with_active_payment_attempt(
+    client, db_session, vendor_user, customer_user, monkeypatch
+):
+    address, product = await _domestic_catalogue(db_session, vendor_user, customer_user)
+    product.total_stock = 1
+    await db_session.commit()
+    product_id = product.id
+    address_id = address.id
+    monkeypatch.setattr(settings, "DOMESTIC_CHECKOUT_PREREQUISITES_ENABLED", True)
+    monkeypatch.setattr(settings, "DOMESTIC_CHECKOUT_COHORT_PERCENTAGE", 100)
+
+    first_order_id, first_estimate = await _create_authenticated_estimate(
+        client,
+        customer_user,
+        SimpleNamespace(id=address_id),
+        SimpleNamespace(id=product_id),
+        key="active-attempt-est-1",
+    )
+    first_select = await client.post(
+        f"/api/v1/orders/{first_order_id}/checkout-estimates/{first_estimate['id']}"
+        f"/options/{first_estimate['options'][0]['id']}/select",
+        headers={
+            **customer_user["headers"],
+            "X-Idempotency-Key": "active-attempt-sel-1",
+        },
+    )
+    assert first_select.status_code == 200, first_select.text
+
+    # Bind an active PaymentAttempt to the first order's reservation
+    db_session.expire_all()
+    first_order = await db_session.get(Order, uuid.UUID(first_order_id))
+    first_res = await db_session.scalar(
+        select(StockReservation).where(StockReservation.order_id == first_order.id)
+    )
+    now = await db_session.scalar(select(text("clock_timestamp()")))
+    txid = await db_session.scalar(select(text("txid_current()")))
+    attempt = PaymentAttempt(
+        id=uuid.uuid4(),
+        order_id=first_order.id,
+        customer_id=first_order.customer_id,
+        workflow_cohort="domestic_checkout_v1",
+        checkout_estimate_selection_id=first_order.checkout_estimate_selection_id,
+        amount=first_order.total_amount,
+        currency=first_order.currency,
+        provider="paystack",
+        provider_reference=f"ref-{uuid.uuid4().hex}",
+        state="pending",
+        payment_window_seconds=1800,
+        authorization_grace_seconds=900,
+        expires_at=now + timedelta(seconds=1800),
+        authorization_deadline_at=now + timedelta(seconds=2700),
+        claim_ttl_seconds=300,
+        source_command="initialize_checkout_payment",
+        idempotency_key=f"init-{first_order.id}",
+        creation_txid=txid,
+    )
+    db_session.add(attempt)
+    await db_session.flush()
+    db_session.add(
+        PaymentAttemptReservation(
+            attempt_id=attempt.id,
+            reservation_id=first_res.id,
+            membership_family="domestic_checkout_v1",
+            order_id=first_order.id,
+            order_item_id=first_res.order_item_id,
+            checkout_estimate_selection_id=first_order.checkout_estimate_selection_id,
+            creation_txid=txid,
+        )
+    )
+    await db_session.commit()
+
+    # Competing checkout must still fail with 409 insufficient stock when a payment attempt is active
+    second_order_id, second_estimate = await _create_authenticated_estimate(
+        client,
+        customer_user,
+        SimpleNamespace(id=address_id),
+        SimpleNamespace(id=product_id),
+        key="active-attempt-est-2",
+    )
+    second_select = await client.post(
+        f"/api/v1/orders/{second_order_id}/checkout-estimates/{second_estimate['id']}"
+        f"/options/{second_estimate['options'][0]['id']}/select",
+        headers={
+            **customer_user["headers"],
+            "X-Idempotency-Key": "active-attempt-sel-2",
+        },
+    )
+    assert second_select.status_code == 409, second_select.text
+    assert second_select.json()["detail"] == "insufficient stock"
+
+    db_session.expire_all()
+    await db_session.refresh(first_order)
+    await db_session.refresh(first_res)
+    assert first_order.fulfillment_status != FulfillmentStatus.CANCELLED
+    assert first_res.state == "active"

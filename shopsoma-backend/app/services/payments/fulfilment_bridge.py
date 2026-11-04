@@ -43,7 +43,11 @@ from app.models.stock_payment_persistence import (
 )
 from app.services.checkout.outbox import enqueue_checkout_event
 from app.services.checkout.estimates import order_snapshot, reload_checkout_order
-from app.services.checkout.reservations import _coordinator_keys, _lock_and_available
+from app.services.checkout.reservations import (
+    _coordinator_keys,
+    _lock_and_available,
+    reclaim_unattempted_reservations_for_subject,
+)
 from app.services.shipping.capabilities import DomesticShippingCapabilities
 
 
@@ -565,7 +569,13 @@ async def _ensure_domestic_bridge_attempt(
                 key = (item.inventory_subject_kind, item.inventory_subject_id)
                 if key in required:
                     if await _lock_and_available(session, item) < required[key]:
-                        raise PaymentBridgeError("insufficient stock for payment retry")
+                        await reclaim_unattempted_reservations_for_subject(
+                            session,
+                            item,
+                            current_order_id=order.id,
+                        )
+                        if await _lock_and_available(session, item) < required[key]:
+                            raise PaymentBridgeError("insufficient stock for payment retry")
                     required.pop(key)
             database_now = await session.scalar(text("SELECT clock_timestamp()"))
             creation_txid = await session.scalar(text("SELECT txid_current()"))
