@@ -1039,6 +1039,12 @@ const handleFilterChange = (key: keyof FilterState, value: string, categoryId?: 
           <img
             src={heroContent.imageUrl}
             alt=""
+            onError={(event) => {
+              const fallback = '/images/hero/shop-edits-2088.jpg';
+              if (!event.currentTarget.src.endsWith(fallback)) {
+                event.currentTarget.src = fallback;
+              }
+            }}
             className={`h-full w-full object-cover ${heroContent.imagePositionClassName || 'object-center'}`}
           />
         </picture>
@@ -1084,16 +1090,28 @@ const handleFilterChange = (key: keyof FilterState, value: string, categoryId?: 
                   >
                     All Items ({filteredProducts.length})
                   </button>
-                  {navItems.map((item) => (
-                    <button
-                      key={item.id}
-                      type="button"
-                      onClick={() => { setSelectedCategoryId(item.id); handleFilterChange('category', item.name); }}
-                      className={`text-xs sm:text-sm font-ui tracking-wide pb-1 border-b-2 whitespace-nowrap ${selectedCategoryId === item.id ? 'text-dark border-primary' : 'text-gray-500 border-transparent hover:text-dark hover:border-gray-300'}`}
-                    >
-                      {item.name}
-                    </button>
-                  ))}
+                  {navItems.map((item) => {
+                    const isTabSelected = categoryNav?.length
+                      ? selectedCategoryId === item.id
+                      : activeCategory === item.name;
+                    return (
+                      <button
+                        key={item.id}
+                        type="button"
+                        onClick={() => {
+                          if (categoryNav?.length) {
+                            setSelectedCategoryId(item.id);
+                          } else {
+                            setSelectedCategoryId(null);
+                          }
+                          handleFilterChange('category', item.name, categoryNav?.length ? item.id : null);
+                        }}
+                        className={`text-xs sm:text-sm font-ui tracking-wide pb-1 border-b-2 whitespace-nowrap ${isTabSelected ? 'text-dark border-primary' : 'text-gray-500 border-transparent hover:text-dark hover:border-gray-300'}`}
+                      >
+                        {item.name}
+                      </button>
+                    );
+                  })}
                 </>
               ) : (
                 <>

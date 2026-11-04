@@ -507,10 +507,17 @@ async def _ensure_domestic_bridge_attempt(
         raise PaymentBridgeError("payment attempt subject binding is invalid")
 
     if predecessor is not None and predecessor.state in {"failed", "expired"}:
+        predecessor_reservation_ids = list(
+            await session.scalars(
+                select(PaymentAttemptReservation.reservation_id).where(
+                    PaymentAttemptReservation.attempt_id == predecessor.id
+                )
+            )
+        ) or reservation_ids
         prior_reservations = list(
             await session.scalars(
                 select(StockReservation)
-                .where(StockReservation.id.in_(reservation_ids))
+                .where(StockReservation.id.in_(predecessor_reservation_ids))
                 .order_by(StockReservation.id)
                 .with_for_update()
             )
@@ -1284,8 +1291,8 @@ async def finalize_verified_payment(
     if attempt.state not in {"call_started", "abandoned_unknown"}:
         raise PaymentBridgeError("payment attempt is not ready for verification")
 
-    observed_at = observed_at or datetime.now(timezone.utc)
     database_now = await session.scalar(text("SELECT clock_timestamp()"))
+    observed_at = observed_at or database_now
     if (
         attempt.state == "call_started"
         and attempt.claim_expires_at is not None
@@ -1353,11 +1360,12 @@ async def finalize_verified_payment(
             row.state != "active" for row in reservations
         ):
             raise PaymentBridgeError("verified payment inventory is unavailable")
-        await _decrement_reserved_inventory(session, reservations=reservations)
         for reservation in reservations:
             reservation.state = "consumed"
             reservation.terminal_reason = "authenticated_payment_verified"
             reservation.row_version += 1
+        await session.flush()
+        await _decrement_reserved_inventory(session, reservations=reservations)
         await session.flush()
         await _enqueue_payment_event(
             session, attempt=attempt, event_type="payment_verified_start_order"
@@ -1442,8 +1450,8 @@ async def finalize_failed_payment(
     if attempt.state not in {"call_started", "abandoned_unknown"}:
         raise PaymentBridgeError("payment attempt is not ready for verification")
 
-    observed_at = observed_at or datetime.now(timezone.utc)
     database_now = await session.scalar(text("SELECT clock_timestamp()"))
+    observed_at = observed_at or database_now
     if attempt.state == "call_started" and (
         attempt.claim_expires_at is None or database_now >= attempt.claim_expires_at
     ):

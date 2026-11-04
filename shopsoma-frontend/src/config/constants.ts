@@ -65,6 +65,7 @@ export const ROUTES = {
   MEN: '/men',
   WOMEN: '/women',
   DESIGNERS: '/designers',
+  DESIGNER_STOREFRONT: '/designers/:designerId',
   NEW_ARRIVALS: '/new',
   PERFUMES: '/perfumes',
   BAGS_WALLETS: '/bags-wallets',
@@ -111,6 +112,9 @@ export const ROUTES = {
   SERVER_ERROR: '/500',
 } as const;
 
+export const getDesignerStorefrontPath = (designerId: string): string =>
+  `/designers/${designerId}`;
+
 // Pagination
 export const PAGINATION = {
   DEFAULT_PAGE: 1,
@@ -130,6 +134,8 @@ export const MEN_HERO_IMAGE_URL = '/images/hero/men/men-hero-dsc06941-desktop.we
 export const MEN_HERO_MOBILE_IMAGE_URL = '/images/hero/men/men-hero-dsc06941-mobile.webp';
 export const WOMEN_HERO_IMAGE_URL = '/images/hero/women/women-hero-img-2101-desktop.webp';
 export const WOMEN_HERO_MOBILE_IMAGE_URL = '/images/hero/women/women-hero-img-2101-mobile.webp';
+export const DESIGNERS_HERO_IMAGE_URL = '/images/hero/campaign/campaign-exterior-desktop.webp';
+export const DESIGNERS_HERO_MOBILE_IMAGE_URL = '/images/hero/campaign/campaign-exterior-mobile.webp';
 export const VENDOR_LOGIN_IMAGE_URL = '/images/hero/campaign/campaign-exterior-desktop.webp';
 
 // Toast Configuration

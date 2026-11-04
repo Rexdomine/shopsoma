@@ -148,3 +148,254 @@ async def test_duplicate_verified_callback_consumes_stock_and_writes_one_outbox(
         "order_id": str(order_id),
         "workflow_cohort": "domestic_checkout_v1",
     }
+
+
+@pytest.mark.asyncio
+async def test_paystack_last_item_in_stock_cancel_and_retry_succeeds_without_duplicate_reference(
+    client, db_session, vendor_user, customer_user, monkeypatch
+):
+    order, product = await create_enforced_checkout(
+        client,
+        db_session,
+        vendor_user,
+        customer_user,
+        monkeypatch,
+        quantity=2,
+    )
+    order_id = order.id
+    assert product.total_stock == 2
+    monkeypatch.setattr(payments, "PAYSTACK_SECRET_KEY", "sk_test_placeholder")
+    monkeypatch.setattr(
+        payments.email_service,
+        "send_payment_receipt_email",
+        _successful_side_effect,
+    )
+    monkeypatch.setattr(
+        payments, "send_account_claim_email_if_guest", _successful_side_effect
+    )
+
+    provider_state = {"verify_status": "abandoned", "initialized_refs": []}
+
+    class _PaystackRetryClient:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_args):
+            return None
+
+        async def post(self, _url, **kwargs):
+            ref = kwargs["json"]["reference"]
+            if ref in provider_state["initialized_refs"]:
+                return SimpleNamespace(
+                    status_code=400,
+                    text="Duplicate Transaction Reference",
+                    json=lambda: {
+                        "status": False,
+                        "message": "Duplicate Transaction Reference",
+                    },
+                )
+            provider_state["initialized_refs"].append(ref)
+            return SimpleNamespace(
+                status_code=200,
+                text="",
+                json=lambda: {
+                    "status": True,
+                    "data": {
+                        "authorization_url": f"https://paystack.invalid/authorize/{ref}",
+                        "access_code": f"access_{ref}",
+                        "reference": ref,
+                    },
+                },
+            )
+
+        async def get(self, url, **_kwargs):
+            ref = url.rsplit("/", 1)[-1]
+            return SimpleNamespace(
+                status_code=200,
+                raise_for_status=lambda: None,
+                json=lambda: {
+                    "status": True,
+                    "data": {
+                        "id": 901,
+                        "status": provider_state["verify_status"],
+                        "reference": ref,
+                        "amount": int(Decimal(order.total_amount) * 100),
+                        "currency": order.currency,
+                        "gateway_response": (
+                            "The transaction was not completed"
+                            if provider_state["verify_status"] == "abandoned"
+                            else "Successful"
+                        ),
+                    },
+                },
+            )
+
+    monkeypatch.setattr(payments.httpx, "AsyncClient", _PaystackRetryClient)
+
+    first_init = await client.post(
+        "/api/v1/payments/initialize",
+        headers=customer_user["headers"],
+        json={
+            "order_id": str(order_id),
+            "email": customer_user["user"].email,
+            "payment_gateway": "paystack",
+            "callback_url": "https://staging.shopsoma.com/payment/verify",
+        },
+    )
+    assert first_init.status_code == 200, first_init.text
+    first_ref = first_init.json()["reference"]
+
+    # Customer cancels/abandons the first Paystack popup and clicks Retry
+    second_init = await client.post(
+        "/api/v1/payments/initialize",
+        headers=customer_user["headers"],
+        json={
+            "order_id": str(order_id),
+            "email": customer_user["user"].email,
+            "payment_gateway": "paystack",
+            "callback_url": "https://staging.shopsoma.com/payment/verify",
+        },
+    )
+    assert second_init.status_code == 200, second_init.text
+    second_ref = second_init.json()["reference"]
+    assert second_ref != first_ref
+
+    # Customer completes the retried Paystack payment
+    provider_state["verify_status"] = "success"
+    verified = await client.post(
+        "/api/v1/payments/verify",
+        json={
+            "payment_gateway": "paystack",
+            "reference": second_ref,
+        },
+    )
+    assert verified.status_code == 200, verified.text
+
+    db_session.expire_all()
+    persisted_order = await db_session.get(Order, order_id)
+    await db_session.refresh(product)
+    attempts = list(
+        await db_session.scalars(
+            select(PaymentAttempt)
+            .where(PaymentAttempt.order_id == order_id)
+            .order_by(PaymentAttempt.created_at.asc())
+        )
+    )
+    reservations = list(
+        await db_session.scalars(
+            select(StockReservation)
+            .where(StockReservation.order_id == order_id)
+            .order_by(StockReservation.created_at.asc())
+        )
+    )
+    assert persisted_order.payment_status == PaymentStatus.PAID
+    assert product.total_stock == 0
+    assert [attempt.state for attempt in attempts] == ["failed", "verified"]
+    assert attempts[1].supersedes_attempt_id == attempts[0].id
+    assert [res.state for res in reservations] == ["released", "consumed"]
+
+
+@pytest.mark.asyncio
+async def test_paystack_retry_reconciles_already_paid_attempt_instead_of_replaying_duplicate_reference(
+    client, db_session, vendor_user, customer_user, monkeypatch
+):
+    order, product = await create_enforced_checkout(
+        client,
+        db_session,
+        vendor_user,
+        customer_user,
+        monkeypatch,
+        quantity=2,
+    )
+    order_id = order.id
+    monkeypatch.setattr(payments, "PAYSTACK_SECRET_KEY", "sk_test_placeholder")
+    monkeypatch.setattr(
+        payments.email_service,
+        "send_payment_receipt_email",
+        _successful_side_effect,
+    )
+    monkeypatch.setattr(
+        payments, "send_account_claim_email_if_guest", _successful_side_effect
+    )
+
+    class _PaystackPaidOnRetryClient:
+        post_calls = 0
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_args):
+            return None
+
+        async def post(self, _url, **kwargs):
+            type(self).post_calls += 1
+            ref = kwargs["json"]["reference"]
+            return SimpleNamespace(
+                status_code=200,
+                text="",
+                json=lambda: {
+                    "status": True,
+                    "data": {
+                        "authorization_url": f"https://paystack.invalid/authorize/{ref}",
+                        "access_code": f"access_{ref}",
+                        "reference": ref,
+                    },
+                },
+            )
+
+        async def get(self, url, **_kwargs):
+            ref = url.rsplit("/", 1)[-1]
+            return SimpleNamespace(
+                status_code=200,
+                raise_for_status=lambda: None,
+                json=lambda: {
+                    "status": True,
+                    "data": {
+                        "id": 902,
+                        "status": "success",
+                        "reference": ref,
+                        "amount": int(Decimal(order.total_amount) * 100),
+                        "currency": order.currency,
+                        "gateway_response": "Successful",
+                    },
+                },
+            )
+
+    monkeypatch.setattr(payments.httpx, "AsyncClient", _PaystackPaidOnRetryClient)
+
+    first_init = await client.post(
+        "/api/v1/payments/initialize",
+        headers=customer_user["headers"],
+        json={
+            "order_id": str(order_id),
+            "email": customer_user["user"].email,
+            "payment_gateway": "paystack",
+            "callback_url": "https://staging.shopsoma.com/payment/verify",
+        },
+    )
+    assert first_init.status_code == 200, first_init.text
+
+    # Customer completed payment on Paystack, callback/verify was missed, and customer clicks Retry
+    retry_init = await client.post(
+        "/api/v1/payments/initialize",
+        headers=customer_user["headers"],
+        json={
+            "order_id": str(order_id),
+            "email": customer_user["user"].email,
+            "payment_gateway": "paystack",
+            "callback_url": "https://staging.shopsoma.com/payment/verify",
+        },
+    )
+    assert retry_init.status_code == 400
+    assert retry_init.json()["detail"] == "Order has already been paid"
+    assert _PaystackPaidOnRetryClient.post_calls == 1
+
+    db_session.expire_all()
+    persisted_order = await db_session.get(Order, order_id)
+    await db_session.refresh(product)
+    reservation = await db_session.scalar(
+        select(StockReservation).where(StockReservation.order_id == order_id)
+    )
+    assert persisted_order.payment_status == PaymentStatus.PAID
+    assert reservation.state == "consumed"
+    assert product.total_stock == 0

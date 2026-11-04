@@ -47,6 +47,37 @@ describe('Header Account Navigation', () => {
     vi.clearAllMocks();
   });
 
+  it('renders main navigation links in order: Men | Women | Shop Edits | Designers', () => {
+    mockIsAuthenticated = false;
+    mockAuthUser = null;
+
+    const { container } = render(
+      <MemoryRouter>
+        <Header />
+      </MemoryRouter>
+    );
+
+    const desktopNavLinks = Array.from(container.querySelectorAll('.main-nav a'));
+    expect(desktopNavLinks.map((link) => link.textContent)).toEqual([
+      'Men',
+      'Women',
+      'Shop Edits',
+      'Designers',
+    ]);
+    expect(desktopNavLinks.map((link) => link.getAttribute('href'))).toEqual([
+      '/men',
+      '/women',
+      '/shop-edits',
+      '/designers',
+    ]);
+
+    // Also verify mobile menu includes Designers after Shop Edits
+    fireEvent.click(screen.getByLabelText('Open menu'));
+    const designersLinks = screen.getAllByRole('link', { name: 'Designers' });
+    expect(designersLinks).toHaveLength(2);
+    expect(designersLinks[1]).toHaveAttribute('href', '/designers');
+  });
+
   it('renders guest menu in account dropdown when not logged in', () => {
     mockIsAuthenticated = false;
     mockAuthUser = null;

@@ -135,6 +135,10 @@ describe('ProductDetail per-size pricing and default main size selection', () =>
     expect(await screen.findByText('Size: 14')).toBeInTheDocument();
     expect(screen.getByText('$100.00')).toBeInTheDocument();
 
+    // Displayed designer name links to that designer's storefront
+    const designerLink = screen.getByRole('link', { name: 'NOUVELLE GLORIA FORM STUDIO' });
+    expect(designerLink).toHaveAttribute('href', '/designers/vendor-1');
+
     // Open size dropdown and select Size 10 ($60.00)
     fireEvent.click(screen.getByText('Size: 14'));
     fireEvent.click(screen.getByRole('button', { name: /^10/i }));

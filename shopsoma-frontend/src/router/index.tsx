@@ -22,6 +22,7 @@ const NewArrivals = lazy(() => import('../pages/products/NewArrivals'));
 const PerfumesStorefront = lazy(() => import('../pages/products/PerfumesStorefront'));
 const BagsWalletsStorefront = lazy(() => import('../pages/products/BagsWalletsStorefront'));
 const Designers = lazy(() => import('../pages/designers/Designers'));
+const DesignerStorefront = lazy(() => import('../pages/designers/DesignerStorefront'));
 const Cart = lazy(() => import('../pages/cart/Cart'));
 const Checkout = lazy(() => import('../pages/checkout/Checkout'));
 const Register = lazy(() => import('../pages/auth/Register'));
@@ -158,6 +159,26 @@ const router = createBrowserRouter([
       <ErrorBoundary>
         <Suspense fallback={<Loading fullScreen message="Loading designers..." />}>
           <Designers />
+        </Suspense>
+      </ErrorBoundary>
+    ),
+  },
+  {
+    path: ROUTES.DESIGNER_STOREFRONT,
+    element: (
+      <ErrorBoundary>
+        <Suspense fallback={<Loading fullScreen message="Loading designer storefront..." />}>
+          <DesignerStorefront />
+        </Suspense>
+      </ErrorBoundary>
+    ),
+  },
+  {
+    path: '/vendors/:designerId',
+    element: (
+      <ErrorBoundary>
+        <Suspense fallback={<Loading fullScreen message="Loading designer storefront..." />}>
+          <DesignerStorefront />
         </Suspense>
       </ErrorBoundary>
     ),

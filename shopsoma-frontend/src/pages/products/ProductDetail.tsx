@@ -250,7 +250,10 @@ export default function ProductDetail() {
 
     // 1. Prefer the size variant explicitly marked as main storefront price (inherits_price === true)
     const explicitMainAvailable = candidateVariants.find(
-      (v) => v.inherits_price === true && v.is_available !== false && (v.stock ?? 1) > 0
+      (v) =>
+        v.inherits_price === true &&
+        v.is_available !== false &&
+        (Boolean(product?.made_to_order) || (v.stock ?? 1) > 0)
     );
     if (explicitMainAvailable?.size) return explicitMainAvailable.size;
 
@@ -263,7 +266,7 @@ export default function ProductDetail() {
         (v) =>
           Number(v.price) === Number(basePrice) &&
           v.is_available !== false &&
-          (v.stock ?? 1) > 0
+          (Boolean(product?.made_to_order) || (v.stock ?? 1) > 0)
       );
       if (matchingBaseAvailable?.size) return matchingBaseAvailable.size;
 
@@ -425,6 +428,7 @@ export default function ProductDetail() {
         price: currentPrice,
         compare_at_price: comparePrice,
         stock: currentSizeStock,
+        is_available: !isOutOfStock,
         color: selectedVariation?.title || match.color,
         color_hex: selectedVariation?.color_hex || match.color_hex,
         size: selectedSize || match.size,

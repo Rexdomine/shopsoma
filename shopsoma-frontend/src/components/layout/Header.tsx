@@ -261,6 +261,7 @@ export default function Header() {
             <Link to={ROUTES.MEN} className="hover:text-primary-dark">Men</Link>
             <Link to={ROUTES.WOMEN} className="hover:text-primary-dark">Women</Link>
             <Link to={ROUTES.SHOP_EDITS} className="hover:text-primary-dark">Shop Edits</Link>
+            <Link to={ROUTES.DESIGNERS} className="hover:text-primary-dark">Designers</Link>
           </div>
         </nav>
 
@@ -275,6 +276,9 @@ export default function Header() {
               </Link>
               <Link to={ROUTES.SHOP_EDITS} className="block" onClick={() => setMobileMenuOpen(false)}>
                 Shop Edits
+              </Link>
+              <Link to={ROUTES.DESIGNERS} className="block" onClick={() => setMobileMenuOpen(false)}>
+                Designers
               </Link>
             </div>
 
