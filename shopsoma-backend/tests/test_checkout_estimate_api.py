@@ -1338,6 +1338,12 @@ async def test_selecting_estimate_option_reclaims_unattempted_prepayment_reserva
     address_id = address.id
     monkeypatch.setattr(settings, "DOMESTIC_CHECKOUT_PREREQUISITES_ENABLED", True)
     monkeypatch.setattr(settings, "DOMESTIC_CHECKOUT_COHORT_PERCENTAGE", 100)
+    monkeypatch.setattr(settings, "CHECKOUT_CAPABILITY_ACTIVE_PEPPER_VERSION", 1)
+    monkeypatch.setattr(
+        settings,
+        "CHECKOUT_CAPABILITY_ACTIVE_PEPPER",
+        SecretStr("m3-reclaim-pepper-test-value"),
+    )
 
     # First checkout pass selects a quote on a 1-stock item, then abandons before payment initialization
     first_order_id, first_estimate = await _create_authenticated_estimate(
@@ -1447,6 +1453,12 @@ async def test_selecting_estimate_option_does_not_reclaim_reservation_with_activ
     address_id = address.id
     monkeypatch.setattr(settings, "DOMESTIC_CHECKOUT_PREREQUISITES_ENABLED", True)
     monkeypatch.setattr(settings, "DOMESTIC_CHECKOUT_COHORT_PERCENTAGE", 100)
+    monkeypatch.setattr(settings, "CHECKOUT_CAPABILITY_ACTIVE_PEPPER_VERSION", 1)
+    monkeypatch.setattr(
+        settings,
+        "CHECKOUT_CAPABILITY_ACTIVE_PEPPER",
+        SecretStr("m3-reclaim-pepper-test-value"),
+    )
 
     first_order_id, first_estimate = await _create_authenticated_estimate(
         client,
