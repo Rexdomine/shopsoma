@@ -1207,45 +1207,71 @@ export default function Checkout() {
     }
   };
 
+  const buildCurrentOrderRequest = () => {
+    const items = cart.items.map(item => ({
+      product_id: item.product_id,
+      variant_id: !item.variant?.id || item.variant.id.startsWith('default-') ? null : item.variant.id,
+      quantity: item.quantity,
+      expected_unit_price: getExpectedUnitPrice(item),
+    }));
+    const selectedAddress = addresses.find(addr => addr.id === selectedAddressId);
+    const quoteToken = checkoutQuote?.quote_token || orderReview?.checkout_quote?.quote_token;
+    const orderRequest: any = {
+      items,
+      currency,
+      shipping_rate_id: secureShipping ? undefined : selectedShippingRateId || undefined,
+      promo_code: appliedPromo?.code,
+      ...(quoteToken ? { checkout_quote_token: quoteToken } : {}),
+    };
+
+    if (isGuestCheckout && selectedAddress?.id === 'guest-address') {
+      const guestHouseNumber = (selectedAddress.house_number ?? selectedAddress.address_line2 ?? '').trim();
+      orderRequest.guest_address = {
+        full_name: selectedAddress.full_name,
+        phone_number: selectedAddress.phone_number,
+        address_line1: selectedAddress.address_line1,
+        address_line2: guestHouseNumber,
+        house_number: guestHouseNumber,
+        city: selectedAddress.city,
+        state: selectedAddress.state,
+        postal_code: selectedAddress.postal_code,
+        country: selectedAddress.country,
+      };
+      orderRequest.customer_email = email;
+    } else {
+      orderRequest.shipping_address_id = selectedAddressId;
+      orderRequest.billing_address_id = selectedAddressId;
+    }
+    return orderRequest;
+  };
+
   const handlePurchase = async () => {
-    if (!selectedAddressId || showNewAddressForm || (!secureShipping && !orderReview) || enforcedOrder || priceChangeNotice) return;
+    if (!selectedAddressId || showNewAddressForm || (!secureShipping && !orderReview) || priceChangeNotice) return;
+
+    if (enforcedOrder) {
+      if (enforcedOrder.workflow_cohort === 'domestic_checkout_v1' && checkoutEstimate?.selected_option) {
+        const selectedOption = checkoutEstimate.selected_option;
+        const validSelectedTruth = Boolean(
+          selectedOption
+          && (checkoutEstimate.currency === 'NGN' || checkoutEstimate.currency === 'USD')
+          && selectedOption.currency === checkoutEstimate.currency
+          && typeof selectedOption.service_label === 'string'
+          && selectedOption.service_label.trim()
+          && isValidServerMoney(selectedOption.amount, true)
+          && isValidServerMoney(checkoutEstimate.server_payable_total, false)
+        );
+        if (!validSelectedTruth) {
+          alert('Selected delivery pricing is invalid. Please refresh and select again.');
+          return;
+        }
+        await initializeOrderPayment(enforcedOrder, checkoutCapability);
+      }
+      return;
+    }
 
     setIsCreatingOrder(true);
     try {
-      const items = cart.items.map(item => ({
-        product_id: item.product_id,
-        variant_id: !item.variant?.id || item.variant.id.startsWith('default-') ? null : item.variant.id,
-        quantity: item.quantity,
-        expected_unit_price: getExpectedUnitPrice(item),
-      }));
-      const selectedAddress = addresses.find(addr => addr.id === selectedAddressId);
-      const quoteToken = checkoutQuote?.quote_token || orderReview?.checkout_quote?.quote_token;
-      const orderRequest: any = {
-        items,
-        currency,
-        shipping_rate_id: secureShipping ? undefined : selectedShippingRateId || undefined,
-        promo_code: appliedPromo?.code,
-        ...(quoteToken ? { checkout_quote_token: quoteToken } : {}),
-      };
-
-      if (isGuestCheckout && selectedAddress?.id === 'guest-address') {
-        const guestHouseNumber = (selectedAddress.house_number ?? selectedAddress.address_line2 ?? '').trim();
-        orderRequest.guest_address = {
-          full_name: selectedAddress.full_name,
-          phone_number: selectedAddress.phone_number,
-          address_line1: selectedAddress.address_line1,
-          address_line2: guestHouseNumber,
-          house_number: guestHouseNumber,
-          city: selectedAddress.city,
-          state: selectedAddress.state,
-          postal_code: selectedAddress.postal_code,
-          country: selectedAddress.country,
-        };
-        orderRequest.customer_email = email;
-      } else {
-        orderRequest.shipping_address_id = selectedAddressId;
-        orderRequest.billing_address_id = selectedAddressId;
-      }
+      const orderRequest = buildCurrentOrderRequest();
 
       const order = await checkoutService.createOrder(orderRequest);
       if (order.workflow_cohort !== 'domestic_checkout_v1') {
@@ -1344,7 +1370,9 @@ export default function Checkout() {
     const requestKey = newIdempotencyKey('estimate');
     setEstimateRequestKey(requestKey);
     try {
-      return await checkoutService.createCheckoutEstimate(enforcedOrder.id, requestKey, checkoutCapability);
+      const replacement = await checkoutService.createCheckoutEstimate(enforcedOrder.id, requestKey, checkoutCapability);
+      setCheckoutEstimate(replacement);
+      return replacement;
     } catch (error: any) {
       if (error.response?.status === 404 || error.response?.status === 410) {
         discardExpiredCheckout();
@@ -1404,6 +1432,68 @@ export default function Checkout() {
 
   const selectCheckoutOption = async (estimateId: string, optionId: string) => {
     if (!enforcedOrder) throw new Error('Checkout order is unavailable');
+
+    if (checkoutEstimate?.selected_option && checkoutEstimate.selected_option.id !== optionId) {
+      const targetOption = checkoutEstimate.options.find(opt => opt.id === optionId);
+      try {
+        try {
+          await checkoutService.cancelOrder(
+            enforcedOrder.id,
+            'Customer changed delivery option before payment',
+            checkoutCapability,
+          );
+        } catch (cancelError: any) {
+          const terminalCancel = cancelError.response?.status === 404 || cancelError.response?.status === 410;
+          if (!terminalCancel) throw cancelError;
+        }
+        clearCheckoutCapability();
+        selectionKeys.clear();
+        const replacementOrder = await checkoutService.createOrder(buildCurrentOrderRequest());
+        const replacementCapability = replacementOrder.checkout_capability ?? undefined;
+        setCheckoutCapability(replacementCapability);
+        saveCheckoutCapability(replacementOrder.id, replacementCapability);
+        saveCheckoutCapability(replacementOrder.order_number, replacementCapability);
+        setEnforcedOrder(replacementOrder);
+        const requestKey = newIdempotencyKey('estimate');
+        setEstimateRequestKey(requestKey);
+        const replacementEstimate = await checkoutService.createCheckoutEstimate(
+          replacementOrder.id,
+          requestKey,
+          replacementCapability,
+        );
+        const matchedOption = replacementEstimate.options.find(
+          opt =>
+            opt.id === optionId ||
+            (targetOption &&
+              (opt.option_key === targetOption.option_key ||
+                (opt.service_code === targetOption.service_code &&
+                  opt.service_label === targetOption.service_label))),
+        );
+        if (!matchedOption) {
+          setCheckoutEstimate(replacementEstimate);
+          return replacementEstimate;
+        }
+        const replacementIdentity = `${replacementEstimate.id}:${matchedOption.id}`;
+        const replacementSelectionKey = newIdempotencyKey('selection');
+        selectionKeys.set(replacementIdentity, replacementSelectionKey);
+        const selectedEstimate = await checkoutService.selectCheckoutEstimateOption(
+          replacementOrder.id,
+          replacementEstimate.id,
+          matchedOption.id,
+          replacementSelectionKey,
+          replacementCapability,
+        );
+        setAddressChangedAfterShipping(false);
+        setCheckoutEstimate(selectedEstimate);
+        return selectedEstimate;
+      } catch (error: any) {
+        if (error.response?.status === 404 || error.response?.status === 410) {
+          discardExpiredCheckout();
+        }
+        throw error;
+      }
+    }
+
     const identity = `${estimateId}:${optionId}`;
     const selectionKey = selectionKeys.get(identity) ?? newIdempotencyKey('selection');
     selectionKeys.set(identity, selectionKey);
@@ -1541,7 +1631,8 @@ export default function Checkout() {
   );
   const hasSelectedAddress = !!selectedAddressId;
   const hasSelectedShipping = !!selectedShippingRateId;
-  const canPurchase = paymentOptions.length > 0 && step === 'payment' && hasEmail && hasSelectedAddress && !showNewAddressForm && (secureShipping || (hasSelectedShipping && orderReview)) && !enforcedOrder && !priceChangeNotice;
+  const hasSelectedEstimateOption = Boolean(checkoutEstimate?.selected_option);
+  const canPurchase = paymentOptions.length > 0 && step === 'payment' && hasEmail && hasSelectedAddress && !showNewAddressForm && (secureShipping || (hasSelectedShipping && orderReview)) && (!enforcedOrder || (enforcedOrder.workflow_cohort === 'domestic_checkout_v1' && hasSelectedEstimateOption)) && !priceChangeNotice;
 
   const selectedShippingRate = shippingRates.find(rate => rate.id === selectedShippingRateId);
   const shippingRateInSelectedCurrency = selectedShippingRate
