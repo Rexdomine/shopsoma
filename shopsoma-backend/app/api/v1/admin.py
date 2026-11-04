@@ -234,7 +234,7 @@ class AdminProductResponse(BaseModel):
                             stock=ss.stock,
                             sku=None,
                             is_available=bool(variation.is_active)
-                            and (bool(self.made_to_order) or ss.stock > 0),
+                            and (bool(getattr(self, "made_to_order", False)) or ss.stock > 0),
                             compare_at_price=(
                                 self.compare_at_price
                                 if self.compare_at_price is not None and var_price < self.compare_at_price
@@ -2918,9 +2918,9 @@ async def get_product_variants(
                     "price": var_price,
                     "stock": ss.stock,
                     "is_available": bool(variation.is_active)
-                    and (bool(product.made_to_order) or ss.stock > 0),
+                    and (bool(getattr(product, "made_to_order", False)) or ss.stock > 0),
                     "is_active": bool(variation.is_active)
-                    and (bool(product.made_to_order) or ss.stock > 0),
+                    and (bool(getattr(product, "made_to_order", False)) or ss.stock > 0),
                     "inherits_price": bool(variation.inherits_price),
                 })
                 existing_sizes.add(size_str)

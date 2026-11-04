@@ -67,7 +67,7 @@ def resolve_variant_response(
     for variant in product.variants or []:
         if str(variant.id) == str(variant_id):
             response = ProductVariantResponse.model_validate(variant)
-            if product.made_to_order:
+            if getattr(product, "made_to_order", False):
                 response.is_available = True
             variation = unique_variations_by_color(product.variations or []).get(
                 normalize_color_value(variant.color)
@@ -163,7 +163,7 @@ def resolve_variant_response(
                     "stock": size_stock.stock,
                     "sku": None,
                     "is_available": bool(variation.is_active)
-                    and (bool(product.made_to_order) or size_stock.stock > 0),
+                    and (bool(getattr(product, "made_to_order", False)) or size_stock.stock > 0),
                     "created_at": variation.created_at,
                     "updated_at": variation.updated_at,
                 })

@@ -1534,7 +1534,7 @@ async def get_product_variants(
                     "price": var_price,
                     "stock": ss.stock,
                     "is_available": bool(variation.is_active)
-                    and (bool(product.made_to_order) or ss.stock > 0),
+                    and (bool(getattr(product, "made_to_order", False)) or ss.stock > 0),
                     "inherits_price": bool(variation.inherits_price),
                 })
                 existing_sizes.add(size_str)
@@ -1763,7 +1763,7 @@ async def update_variant(
             price=size_stock.variation.price if size_stock.variation and size_stock.variation.price is not None else product.base_price,
             stock=size_stock.stock,
             is_available=bool(size_stock.variation.is_active)
-            and (bool(product.made_to_order) or size_stock.stock > 0),
+            and (bool(getattr(product, "made_to_order", False)) or size_stock.stock > 0),
             created_at=size_stock.created_at,
             updated_at=size_stock.updated_at,
         )
