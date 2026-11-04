@@ -2157,4 +2157,50 @@ describe('Checkout M5 sequencing and recovery', () => {
     })));
     expect(screen.queryByText(/Flat 3B, 10 Maitama Way/i)).not.toBeInTheDocument();
   });
+
+  it('reconciles a completed Paystack retry when initializePayment reports Order has already been paid', async () => {
+    const capability = 'paystack-reconcile-capability';
+    mockGuestCapability(capability);
+    const { getConfig } = await openEnforcedPaystack();
+
+    // First attempt is cancelled by the user
+    getConfig().onClose();
+    expect(await screen.findByRole('button', { name: 'Retry payment' })).toBeEnabled();
+
+    // Retry opens a fresh Paystack session with a new reference
+    mocks.initializePayment.mockResolvedValueOnce({
+      status: true,
+      message: 'ready',
+      payment_gateway: 'paystack',
+      reference: 'retry-ref-2',
+      amount: '62500.00',
+      amount_minor: 6250000,
+      currency: 'NGN',
+      provider_payload: {
+        access_code: 'retry-access-2',
+        authorization_url: 'https://provider.invalid/session-2',
+      },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Retry payment' }));
+    await waitFor(() => expect(mocks.initializePayment).toHaveBeenCalledTimes(2));
+
+    // Suppose verification transiently fails or returns non-success on callback, offering retry to reconcile
+    mocks.verifyPayment.mockResolvedValueOnce({
+      status: true,
+      message: 'abandoned',
+      data: { status: 'abandoned' },
+    });
+    getConfig().callback({ reference: 'retry-ref-2' });
+    expect(await screen.findByText(/could not confirm your payment yet/i)).toBeInTheDocument();
+
+    // Next retry reconciles the already-paid order on the server and navigates to order-success
+    mocks.initializePayment.mockRejectedValueOnce({
+      response: { status: 400, data: { detail: 'Order has already been paid' } },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Retry payment' }));
+
+    await screen.findByText('Order success route');
+    expect(mocks.clearCart).toHaveBeenCalledTimes(1);
+    expect(screen.getByTestId('checkout-location')).toHaveTextContent('/order-success?orderId=order-1&payment=success');
+  });
 });

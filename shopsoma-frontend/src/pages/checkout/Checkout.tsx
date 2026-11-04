@@ -1086,7 +1086,13 @@ export default function Checkout() {
             paymentService.verifyPayment({
               reference: response.reference,
               payment_gateway: gateway,
-            }).then(() => {
+            }).then((verification) => {
+              if (
+                verification?.status === false
+                || (verification?.data?.status && verification.data.status !== 'success')
+              ) {
+                throw new Error(verification?.message || 'Payment verification failed');
+              }
               preserveCheckoutCapabilityForReadback(order.id, checkoutCapability);
               CartService.clearCart();
               navigate(`${ROUTES.ORDER_SUCCESS}?orderId=${order.id}&payment=success`);

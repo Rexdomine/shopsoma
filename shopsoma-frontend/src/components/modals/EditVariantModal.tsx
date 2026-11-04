@@ -32,15 +32,57 @@ export default function EditVariantModal({
     }
   }, [open, currentVariant]);
 
+  const selectableVariants = (() => {
+    if (product.variants && product.variants.length > 0) {
+      return product.variants;
+    }
+    if (!product.variations || product.variations.length === 0) {
+      return [];
+    }
+    const generated: ProductVariant[] = [];
+    product.variations
+      .filter((variation) => variation.is_active !== false)
+      .forEach((variation) => {
+        const isSizeVariation = variation.type?.toLowerCase() === 'size';
+        const variantPrice = Number(variation.sale_price ?? variation.price ?? product.base_price);
+        if (!variation.size_stocks || variation.size_stocks.length === 0) {
+          generated.push({
+            id: variation.id ?? `${product.id}-${variation.title}`,
+            product_id: product.id,
+            size: isSizeVariation ? variation.title : undefined,
+            color: isSizeVariation ? undefined : variation.title,
+            color_hex: variation.color_hex ?? undefined,
+            price: variantPrice,
+            stock: product.made_to_order ? 0 : product.total_stock ?? 0,
+            is_available: true,
+          });
+        } else {
+          variation.size_stocks.forEach((sizeStock) => {
+            generated.push({
+              id: sizeStock.id || `${variation.id ?? product.id}-${sizeStock.size}`,
+              product_id: product.id,
+              size: sizeStock.size,
+              color: isSizeVariation ? undefined : variation.title,
+              color_hex: variation.color_hex ?? undefined,
+              price: variantPrice,
+              stock: sizeStock.stock,
+              is_available: Boolean(product.made_to_order) || sizeStock.stock > 0,
+            });
+          });
+        }
+      });
+    return generated;
+  })();
+
   // Extract unique sizes and colors from variants
   const availableSizes = Array.from(
-    new Set(product.variants?.map((v) => v.size).filter(Boolean))
+    new Set(selectableVariants.map((v) => v.size).filter(Boolean))
   );
 
   // Get unique colors with hex values
   const availableColors = (() => {
     const colorMap = new Map<string, { color: string; hex: string | null }>();
-    product.variants?.forEach((v) => {
+    selectableVariants.forEach((v) => {
       if (v.color) {
         const key = v.color.toLowerCase();
         if (!colorMap.has(key)) {
@@ -53,16 +95,16 @@ export default function EditVariantModal({
 
   // Update selected variant when size or color changes
   useEffect(() => {
-    if (!product.variants) return;
+    if (selectableVariants.length === 0) return;
 
-    const variant = product.variants.find(
-      (v) => v.size === selectedSize && v.color === selectedColor
+    const variant = selectableVariants.find(
+      (v) => (v.size ?? '') === (selectedSize ?? '') && (v.color ?? '') === (selectedColor ?? '')
     );
 
     if (variant) {
       setSelectedVariant(variant);
     }
-  }, [selectedSize, selectedColor, product.variants]);
+  }, [selectedSize, selectedColor, product.variants, product.variations]);
 
   const handleSave = () => {
     if (selectedVariant) {
@@ -71,7 +113,15 @@ export default function EditVariantModal({
     }
   };
 
-  const isInStock = (selectedVariant?.stock ?? 0) > 0;
+  const isMadeToOrder = Boolean(product.made_to_order);
+  const isInStock =
+    isMadeToOrder ||
+    ((selectedVariant?.is_available ?? true) && (selectedVariant?.stock ?? 0) > 0);
+  const stockDisplay = isMadeToOrder
+    ? `Made to Order${product.made_to_order_timeline ? ` • ${product.made_to_order_timeline}` : ''}`
+    : isInStock
+      ? `${selectedVariant?.stock} available`
+      : 'Out of stock';
   const hasChanged = selectedVariant?.id !== currentVariant.id;
 
   if (!open) return null;
@@ -194,7 +244,7 @@ export default function EditVariantModal({
             <div className="flex items-center justify-between text-sm">
               <span className="text-gray-500">Stock</span>
               <span className={`font-medium ${isInStock ? 'text-green-600' : 'text-red-600'}`}>
-                {isInStock ? `${selectedVariant?.stock} available` : 'Out of stock'}
+                {stockDisplay}
               </span>
             </div>
           </div>

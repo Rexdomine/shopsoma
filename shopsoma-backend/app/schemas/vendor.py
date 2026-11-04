@@ -175,13 +175,31 @@ class VendorResponse(BaseModel):
         from_attributes = True
 
 
+class DesignerCategoryResponse(BaseModel):
+    """Public category summary for a designer's published products"""
+    id: UUID4
+    name: str
+    slug: str
+    display_order: int = 0
+    is_active: bool = True
+
+    class Config:
+        from_attributes = True
+
+
 class DesignerResponse(BaseModel):
     """Public designer response schema"""
     id: UUID4
     business_name: str
-    logo_url: Optional[str]
-    total_products: int
-    total_orders: int
+    business_description: Optional[str] = None
+    logo_url: Optional[str] = None
+    featured_storefront_image_url: Optional[str] = None
+    image_url: Optional[str] = None
+    campaign_image_url: Optional[str] = None
+    total_products: int = 0
+    published_products_count: int = 0
+    total_orders: int = 0
+    categories: List[DesignerCategoryResponse] = Field(default_factory=list)
     created_at: datetime
 
     class Config:

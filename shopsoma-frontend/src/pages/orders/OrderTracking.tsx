@@ -352,11 +352,12 @@ export default function OrderTracking() {
         setOrderDetails(order);
       }
       const email = order?.customer_email || order?.customer?.email || 'guest@shopsoma.com';
+      const enforced = order?.workflow_cohort === 'domestic_checkout_v1';
       const paymentData = await paymentService.initializePayment({
         order_id: resolvedOrderId,
         email,
         payment_gateway: 'paystack',
-        currency: (order?.currency as any) || 'NGN',
+        ...(enforced ? {} : { currency: (order?.currency as any) || 'NGN' }),
         callback_url: `${window.location.origin}/payment/verify`,
       }, loadCheckoutCapability(resolvedOrderId));
 
@@ -371,7 +372,13 @@ export default function OrderTracking() {
             paymentService.verifyPayment({
               reference: response.reference,
               payment_gateway: 'paystack',
-            }).then(() => {
+            }).then((verification) => {
+              if (
+                verification?.status === false
+                || (verification?.data?.status && verification.data.status !== 'success')
+              ) {
+                throw new Error(verification?.message || 'Payment verification failed');
+              }
               window.location.href = `${ROUTES.ORDER_SUCCESS}?orderId=${resolvedOrderId}&payment=success`;
             }).catch((err) => {
               console.error('Verification error:', err);
@@ -387,8 +394,17 @@ export default function OrderTracking() {
         window.location.href = paymentData.authorization_url;
       }
     } catch (err: any) {
-      console.error('Failed to initialize payment:', err);
       const detail = err.response?.data?.detail;
+      if (
+        err.response?.status === 400
+        && typeof detail === 'string'
+        && detail.toLowerCase().includes('already been paid')
+      ) {
+        window.location.href = `${ROUTES.ORDER_SUCCESS}?orderId=${resolvedOrderId}&payment=success`;
+        setIsRetryingPayment(false);
+        return;
+      }
+      console.error('Failed to initialize payment:', err);
       const msg = typeof detail === 'string' ? detail : detail?.message || err.message || 'Unable to re-initialize payment.';
       alert(msg);
       setIsRetryingPayment(false);

@@ -812,7 +812,9 @@ class ProductResponse(ProductBase):
                             ss_size = getattr(ss.size, "value", str(ss.size))
                             if normalize_color_value(ss_size) == norm_v_size:
                                 variant.stock = ss.stock
-                                variant.is_available = bool(variation.is_active) and ss.stock > 0
+                                variant.is_available = bool(variation.is_active) and (
+                                    bool(getattr(self, "made_to_order", False)) or ss.stock > 0
+                                )
                                 break
                     if getattr(variation, "color_hex", None) and not variant.color_hex:
                         variant.color_hex = variation.color_hex
@@ -874,7 +876,7 @@ class ProductResponse(ProductBase):
                                     "stock": size_stock.stock,
                                     "sku": None,
                                     "is_available": bool(variation.is_active)
-                                    and size_stock.stock > 0,
+                                    and (bool(getattr(self, "made_to_order", False)) or size_stock.stock > 0),
                                     "created_at": variation.created_at,
                                     "updated_at": variation.updated_at,
                                 }
@@ -939,7 +941,8 @@ class ProductResponse(ProductBase):
                             "compare_at_price": compare_at_price,
                             "stock": size_stock.stock,
                             "sku": None,
-                            "is_available": bool(variation.is_active) and size_stock.stock > 0,
+                            "is_available": bool(variation.is_active)
+                            and (bool(getattr(self, "made_to_order", False)) or size_stock.stock > 0),
                             "created_at": variation.created_at,
                             "updated_at": variation.updated_at,
                         }
