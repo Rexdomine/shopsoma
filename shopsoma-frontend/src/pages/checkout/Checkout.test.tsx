@@ -2203,4 +2203,170 @@ describe('Checkout M5 sequencing and recovery', () => {
     expect(mocks.clearCart).toHaveBeenCalledTimes(1);
     expect(screen.getByTestId('checkout-location')).toHaveTextContent('/order-success?orderId=order-1&payment=success');
   });
+
+  it('enables both Continue to payment and Purchase after selecting a live delivery quote and reaches Paystack from Purchase', async () => {
+    const dhlOption = {
+      id: 'opt-dhl-1',
+      option_key: 'dhl_n',
+      service_code: 'dhl_n',
+      service_label: 'DHL Express (EXPRESS DOMESTIC)',
+      amount: '13780.84',
+      currency: 'NGN' as const,
+      min_delivery_days: 1,
+      max_delivery_days: 1,
+      provider_metadata: { provider: 'dhl' },
+    };
+    const liveEstimate = {
+      ...estimate,
+      id: 'est-live-1',
+      server_tax_amount: '9189.81',
+      server_payable_total: '131720.65',
+      selected_option: null,
+      options: [dhlOption],
+    };
+    const selectedLiveEstimate = {
+      ...liveEstimate,
+      selected_option: dhlOption,
+    };
+    mocks.getShippingProviderSettings.mockResolvedValue({
+      provider: 'combined',
+      checkout_estimates_required: true,
+    });
+    mocks.createCheckoutEstimate.mockResolvedValueOnce(liveEstimate);
+    mocks.selectCheckoutEstimateOption.mockResolvedValueOnce(selectedLiveEstimate);
+    mocks.initializePayment.mockResolvedValueOnce({
+      ...paystackInitialization,
+      amount: '131720.65',
+      amount_minor: 13172065,
+    });
+    const openIframe = vi.fn();
+    window.PaystackPop = { setup: vi.fn(() => ({ openIframe })) };
+
+    render(<MemoryRouter initialEntries={['/checkout']}><CheckoutTestRoutes /></MemoryRouter>);
+    await waitFor(() => expect(mocks.getAddresses).toHaveBeenCalled());
+
+    fireEvent.click(screen.getByRole('button', { name: 'Continue' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Calculate live delivery rates' }));
+
+    const selectDhlBtn = await screen.findByRole('button', { name: 'Select DHL Express (EXPRESS DOMESTIC)' });
+    expect(screen.getByText('Select delivery option')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Continue to payment' })).toBeDisabled();
+    screen.getAllByRole('button', { name: 'Purchase' }).forEach(btn => expect(btn).toBeDisabled());
+
+    fireEvent.click(selectDhlBtn);
+
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Continue to payment' })).toBeEnabled());
+    const purchaseButtons = screen.getAllByRole('button', { name: 'Purchase' });
+    purchaseButtons.forEach(btn => expect(btn).toBeEnabled());
+    expect(screen.queryByText('Select delivery option')).not.toBeInTheDocument();
+    expect(screen.queryByText(/Delivery options changed/i)).not.toBeInTheDocument();
+
+    fireEvent.click(purchaseButtons[0]);
+    await waitFor(() => expect(openIframe).toHaveBeenCalledTimes(1));
+    expect(mocks.initializePayment).toHaveBeenCalledWith(
+      expect.objectContaining({
+        order_id: 'order-1',
+        payment_gateway: 'paystack',
+      }),
+      undefined,
+    );
+  });
+
+  it('allows switching between displayed courier quotes before payment by replacing the unpaid order and selecting the new quote', async () => {
+    const dhlOption = {
+      id: 'opt-dhl-1',
+      option_key: 'dhl_n',
+      service_code: 'dhl_n',
+      service_label: 'DHL Express (EXPRESS DOMESTIC)',
+      amount: '13780.84',
+      currency: 'NGN' as const,
+      min_delivery_days: 1,
+      max_delivery_days: 1,
+      provider_metadata: { provider: 'dhl' },
+    };
+    const bubbleOption = {
+      id: 'opt-sb-1',
+      option_key: 'sb_bubble_express',
+      service_code: 'sb_bubble_express',
+      service_label: 'Bubble Express',
+      amount: '4500.00',
+      currency: 'NGN' as const,
+      min_delivery_days: 1,
+      max_delivery_days: 2,
+      provider_metadata: { provider: 'shipbubble' },
+    };
+    const secondBubbleOption = {
+      ...bubbleOption,
+      id: 'opt-sb-2',
+    };
+    const initialEstimate = {
+      ...estimate,
+      id: 'est-1',
+      server_tax_amount: '9189.81',
+      server_payable_total: '131720.65',
+      selected_option: null,
+      options: [dhlOption, bubbleOption],
+    };
+    const dhlSelectedEstimate = {
+      ...initialEstimate,
+      selected_option: dhlOption,
+    };
+    const replacementOrder = {
+      ...order,
+      id: 'order-2',
+      order_number: 'SHP-2',
+    };
+    const replacementEstimate = {
+      ...initialEstimate,
+      id: 'est-2',
+      order_id: 'order-2',
+      options: [{ ...dhlOption, id: 'opt-dhl-2' }, secondBubbleOption],
+    };
+    const bubbleSelectedEstimate = {
+      ...replacementEstimate,
+      server_tax_amount: '4837.50',
+      server_payable_total: '69337.50',
+      selected_option: secondBubbleOption,
+    };
+
+    mocks.getShippingProviderSettings.mockResolvedValue({
+      provider: 'combined',
+      checkout_estimates_required: true,
+    });
+    mocks.createOrder
+      .mockResolvedValueOnce(order)
+      .mockResolvedValueOnce(replacementOrder);
+    mocks.createCheckoutEstimate
+      .mockResolvedValueOnce(initialEstimate)
+      .mockResolvedValueOnce(replacementEstimate);
+    mocks.selectCheckoutEstimateOption
+      .mockResolvedValueOnce(dhlSelectedEstimate)
+      .mockResolvedValueOnce(bubbleSelectedEstimate);
+
+    render(<MemoryRouter initialEntries={['/checkout']}><CheckoutTestRoutes /></MemoryRouter>);
+    await waitFor(() => expect(mocks.getAddresses).toHaveBeenCalled());
+
+    fireEvent.click(screen.getByRole('button', { name: 'Continue' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Calculate live delivery rates' }));
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Select DHL Express (EXPRESS DOMESTIC)' }));
+    await waitFor(() => expect(screen.getByText('Selected')).toBeInTheDocument());
+
+    fireEvent.click(screen.getByRole('button', { name: 'Select Bubble Express' }));
+
+    await waitFor(() => expect(mocks.cancelOrder).toHaveBeenCalledWith(
+      'order-1',
+      'Customer changed delivery option before payment',
+      undefined,
+    ));
+    await waitFor(() => expect(mocks.selectCheckoutEstimateOption).toHaveBeenLastCalledWith(
+      'order-2',
+      'est-2',
+      'opt-sb-2',
+      expect.stringMatching(/^selection-/),
+      undefined,
+    ));
+    expect(screen.queryByText(/Delivery options changed/i)).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Continue to payment' })).toBeEnabled();
+  });
 });
