@@ -253,6 +253,8 @@ describe('Pagination Persistence on Back Navigation', () => {
           slug: 'women',
           display_order: 1,
           is_active: true,
+          created_at: '2026-10-01T00:00:00Z',
+          updated_at: '2026-10-01T00:00:00Z',
         },
       ]);
 
@@ -266,6 +268,8 @@ describe('Pagination Persistence on Back Navigation', () => {
               parent_id: 'db-women-uuid',
               display_order: 1,
               is_active: true,
+              created_at: '2026-10-01T00:00:00Z',
+              updated_at: '2026-10-01T00:00:00Z',
             },
           ];
         }
