@@ -67,7 +67,7 @@ export default function ProductDetail() {
 
   const handleBack = () => {
     if (returnUrl) {
-      navigate(returnUrl);
+      navigate(returnUrl, { state: { restoreScroll: true } });
     } else if (window.history.state && typeof window.history.state.idx === 'number' && window.history.state.idx > 0) {
       navigate(-1);
     } else {

@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Link, useLocation, useNavigate, useSearchParams } from 'react-router-dom';
+import { Link, useLocation, useNavigate, useNavigationType, useSearchParams } from 'react-router-dom';
 import { ArrowLeft, ArrowRight, ChevronDown, ChevronLeft, ChevronRight, X } from 'lucide-react';
 import Layout from '../../components/layout/Layout';
 import Loading from '../../components/common/Loading';
@@ -139,6 +139,84 @@ const getProductPrice = (p: Product): number => {
   return Number(p.variants?.[0]?.price ?? p.base_price ?? 0);
 };
 
+const normalize = (value: string) =>
+  value.toLowerCase().replace(/’/g, "'").trim();
+
+const CHILD_CATEGORY_MAP_CACHE_KEY = 'shopsoma_child_category_map';
+
+function loadCachedChildCategoryMap(): Record<string, Category[]> {
+  if (typeof window === 'undefined') return {};
+  const cachedRaw = sessionStorage.getItem(CHILD_CATEGORY_MAP_CACHE_KEY);
+  if (cachedRaw) {
+    try {
+      const parsed = JSON.parse(cachedRaw) as Record<string, Category[]>;
+      if (parsed && typeof parsed === 'object') {
+        return parsed;
+      }
+    } catch {
+      sessionStorage.removeItem(CHILD_CATEGORY_MAP_CACHE_KEY);
+    }
+  }
+  return {};
+}
+
+function resolveCategoryId(
+  categoryName: string,
+  presetCategory?: string,
+  categoryNav?: Array<{ id: string; name: string; slug?: string }>,
+  childCategoryMap?: Record<string, Category[]>,
+  childCategoryOverrides?: Record<string, Category[]>
+): string | null {
+  if (
+    !categoryName ||
+    categoryName === 'All' ||
+    (presetCategory && normalize(categoryName) === normalize(presetCategory))
+  ) {
+    return null;
+  }
+  const normTarget = normalize(categoryName);
+
+  if (childCategoryMap) {
+    const allFetchedChildren = Object.values(childCategoryMap).flat();
+    const matchedFetchedChild = allFetchedChildren.find(
+      (cat) =>
+        cat &&
+        (normalize(cat.name) === normTarget ||
+          (cat.slug && normalize(cat.slug) === normTarget))
+    );
+    if (matchedFetchedChild?.id) {
+      return matchedFetchedChild.id;
+    }
+  }
+
+  if (categoryNav?.length) {
+    const matchedNav = categoryNav.find(
+      (item) =>
+        item &&
+        (normalize(item.name) === normTarget ||
+          (item.slug && normalize(item.slug) === normTarget))
+    );
+    if (matchedNav?.id) {
+      return matchedNav.id;
+    }
+  }
+
+  if (childCategoryOverrides) {
+    const allOverrideChildren = Object.values(childCategoryOverrides).flat();
+    const matchedOverride = allOverrideChildren.find(
+      (cat) =>
+        cat &&
+        (normalize(cat.name) === normTarget ||
+          (cat.slug && normalize(cat.slug) === normTarget))
+    );
+    if (matchedOverride?.id) {
+      return matchedOverride.id;
+    }
+  }
+
+  return null;
+}
+
 export default function ProductList({
   presetCategory,
   initialParams,
@@ -150,12 +228,20 @@ export default function ProductList({
 }: ProductListProps = {}) {
   const [searchParams, setSearchParams] = useSearchParams();
   const location = useLocation();
+  const navigationType = useNavigationType();
   const searchQuery = (searchParams.get('q') || searchParams.get('search') || '').trim();
-  const categoryParam = searchParams.get('category') || '';
+  const categoryParam = (searchParams.get('category') || '').trim();
+  const colorParam = (searchParams.get('color') || '').trim();
+  const priceParam = (searchParams.get('price') || '').trim();
+  const minPriceParam = (searchParams.get('min_price') || '').trim();
+  const maxPriceParam = (searchParams.get('max_price') || '').trim();
+  const sortParam = (searchParams.get('sort') || '').trim();
   const pageParam = parseInt(searchParams.get('page') || '1', 10);
   const pageFromUrl = Number.isInteger(pageParam) && pageParam > 0 ? pageParam : 1;
+  const defaultCategory = categoryNavAsTabs ? 'All' : (presetCategory || 'All');
 
   const [allProducts, setAllProducts] = useState<Product[]>([]);
+  const [loadedParamsKey, setLoadedParamsKey] = useState<string | null>(null);
   const [featuredVendors, setFeaturedVendors] = useState<FeaturedStorefrontVendor[]>([]);
   const [featuredRotationMinutes, setFeaturedRotationMinutes] = useState(10);
   const [featuredRotationTick, setFeaturedRotationTick] = useState(0);
@@ -164,11 +250,12 @@ export default function ProductList({
   const [isEnriching, setIsEnriching] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [filterMenuOpen, setFilterMenuOpen] = useState(false);
-  const [filters, setFilters] = useState<FilterState>({
-    category: presetCategory || categoryParam || 'All',
-    color: 'All',
-    price: 'all',
-  });
+  const [childCategoryMap, setChildCategoryMap] = useState<Record<string, Category[]>>(loadCachedChildCategoryMap);
+  const [filters, setFilters] = useState<FilterState>(() => ({
+    category: categoryParam || defaultCategory,
+    color: colorParam || 'All',
+    price: priceParam || 'all',
+  }));
 
   useEffect(() => {
     setPage(pageFromUrl);
@@ -203,15 +290,39 @@ export default function ProductList({
   const navigate = useNavigate();
   const preferredInterest = usePreferenceStore((state) => state.interest);
   const [curatedFilterApplied, setCuratedFilterApplied] = useState(false);
-  const [selectedCategoryId, setSelectedCategoryId] = useState<string | null>(null);
+  const [selectedCategoryId, setSelectedCategoryId] = useState<string | null>(() =>
+    resolveCategoryId(
+      categoryParam || defaultCategory,
+      presetCategory,
+      categoryNav,
+      loadCachedChildCategoryMap(),
+      childCategoryOverrides
+    )
+  );
   const [showInterestBanner, setShowInterestBanner] = useState<boolean>(() => {
     if (typeof window === 'undefined') return true;
     const stored = canUseCookieCategory('preferences') ? window.localStorage.getItem('shopsoma_pref_interest_banner') : null;
     return stored !== 'hidden';
   });
-  const [sortOption, setSortOption] = useState('suggested');
-  const [customPriceInputs, setCustomPriceInputs] = useState({ min: '', max: '' });
-  const [customPriceRange, setCustomPriceRange] = useState<{ min?: number; max?: number } | null>(null);
+  const [sortOption, setSortOption] = useState(() =>
+    sortOptions.some((opt) => opt.value === sortParam) ? sortParam : 'suggested'
+  );
+  const [customPriceInputs, setCustomPriceInputs] = useState(() => ({
+    min: minPriceParam,
+    max: maxPriceParam,
+  }));
+  const [customPriceRange, setCustomPriceRange] = useState<{ min?: number; max?: number } | null>(() => {
+    if (priceParam !== 'custom') return null;
+    const minVal = minPriceParam ? Number(minPriceParam.replace(/[^\d.]/g, '')) : undefined;
+    const maxVal = maxPriceParam ? Number(maxPriceParam.replace(/[^\d.]/g, '')) : undefined;
+    if ((minVal === undefined || Number.isNaN(minVal)) && (maxVal === undefined || Number.isNaN(maxVal))) {
+      return null;
+    }
+    return {
+      min: minVal !== undefined && !Number.isNaN(minVal) ? minVal : undefined,
+      max: maxVal !== undefined && !Number.isNaN(maxVal) ? maxVal : undefined,
+    };
+  });
   const { favorites, toggleFavorite } = useWishlistActions();
   const activeCategory = filters.category;
   const showSubcategoryNav = Boolean(categoryNav?.length) && Boolean(presetCategory) && !categoryNavAsTabs;
@@ -267,9 +378,6 @@ export default function ProductList({
     return () => window.clearInterval(interval);
   }, [featuredCategory, featuredRotationMinutes, featuredVendors.length]);
 
-  const normalize = (value: string) =>
-    value.toLowerCase().replace(/’/g, "'").trim();
-
   const categoryMatchesPreset = (categoryValue: string, preset: string) => {
     const normalized = normalize(categoryValue);
     const normalizedPreset = normalize(preset);
@@ -306,10 +414,8 @@ export default function ProductList({
 
   const handleChildCategoryClick = (child: Category) => {
     if (categoryNav?.length || presetCategory) {
-      setSelectedCategoryId(child.id);
-      handleFilterChange('category', child.name, child.id);
       setHoveredNavId(null);
-      handlePageChange(1);
+      handleFilterChange('category', child.name, child.id);
     } else {
       const params = new URLSearchParams();
       params.set('category', child.name);
@@ -347,6 +453,7 @@ export default function ProductList({
         if (cancelled) return;
         let products = response.products || [];
         setAllProducts(products);
+        setLoadedParamsKey(initialParamsKey);
         setError(null);
         // The first page is usable immediately; additional catalog/category pages are background enrichment.
         if (response.total_pages > 1) {
@@ -393,6 +500,7 @@ export default function ProductList({
         // Fail closed: stale session data may contain products that are now
         // unapproved, deactivated, or no longer visible to customers.
         setAllProducts([]);
+        setLoadedParamsKey(initialParamsKey);
         setError('We could not load the current collection. Please refresh.');
       } finally {
         if (!cancelled) {
@@ -408,37 +516,50 @@ export default function ProductList({
     };
   }, [initialParamsKey, stableInitialParams]);
 
-  const isFirstParamChangeRef = useRef(true);
-  const prevParamsKeyRef = useRef(initialParamsKey);
+  const prevSearchQueryRef = useRef(searchQuery);
   useEffect(() => {
-    if (prevParamsKeyRef.current !== initialParamsKey) {
-      prevParamsKeyRef.current = initialParamsKey;
-      if (isFirstParamChangeRef.current && pageFromUrl > 1) {
-        isFirstParamChangeRef.current = false;
-        return;
-      }
-      isFirstParamChangeRef.current = false;
-      handlePageChange(1);
+    if (prevSearchQueryRef.current !== searchQuery) {
+      prevSearchQueryRef.current = searchQuery;
+      handlePageChange(1, { replace: true });
     }
-  }, [initialParamsKey, handlePageChange, pageFromUrl]);
+  }, [searchQuery, handlePageChange]);
 
   // Derive interest category from preference
   const interestCategory = preferredInterest === 'menswear' ? 'Men' : preferredInterest === 'womenswear' ? 'Women' : null;
 
   // Update filters when URL params change
   useEffect(() => {
-    if (presetCategory) {
-      setFilters((prev) => ({ ...prev, category: categoryNavAsTabs ? 'All' : presetCategory }));
-    } else {
-      setFilters(prev => ({
-        ...prev,
-        category: categoryParam || 'All'
-      }));
-      if (!categoryParam || categoryParam === 'All') {
-        setCuratedFilterApplied(false);
-      }
+    const nextColor = colorParam || 'All';
+    const nextPrice = priceParam || 'all';
+    const nextSort = sortOptions.some((opt) => opt.value === sortParam) ? sortParam : 'suggested';
+    setSortOption((prev) => (prev === nextSort ? prev : nextSort));
+
+    if (categoryParam) {
+      setFilters((prev) =>
+        prev.category === categoryParam && prev.color === nextColor && prev.price === nextPrice
+          ? prev
+          : { category: categoryParam, color: nextColor, price: nextPrice }
+      );
+      return;
     }
-  }, [categoryParam, presetCategory, categoryNavAsTabs]);
+    if (presetCategory) {
+      const fallbackCategory = categoryNavAsTabs ? 'All' : presetCategory;
+      setFilters((prev) =>
+        prev.category === fallbackCategory && prev.color === nextColor && prev.price === nextPrice
+          ? prev
+          : { category: fallbackCategory, color: nextColor, price: nextPrice }
+      );
+      setSelectedCategoryId(null);
+    } else if (!curatedFilterApplied) {
+      setFilters((prev) =>
+        prev.category === 'All' && prev.color === nextColor && prev.price === nextPrice
+          ? prev
+          : { category: 'All', color: nextColor, price: nextPrice }
+      );
+      setSelectedCategoryId(null);
+      setCuratedFilterApplied(false);
+    }
+  }, [categoryParam, colorParam, priceParam, sortParam, presetCategory, categoryNavAsTabs, curatedFilterApplied]);
 
   // Sync filters.category when preference changes while curated filter is active
   useEffect(() => {
@@ -489,7 +610,6 @@ export default function ProductList({
   const navHoverRef = useRef<HTMLDivElement | null>(null);
   const hoverPanelRef = useRef<HTMLDivElement | null>(null);
   const navScrollRef = useRef<HTMLDivElement | null>(null);
-  const [childCategoryMap, setChildCategoryMap] = useState<Record<string, Category[]>>({});
   const [featuredHoverProduct, setFeaturedHoverProduct] = useState<Product | null>(null);
   const hoverCloseRef = useRef<number | null>(null);
   const featuredHoverImage = featuredHoverProduct ? getProductImageSource(featuredHoverProduct, 'high') : null;
@@ -584,7 +704,15 @@ export default function ProductList({
     const loadChildren = async () => {
       try {
         const children = await categoryService.getSubcategories(hoveredNavId);
-        setChildCategoryMap((prev) => ({ ...prev, [hoveredNavId]: children || [] }));
+        setChildCategoryMap((prev) => {
+          const next = { ...prev, [hoveredNavId]: children || [] };
+          try {
+            sessionStorage.setItem(CHILD_CATEGORY_MAP_CACHE_KEY, JSON.stringify(next));
+          } catch {
+            // Ignore storage errors
+          }
+          return next;
+        });
       } catch (error) {
         console.error('Failed to load child categories for nav', error);
       }
@@ -620,21 +748,27 @@ export default function ProductList({
   }, [hoveredNavItem, hoveredChildCategories, allProducts]);
 
   useEffect(() => {
-    if (!selectedCategoryId || !activeCategory || activeCategory === 'All') return;
-    const normActive = normalize(activeCategory);
-    const allFetchedChildren = Object.values(childCategoryMap).flat();
-    const matchedFetchedChild = allFetchedChildren.find(
-      (cat) => cat && normalize(cat.name) === normActive
-    );
-    if (matchedFetchedChild && matchedFetchedChild.id !== selectedCategoryId) {
-      setSelectedCategoryId(matchedFetchedChild.id);
+    if (
+      !activeCategory ||
+      activeCategory === 'All' ||
+      (presetCategory && normalize(activeCategory) === normalize(presetCategory))
+    ) {
       return;
     }
-    const matchedNav = navItems.find((item) => normalize(item.name) === normActive);
-    if (matchedNav && matchedNav.id !== selectedCategoryId) {
-      setSelectedCategoryId(matchedNav.id);
+    if ( !categoryNav?.length && !childCategoryOverrides ) {
+      return;
     }
-  }, [selectedCategoryId, activeCategory, navItems, childCategoryMap]);
+    const resolvedId = resolveCategoryId(
+      activeCategory,
+      presetCategory,
+      navItems,
+      childCategoryMap,
+      childCategoryOverrides
+    );
+    if (resolvedId && resolvedId !== selectedCategoryId) {
+      setSelectedCategoryId(resolvedId);
+    }
+  }, [selectedCategoryId, activeCategory, presetCategory, categoryNav, navItems, childCategoryMap, childCategoryOverrides]);
 
   const handleNavEnter = (categoryId: string) => {
     if (hoverCloseRef.current) {
@@ -898,19 +1032,63 @@ export default function ProductList({
   ]);
 
   const totalPages = Math.max(1, Math.ceil(filteredProducts.length / PAGE_SIZE));
+  const isCurrentParamsLoaded = loadedParamsKey === initialParamsKey;
 
   useEffect(() => {
-    if (!loading && !isEnriching && allProducts.length > 0) {
+    if (isCurrentParamsLoaded && !loading && !isEnriching && allProducts.length > 0) {
       if (page > totalPages) {
         handlePageChange(totalPages, { replace: true });
       }
     }
-  }, [totalPages, loading, isEnriching, allProducts.length, page, handlePageChange]);
+  }, [isCurrentParamsLoaded, totalPages, loading, isEnriching, allProducts.length, page, handlePageChange]);
 
   const paginatedProducts = useMemo(() => {
     const start = (page - 1) * PAGE_SIZE;
     return filteredProducts.slice(start, start + PAGE_SIZE);
   }, [filteredProducts, page]);
+
+  const shouldRestoreScroll =
+    Boolean((location.state as { restoreScroll?: boolean } | null)?.restoreScroll) ||
+    navigationType === 'POP';
+
+  useEffect(() => {
+    if (!shouldRestoreScroll || loading || !isCurrentParamsLoaded || paginatedProducts.length === 0) {
+      return;
+    }
+
+    const storageKey = `shopsoma_listing_scroll:${location.pathname}${location.search}`;
+    try {
+      const savedScrollY = sessionStorage.getItem(storageKey);
+      if (savedScrollY === null) return;
+
+      const targetY = Number(savedScrollY);
+      sessionStorage.removeItem(storageKey);
+      if (!Number.isFinite(targetY) || targetY < 0) return;
+
+      const restoreScrollPosition = () => {
+        window.scrollTo({ top: targetY, behavior: 'auto' });
+      };
+
+      restoreScrollPosition();
+      if (typeof window.requestAnimationFrame === 'function') {
+        const rafId = window.requestAnimationFrame(restoreScrollPosition);
+        return () => {
+          if (typeof window.cancelAnimationFrame === 'function') {
+            window.cancelAnimationFrame(rafId);
+          }
+        };
+      }
+    } catch {
+      // Ignore storage errors
+    }
+  }, [
+    shouldRestoreScroll,
+    loading,
+    isCurrentParamsLoaded,
+    paginatedProducts.length,
+    location.pathname,
+    location.search,
+  ]);
 
   const emptyStateMessage =
     presetCategory === 'Men'
@@ -919,25 +1097,71 @@ export default function ProductList({
         ? 'No womenswear products available yet. Please check back soon.'
         : 'No products found for the selected filters.';
 
-const handleFilterChange = (key: keyof FilterState, value: string, categoryId?: string | null) => {
-  if (key === 'category' && categoryNav?.length) {
-    if (categoryId !== undefined) {
-      setSelectedCategoryId(categoryId);
-    } else {
-      const selectedNavItem = navItems.find((item) => item.name === value);
-      setSelectedCategoryId(selectedNavItem?.id ?? null);
+  const handleFilterChange = (key: keyof FilterState, value: string, categoryId?: string | null) => {
+    if (key === 'category') {
+      if (value === 'All' || (presetCategory && normalize(value) === normalize(presetCategory))) {
+        setSelectedCategoryId(null);
+      } else if (categoryId !== undefined) {
+        setSelectedCategoryId(categoryId);
+      } else if (categoryNav?.length || childCategoryOverrides) {
+        const resolvedId = resolveCategoryId(
+          value,
+          presetCategory,
+          navItems,
+          childCategoryMap,
+          childCategoryOverrides
+        );
+        setSelectedCategoryId(resolvedId);
+      }
     }
-  }
-  if (key === 'price' && value !== 'custom') {
-    setCustomPriceInputs({ min: '', max: '' });
-    setCustomPriceRange(null);
-  }
-  if (key === 'category' && value !== interestCategory) {
-    setCuratedFilterApplied(false);
-  }
-  setFilters((prev) => ({ ...prev, [key]: value }));
-  handlePageChange(1);
-};
+    if (key === 'price' && value !== 'custom') {
+      setCustomPriceInputs({ min: '', max: '' });
+      setCustomPriceRange(null);
+    }
+    if (key === 'category' && value !== interestCategory) {
+      setCuratedFilterApplied(false);
+    }
+
+    const nextCategoryValue =
+      key === 'category' && value === 'All' && presetCategory && !categoryNavAsTabs
+        ? presetCategory
+        : value;
+
+    setFilters((prev) => ({
+      ...prev,
+      [key]: key === 'category' ? nextCategoryValue : value,
+    }));
+    setPage(1);
+
+    setSearchParams((prev) => {
+      const next = new URLSearchParams(prev);
+      next.delete('page');
+
+      if (key === 'category') {
+        if (value === 'All' || (presetCategory && normalize(value) === normalize(presetCategory))) {
+          next.delete('category');
+        } else {
+          next.set('category', value);
+        }
+      } else if (key === 'color') {
+        if (!value || value === 'All') {
+          next.delete('color');
+        } else {
+          next.set('color', value);
+        }
+      } else if (key === 'price') {
+        next.delete('min_price');
+        next.delete('max_price');
+        if (!value || value === 'all') {
+          next.delete('price');
+        } else {
+          next.set('price', value);
+        }
+      }
+
+      return next;
+    });
+  };
 
   const parsePriceInput = (value: string): number | undefined => {
     if (!value) return undefined;
@@ -954,7 +1178,15 @@ const handleFilterChange = (key: keyof FilterState, value: string, categoryId?: 
     if (minValue === undefined && maxValue === undefined) {
       setCustomPriceRange(null);
       setFilters((prev) => ({ ...prev, price: 'all' }));
-      handlePageChange(1);
+      setPage(1);
+      setSearchParams((prev) => {
+        const next = new URLSearchParams(prev);
+        next.delete('page');
+        next.delete('price');
+        next.delete('min_price');
+        next.delete('max_price');
+        return next;
+      });
       return;
     }
 
@@ -972,7 +1204,23 @@ const handleFilterChange = (key: keyof FilterState, value: string, categoryId?: 
       max: rangeMax,
     });
     setFilters((prev) => ({ ...prev, price: 'custom' }));
-    handlePageChange(1);
+    setPage(1);
+    setSearchParams((prev) => {
+      const next = new URLSearchParams(prev);
+      next.delete('page');
+      next.set('price', 'custom');
+      if (rangeMin !== undefined) {
+        next.set('min_price', String(rangeMin));
+      } else {
+        next.delete('min_price');
+      }
+      if (rangeMax !== undefined) {
+        next.set('max_price', String(rangeMax));
+      } else {
+        next.delete('max_price');
+      }
+      return next;
+    });
   };
 
   const paginationItems = useMemo(() => {
@@ -1092,8 +1340,8 @@ const handleFilterChange = (key: keyof FilterState, value: string, categoryId?: 
                   </button>
                   {navItems.map((item) => {
                     const isTabSelected = categoryNav?.length
-                      ? selectedCategoryId === item.id
-                      : activeCategory === item.name;
+                      ? selectedCategoryId === item.id || normalize(activeCategory) === normalize(item.name)
+                      : normalize(activeCategory) === normalize(item.name);
                     return (
                       <button
                         key={item.id}
@@ -1119,7 +1367,9 @@ const handleFilterChange = (key: keyof FilterState, value: string, categoryId?: 
                     type="button"
                     onClick={() => { setSelectedCategoryId(null); handleFilterChange('category', 'All'); }}
                     className={`text-xs sm:text-sm font-ui tracking-wide pb-1 border-b-2 transition whitespace-nowrap ${
-                      !selectedCategoryId && (activeCategory === 'All' || activeCategory === presetCategory)
+                      !selectedCategoryId &&
+                      (activeCategory === 'All' ||
+                        (presetCategory && normalize(activeCategory) === normalize(presetCategory)))
                         ? 'text-dark border-primary'
                         : 'text-gray-500 border-transparent hover:text-dark hover:border-gray-300'
                     }`}
@@ -1182,10 +1432,15 @@ const handleFilterChange = (key: keyof FilterState, value: string, categoryId?: 
                   >
                     {navItems.map((item) => {
                       const itemChildren = getItemChildren(item);
+                      const normActive = normalize(activeCategory);
                       const isItemActive =
-                        activeCategory === item.name ||
+                        normActive === normalize(item.name) ||
                         selectedCategoryId === item.id ||
-                        Boolean(itemChildren.some((c) => c.id === selectedCategoryId || c.name === activeCategory));
+                        Boolean(
+                          itemChildren.some(
+                            (c) => c.id === selectedCategoryId || normalize(c.name) === normActive
+                          )
+                        );
                       return (
                         <button
                           key={item.id}
@@ -1265,7 +1520,7 @@ const handleFilterChange = (key: keyof FilterState, value: string, categoryId?: 
                                 type="button"
                                 onClick={() => handleChildCategoryClick(child)}
                                 className={`text-left text-sm transition ${
-                                  selectedCategoryId === child.id || activeCategory === child.name
+                                  selectedCategoryId === child.id || normalize(activeCategory) === normalize(child.name)
                                     ? 'font-semibold text-primary'
                                     : 'text-gray-700 hover:text-dark'
                                 }`}
@@ -1303,6 +1558,16 @@ const handleFilterChange = (key: keyof FilterState, value: string, categoryId?: 
                       <Link
                         to={`/products/${featuredHoverProduct.id}`}
                         state={{ from: `${location.pathname}${location.search}` }}
+                        onClick={() => {
+                          try {
+                            sessionStorage.setItem(
+                              `shopsoma_listing_scroll:${location.pathname}${location.search}`,
+                              String(window.scrollY || 0)
+                            );
+                          } catch {
+                            // Ignore storage errors
+                          }
+                        }}
                         className="block aspect-[4/5] bg-gray-100 overflow-hidden mb-3 group/spotlight cursor-pointer"
                       >
                         <img
@@ -1318,6 +1583,16 @@ const handleFilterChange = (key: keyof FilterState, value: string, categoryId?: 
                       <Link
                         to={`/products/${featuredHoverProduct.id}`}
                         state={{ from: `${location.pathname}${location.search}` }}
+                        onClick={() => {
+                          try {
+                            sessionStorage.setItem(
+                              `shopsoma_listing_scroll:${location.pathname}${location.search}`,
+                              String(window.scrollY || 0)
+                            );
+                          } catch {
+                            // Ignore storage errors
+                          }
+                        }}
                         className="block text-sm font-semibold text-dark mb-3 line-clamp-2 hover:text-primary transition"
                       >
                         {featuredHoverProduct.title}
@@ -1325,6 +1600,16 @@ const handleFilterChange = (key: keyof FilterState, value: string, categoryId?: 
                       <Link
                         to={`/products/${featuredHoverProduct.id}`}
                         state={{ from: `${location.pathname}${location.search}` }}
+                        onClick={() => {
+                          try {
+                            sessionStorage.setItem(
+                              `shopsoma_listing_scroll:${location.pathname}${location.search}`,
+                              String(window.scrollY || 0)
+                            );
+                          } catch {
+                            // Ignore storage errors
+                          }
+                        }}
                         className="inline-flex items-center gap-2 text-xs font-ui uppercase tracking-[0.25em] text-primary border-b border-primary/40 hover:text-dark hover:border-dark transition"
                       >
                         Shop now
@@ -1390,7 +1675,19 @@ const handleFilterChange = (key: keyof FilterState, value: string, categoryId?: 
                     <div className="relative">
                       <select
                         value={sortOption}
-                        onChange={(e) => setSortOption(e.target.value)}
+                        onChange={(e) => {
+                          const nextSort = e.target.value;
+                          setSortOption(nextSort);
+                          setSearchParams((prev) => {
+                            const next = new URLSearchParams(prev);
+                            if (!nextSort || nextSort === 'recommended') {
+                              next.delete('sort');
+                            } else {
+                              next.set('sort', nextSort);
+                            }
+                            return next;
+                          });
+                        }}
                         className="border border-gray-200 px-3 py-1.5 text-[11px] font-semibold uppercase tracking-[0.3em] text-gray-600 hover:border-primary focus:border-primary focus:outline-none transition"
                       >
                         {sortOptions.map((option) => (
@@ -1436,10 +1733,22 @@ const handleFilterChange = (key: keyof FilterState, value: string, categoryId?: 
               <button
                 type="button"
                 onClick={() => {
-                  setFilters({ category: 'All', color: 'All', price: 'all' });
+                  const defaultCat = presetCategory && !categoryNavAsTabs ? presetCategory : 'All';
+                  setFilters({ category: defaultCat, color: 'All', price: 'all' });
                   setSelectedCategoryId(null);
                   setCustomPriceInputs({ min: '', max: '' });
                   setCustomPriceRange(null);
+                  setPage(1);
+                  setSearchParams((prev) => {
+                    const next = new URLSearchParams(prev);
+                    next.delete('category');
+                    next.delete('color');
+                    next.delete('price');
+                    next.delete('min_price');
+                    next.delete('max_price');
+                    next.delete('page');
+                    return next;
+                  });
                 }}
                 className="text-sm font-ui text-gray-600 hover:text-primary underline"
               >

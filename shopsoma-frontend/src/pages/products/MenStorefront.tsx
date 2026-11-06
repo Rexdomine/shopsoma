@@ -11,38 +11,49 @@ import { categoryService } from '../../services/categoryService';
 import ProductList from './ProductList';
 import type { Category } from '../../types';
 
-export default function MenStorefront() {
-  const [menCategoryId, setMenCategoryId] = useState<string | null>(() => {
-    if (typeof window === 'undefined') return MEN_CATEGORY_ID;
-    const cacheKey = 'shopsoma_primary_categories';
-    const cachedRaw = sessionStorage.getItem(cacheKey);
-    if (cachedRaw) {
-      try {
-        const cached = JSON.parse(cachedRaw) as { categories: { id: string; name?: string }[] };
-        const cachedMen = cached.categories?.find(
-          (category) => category.name?.toLowerCase() === 'men'
-        );
-        if (cachedMen?.id) {
-          return cachedMen.id;
-        }
-      } catch {
-        sessionStorage.removeItem(cacheKey);
+function resolveCachedMenCategoryId(): string {
+  if (typeof window === 'undefined') return MEN_CATEGORY_ID;
+  const cacheKey = 'shopsoma_primary_categories';
+  const cachedRaw = sessionStorage.getItem(cacheKey);
+  if (cachedRaw) {
+    try {
+      const cached = JSON.parse(cachedRaw) as { categories: { id: string; name?: string }[] };
+      const cachedMen = cached.categories?.find(
+        (category) => category.name?.toLowerCase() === 'men'
+      );
+      if (cachedMen?.id) {
+        return cachedMen.id;
       }
+    } catch {
+      sessionStorage.removeItem(cacheKey);
     }
-    return MEN_CATEGORY_ID;
-  });
+  }
+  return MEN_CATEGORY_ID;
+}
+
+export default function MenStorefront() {
+  const [menCategoryId, setMenCategoryId] = useState<string | null>(resolveCachedMenCategoryId);
   const [categoryLoading, setCategoryLoading] = useState(false);
   const [subcategories, setSubcategories] = useState<Category[]>(() => {
-    const cacheKey = `shopsoma_subcategories_${MEN_CATEGORY_ID}`;
-    const cachedRaw = typeof window !== 'undefined' ? sessionStorage.getItem(cacheKey) : null;
-    if (cachedRaw) {
-      try {
-        const cached = JSON.parse(cachedRaw) as { categories: Category[] };
-        if (cached?.categories?.length) {
-          return mergeSubcategoriesWithDefaults(cached.categories, DEFAULT_MEN_SUBCATEGORIES);
+    if (typeof window === 'undefined') return DEFAULT_MEN_SUBCATEGORIES;
+    const resolvedMenId = resolveCachedMenCategoryId();
+    const cacheKeys = Array.from(
+      new Set([
+        `shopsoma_subcategories_${resolvedMenId}`,
+        `shopsoma_subcategories_${MEN_CATEGORY_ID}`,
+      ])
+    );
+    for (const cacheKey of cacheKeys) {
+      const cachedRaw = sessionStorage.getItem(cacheKey);
+      if (cachedRaw) {
+        try {
+          const cached = JSON.parse(cachedRaw) as { categories: Category[] };
+          if (cached?.categories?.length) {
+            return mergeSubcategoriesWithDefaults(cached.categories, DEFAULT_MEN_SUBCATEGORIES);
+          }
+        } catch {
+          sessionStorage.removeItem(cacheKey);
         }
-      } catch {
-        sessionStorage.removeItem(cacheKey);
       }
     }
     return DEFAULT_MEN_SUBCATEGORIES;

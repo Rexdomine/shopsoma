@@ -87,7 +87,7 @@ export function gateStateAfterRefreshFailure(
  * Wraps all routes and handles scroll restoration
  */
 export default function RootLayout() {
-  const { pathname, search } = useLocation();
+  const { pathname, search, state } = useLocation();
   const { user, isLoading: authLoading } = useAuth();
   const [gateState, setGateState] = useState<GateState>('loading');
   const [resolvedScope, setResolvedScope] = useState<'public' | 'bypass' | null>(null);
@@ -95,8 +95,11 @@ export default function RootLayout() {
   const [resolvedSettings, setResolvedSettings] = useState<ComingSoonSettings | null>(null);
 
   useEffect(() => {
+    if ((state as { restoreScroll?: boolean } | null)?.restoreScroll) {
+      return;
+    }
     window.scrollTo(0, 0);
-  }, [pathname]);
+  }, [pathname, state]);
 
   useEffect(() => {
     captureNavigationContext({ pathname, search });
