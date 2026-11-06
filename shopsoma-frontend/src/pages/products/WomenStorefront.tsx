@@ -11,38 +11,49 @@ import { categoryService } from '../../services/categoryService';
 import type { Category } from '../../types';
 import ProductList from './ProductList';
 
-export default function WomenStorefront() {
-  const [womenCategoryId, setWomenCategoryId] = useState<string | null>(() => {
-    if (typeof window === 'undefined') return WOMEN_CATEGORY_ID;
-    const cacheKey = 'shopsoma_primary_categories';
-    const cachedRaw = sessionStorage.getItem(cacheKey);
-    if (cachedRaw) {
-      try {
-        const cached = JSON.parse(cachedRaw) as { categories: { id: string; name?: string }[] };
-        const cachedWomen = cached.categories?.find(
-          (category) => category.name?.toLowerCase() === 'women'
-        );
-        if (cachedWomen?.id) {
-          return cachedWomen.id;
-        }
-      } catch {
-        sessionStorage.removeItem(cacheKey);
+function resolveCachedWomenCategoryId(): string {
+  if (typeof window === 'undefined') return WOMEN_CATEGORY_ID;
+  const cacheKey = 'shopsoma_primary_categories';
+  const cachedRaw = sessionStorage.getItem(cacheKey);
+  if (cachedRaw) {
+    try {
+      const cached = JSON.parse(cachedRaw) as { categories: { id: string; name?: string }[] };
+      const cachedWomen = cached.categories?.find(
+        (category) => category.name?.toLowerCase() === 'women'
+      );
+      if (cachedWomen?.id) {
+        return cachedWomen.id;
       }
+    } catch {
+      sessionStorage.removeItem(cacheKey);
     }
-    return WOMEN_CATEGORY_ID;
-  });
+  }
+  return WOMEN_CATEGORY_ID;
+}
+
+export default function WomenStorefront() {
+  const [womenCategoryId, setWomenCategoryId] = useState<string | null>(resolveCachedWomenCategoryId);
   const [categoryLoading, setCategoryLoading] = useState(false);
   const [subcategories, setSubcategories] = useState<Category[]>(() => {
-    const cacheKey = `shopsoma_subcategories_${WOMEN_CATEGORY_ID}`;
-    const cachedRaw = typeof window !== 'undefined' ? sessionStorage.getItem(cacheKey) : null;
-    if (cachedRaw) {
-      try {
-        const cached = JSON.parse(cachedRaw) as { categories: Category[] };
-        if (cached?.categories?.length) {
-          return mergeSubcategoriesWithDefaults(cached.categories, DEFAULT_WOMEN_SUBCATEGORIES);
+    if (typeof window === 'undefined') return DEFAULT_WOMEN_SUBCATEGORIES;
+    const resolvedWomenId = resolveCachedWomenCategoryId();
+    const cacheKeys = Array.from(
+      new Set([
+        `shopsoma_subcategories_${resolvedWomenId}`,
+        `shopsoma_subcategories_${WOMEN_CATEGORY_ID}`,
+      ])
+    );
+    for (const cacheKey of cacheKeys) {
+      const cachedRaw = sessionStorage.getItem(cacheKey);
+      if (cachedRaw) {
+        try {
+          const cached = JSON.parse(cachedRaw) as { categories: Category[] };
+          if (cached?.categories?.length) {
+            return mergeSubcategoriesWithDefaults(cached.categories, DEFAULT_WOMEN_SUBCATEGORIES);
+          }
+        } catch {
+          sessionStorage.removeItem(cacheKey);
         }
-      } catch {
-        sessionStorage.removeItem(cacheKey);
       }
     }
     return DEFAULT_WOMEN_SUBCATEGORIES;

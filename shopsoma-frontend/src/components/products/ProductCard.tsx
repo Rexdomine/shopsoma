@@ -154,10 +154,22 @@ export default function ProductCard({
     onToggleFavorite?.(product.id);
   };
 
+  const handleProductClick = () => {
+    if (typeof window === 'undefined') return;
+    const scrollY = window.scrollY || window.pageYOffset || document.documentElement?.scrollTop || 0;
+    const fromUrl = `${location.pathname}${location.search}`;
+    try {
+      sessionStorage.setItem(`shopsoma_listing_scroll:${fromUrl}`, String(scrollY));
+    } catch {
+      // Ignore storage errors
+    }
+  };
+
   return (
     <Link
       to={`/products/${product.id}`}
       state={{ from: `${location.pathname}${location.search}` }}
+      onClick={handleProductClick}
       className="group block w-full min-w-0"
       onMouseEnter={() => setIsHovered(true)}
       onMouseLeave={() => setIsHovered(false)}

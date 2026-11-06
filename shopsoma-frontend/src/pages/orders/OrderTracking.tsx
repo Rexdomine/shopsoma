@@ -337,7 +337,6 @@ export default function OrderTracking() {
   }, [tracking]);
 
   const [isRetryingPayment, setIsRetryingPayment] = useState(false);
-  const [isCancellingOrder, setIsCancellingOrder] = useState(false);
 
   const handleRetryPayment = async () => {
     if (!resolvedOrderId) return;
@@ -408,32 +407,6 @@ export default function OrderTracking() {
       const msg = typeof detail === 'string' ? detail : detail?.message || err.message || 'Unable to re-initialize payment.';
       alert(msg);
       setIsRetryingPayment(false);
-    }
-  };
-
-  const handleCancelOrder = async () => {
-    if (!resolvedOrderId) return;
-    if (!window.confirm('Are you sure you want to cancel this order?')) return;
-    setIsCancellingOrder(true);
-    try {
-      await checkoutService.cancelOrder(
-        resolvedOrderId,
-        'Customer cancelled unpaid order',
-        loadCheckoutCapability(resolvedOrderId),
-      );
-      const updated = await orderService.getOrderTracking(
-        resolvedOrderId,
-        loadCheckoutCapability(resolvedOrderId),
-      );
-      setTracking(updated);
-      alert('Order has been cancelled.');
-    } catch (err: any) {
-      console.error('Failed to cancel order:', err);
-      const detail = err.response?.data?.detail;
-      const msg = typeof detail === 'string' ? detail : detail?.message || err.message || 'Unable to cancel order.';
-      alert(msg);
-    } finally {
-      setIsCancellingOrder(false);
     }
   };
 
@@ -595,14 +568,6 @@ export default function OrderTracking() {
                     className="px-4 py-2 bg-primary text-white text-xs font-semibold rounded-sm hover:bg-primary-dark transition disabled:opacity-50"
                   >
                     {isRetryingPayment ? 'Opening Payment...' : 'Complete Payment'}
-                  </button>
-                  <button
-                    type="button"
-                    onClick={handleCancelOrder}
-                    disabled={isCancellingOrder}
-                    className="px-3 py-2 border border-amber-300 bg-white text-gray-700 text-xs font-semibold rounded-sm hover:bg-gray-50 transition disabled:opacity-50"
-                  >
-                    {isCancellingOrder ? 'Cancelling...' : 'Cancel Order'}
                   </button>
                 </div>
               </div>
