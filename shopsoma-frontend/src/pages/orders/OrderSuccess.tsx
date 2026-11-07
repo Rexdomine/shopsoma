@@ -61,7 +61,6 @@ export default function OrderSuccess() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [isRetrying, setIsRetrying] = useState(false);
-  const [isCancelling, setIsCancelling] = useState(false);
 
   useEffect(() => {
     if (isMock) {
@@ -170,24 +169,6 @@ export default function OrderSuccess() {
     }
   };
 
-  const handleCancelOrder = async () => {
-    if (!order) return;
-    if (!window.confirm('Are you sure you want to cancel this order?')) return;
-    setIsCancelling(true);
-    try {
-      await checkoutService.cancelOrder(order.id, 'Customer cancelled unpaid order', loadCheckoutCapability(order.id));
-      setOrder({ ...order, fulfillment_status: 'cancelled' });
-      alert('Order has been cancelled.');
-    } catch (err: any) {
-      console.error('Failed to cancel order:', err);
-      const detail = err.response?.data?.detail;
-      const msg = typeof detail === 'string' ? detail : detail?.message || err.message || 'Unable to cancel order.';
-      alert(msg);
-    } finally {
-      setIsCancelling(false);
-    }
-  };
-
   const getStatusConfig = () => {
     const normalizedPaymentStatus = order?.payment_status?.toLowerCase();
     if (order?.fulfillment_status?.toLowerCase() === 'cancelled') {
@@ -212,7 +193,7 @@ export default function OrderSuccess() {
         subtitle: 'Order saved, awaiting payment',
         icon: '⚠',
         iconColor: 'text-amber-600',
-        message: 'Your items are reserved. Complete payment to process and ship your order, or cancel if you no longer wish to purchase.',
+        message: 'Your items are reserved. Complete payment to process and ship your order.',
       };
     } else if (paymentStatus === 'verification_failed' || normalizedPaymentStatus === 'failed') {
       return {
@@ -384,15 +365,6 @@ export default function OrderSuccess() {
                   className="w-full rounded-sm bg-primary text-white font-semibold py-3 text-sm hover:bg-primary-dark transition focus:outline-none focus-visible:ring-2 focus-visible:ring-offset-2 focus-visible:ring-primary disabled:opacity-50"
                 >
                   {isRetrying ? 'Opening Payment...' : 'Complete Payment'}
-                </button>
-
-                <button
-                  type="button"
-                  onClick={handleCancelOrder}
-                  disabled={isCancelling}
-                  className="w-full rounded-sm border border-red-300 text-red-700 bg-red-50/50 hover:bg-red-50 font-semibold py-3 text-sm transition disabled:opacity-50"
-                >
-                  {isCancelling ? 'Cancelling...' : 'Cancel This Order'}
                 </button>
 
                 <button

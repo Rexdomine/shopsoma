@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import ProductCard from '../../../components/products/ProductCard';
 import ProductDetail from '../ProductDetail';
 import ProductList from '../ProductList';
+import WomenStorefront from '../WomenStorefront';
 import AdminProducts from '../../admin/AdminProducts';
 import AdminProductDetail from '../../admin/AdminProductDetail';
 import type { Product } from '../../../types';
@@ -230,6 +231,123 @@ describe('Pagination Persistence on Back Navigation', () => {
       await waitFor(() => {
         expect(screen.getByTestId('location-search')).toHaveTextContent('?page=3');
       });
+    });
+
+    it("returns to Women's Dresses page 2 and restores scroll position when tapping in-page Back button", async () => {
+      const { productService } = await import('../../../services/productService');
+      const { categoryService } = await import('../../../services/categoryService');
+
+      const dressProducts: Product[] = Array.from({ length: 18 }, (_, i) => ({
+        ...sampleProduct,
+        id: i === 12 ? 'prod-agbada' : `dress-${i + 1}`,
+        title: i === 12 ? 'PETTRE TAYLOR Checkered Agbada' : `Luxury Dress ${i + 1}`,
+        category_name: "Women's Dresses",
+        category_parent_name: 'Women',
+        categories: ['Women', "Women's Dresses"],
+      }));
+
+      vi.mocked(categoryService.getPrimaryCategories).mockResolvedValue([
+        {
+          id: 'db-women-uuid',
+          name: 'Women',
+          slug: 'women',
+          display_order: 1,
+          is_active: true,
+          created_at: '2026-10-01T00:00:00Z',
+          updated_at: '2026-10-01T00:00:00Z',
+        },
+      ]);
+
+      getSubcategoriesMock.mockImplementation(async (parentId: string) => {
+        if (parentId === 'db-women-uuid') {
+          return [
+            {
+              id: 'db-women-dresses-uuid',
+              name: "Women's Dresses",
+              slug: 'women-dresses',
+              parent_id: 'db-women-uuid',
+              display_order: 1,
+              is_active: true,
+              created_at: '2026-10-01T00:00:00Z',
+              updated_at: '2026-10-01T00:00:00Z',
+            },
+          ];
+        }
+        return [];
+      });
+
+      getProductsMock.mockResolvedValue({
+        products: dressProducts,
+        total: dressProducts.length,
+        total_pages: 1,
+      });
+
+      vi.mocked(productService.getProduct).mockResolvedValue(dressProducts[12]);
+
+      const scrollToSpy = vi.spyOn(window, 'scrollTo').mockImplementation(() => {});
+      Object.defineProperty(window, 'scrollY', { value: 480, writable: true, configurable: true });
+
+      render(
+        <MemoryRouter initialEntries={['/women']}>
+          <LocationObserver />
+          <Routes>
+            <Route path="/women" element={<WomenStorefront />} />
+            <Route path="/products/:id" element={<ProductDetail />} />
+          </Routes>
+        </MemoryRouter>
+      );
+
+      // 1. Wait for initial Women listing to render
+      await waitFor(() => {
+        expect(screen.getAllByText('Luxury Dress 1').length).toBeGreaterThan(0);
+      });
+
+      // 2. Select Women's Dresses
+      const dressesTab = screen.getByRole('button', { name: "Women's Dresses" });
+      fireEvent.click(dressesTab);
+
+      await waitFor(() => {
+        expect(screen.getByTestId('location-search')).toHaveTextContent('category=Women%27s+Dresses');
+      });
+
+      // 3. Go to listing page 2
+      const page2Button = await screen.findByRole('button', { name: '2' });
+      fireEvent.click(page2Button);
+
+      await waitFor(() => {
+        expect(screen.getByTestId('location-search')).toHaveTextContent('category=Women%27s+Dresses');
+        expect(screen.getByTestId('location-search')).toHaveTextContent('page=2');
+        expect(screen.getAllByText('PETTRE TAYLOR Checkered Agbada').length).toBeGreaterThan(0);
+      });
+
+      // 4. Open PETTRE TAYLOR Checkered Agbada
+      const productLinks = screen.getAllByRole('link', { name: /PETTRE TAYLOR Checkered Agbada/i });
+      fireEvent.click(productLinks[0]);
+
+      await waitFor(() => {
+        expect(screen.getByTestId('location-pathname')).toHaveTextContent('/products/prod-agbada');
+      });
+
+      // 5. Tap the product page's in-page <- BACK control
+      const backButton = await screen.findByRole('button', { name: /back/i });
+      scrollToSpy.mockClear();
+      fireEvent.click(backButton);
+
+      // 6. Verify it returns to Women's Dresses on page 2 (not All Items) and restores scroll
+      await waitFor(() => {
+        expect(screen.getByTestId('location-pathname')).toHaveTextContent('/women');
+        expect(screen.getByTestId('location-search')).toHaveTextContent('category=Women%27s+Dresses');
+        expect(screen.getByTestId('location-search')).toHaveTextContent('page=2');
+        expect(screen.getAllByText('PETTRE TAYLOR Checkered Agbada').length).toBeGreaterThan(0);
+      });
+
+      const returnedDressesTab = screen.getByRole('button', { name: "Women's Dresses" });
+      const allItemsTab = screen.getByRole('button', { name: /All Items/i });
+      expect(returnedDressesTab.className).toContain('border-primary');
+      expect(allItemsTab.className).toContain('border-transparent');
+      expect(scrollToSpy).toHaveBeenCalledWith({ top: 480, behavior: 'auto' });
+
+      scrollToSpy.mockRestore();
     });
   });
 

@@ -1,7 +1,7 @@
 import asyncio
 import base64
 import logging
-from datetime import UTC, datetime, timedelta
+from datetime import datetime
 from types import SimpleNamespace
 from typing import Any, cast
 from unittest.mock import AsyncMock, patch
@@ -10,6 +10,7 @@ import httpx
 import pytest
 
 from app.core.config import Settings
+from app.services.admin_shadow_quote import _planned_ship_date_for_shadow_quote
 from app.services.dhl.client import (
     DHLAPIError,
     DHLClient,
@@ -30,7 +31,7 @@ DUMMY_ACCOUNT = "123456789"
 
 
 def future_planned_ship_date():
-    return (datetime.now(UTC) + timedelta(days=2)).date()
+    return _planned_ship_date_for_shadow_quote(None)
 
 
 def make_settings(**overrides) -> Settings:
