@@ -498,6 +498,18 @@ async def test_admin_pickup_endpoint_rejects_invalid_window_and_non_admins(
         },
     )
     assert inverted.status_code == 400
+    assert inverted.json()["detail"] == "Pickup window end must be after the start"
+
+    equal_window = await client.patch(
+        url,
+        headers=admin_user["headers"],
+        json={
+            "pickup_window_start": start.isoformat(),
+            "pickup_window_end": start.isoformat(),
+        },
+    )
+    assert equal_window.status_code == 400
+    assert equal_window.json()["detail"] == "Pickup window end must be after the start"
 
     wrong_order = await client.patch(
         f"/api/v1/admin/orders/{uuid.uuid4()}/pickup/{pickup.id}",
@@ -505,6 +517,85 @@ async def test_admin_pickup_endpoint_rejects_invalid_window_and_non_admins(
         json=body,
     )
     assert wrong_order.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_admin_edits_existing_cross_day_pickup_window_to_same_day_window(
+    client: AsyncClient,
+    db_session: AsyncSession,
+    vendor_user,
+    customer_user,
+    admin_user,
+    captured_ready_emails,
+):
+    """Editing an existing cross-day pickup window to end later on the same calendar day succeeds."""
+    from app.models.vendor_pickup import VendorPickup
+
+    order, (item,), (pickup,) = await _create_order(
+        db_session, customer_user, [(vendor_user["vendor"], True, "Ankara Fix")]
+    )
+    await client.post(_ready_url(order.id, item.id), headers=vendor_user["headers"])
+
+    url = f"/api/v1/admin/orders/{order.id}/pickup/{pickup.id}"
+    initial_start = datetime(2026, 10, 12, 12, 45, tzinfo=timezone.utc)  # 1:45 PM WAT (UTC+1)
+    initial_end = datetime(2026, 10, 13, 12, 45, tzinfo=timezone.utc)    # Next day 1:45 PM WAT
+    same_day_end = datetime(2026, 10, 12, 14, 45, tzinfo=timezone.utc)   # Same day 3:45 PM WAT
+
+    # 1. Initial cross-day window save
+    first_res = await client.patch(
+        url,
+        headers=admin_user["headers"],
+        json={
+            "pickup_window_start": initial_start.isoformat(),
+            "pickup_window_end": initial_end.isoformat(),
+            "courier_name": "Shopsoma Logistics",
+        },
+    )
+    assert first_res.status_code == 200, first_res.text
+
+    # 2. Failed equal-time edit does not partially mutate the saved cross-day window
+    equal_edit = await client.patch(
+        url,
+        headers=admin_user["headers"],
+        json={
+            "pickup_window_start": initial_start.isoformat(),
+            "pickup_window_end": initial_start.isoformat(),
+        },
+    )
+    assert equal_edit.status_code == 400
+    assert equal_edit.json()["detail"] == "Pickup window end must be after the start"
+
+    persisted_before = await db_session.scalar(
+        select(VendorPickup)
+        .where(VendorPickup.id == pickup.id)
+        .execution_options(populate_existing=True)
+    )
+    assert persisted_before.pickup_window_start == initial_start
+    assert persisted_before.pickup_window_end == initial_end
+
+    # 3. Edit end date to same calendar day (later time: 3:45 PM)
+    same_day_res = await client.patch(
+        url,
+        headers=admin_user["headers"],
+        json={
+            "pickup_window_start": initial_start.isoformat(),
+            "pickup_window_end": same_day_end.isoformat(),
+            "courier_name": "Shopsoma Logistics",
+        },
+    )
+    assert same_day_res.status_code == 200, same_day_res.text
+    updated_item = _item(same_day_res.json(), item.id)
+    assert updated_item["readiness_state"] == "pickup_scheduled"
+    assert datetime.fromisoformat(updated_item["pickup"]["pickup_window_start"]) == initial_start
+    assert datetime.fromisoformat(updated_item["pickup"]["pickup_window_end"]) == same_day_end
+
+    persisted_after = await db_session.scalar(
+        select(VendorPickup)
+        .where(VendorPickup.id == pickup.id)
+        .execution_options(populate_existing=True)
+    )
+    assert persisted_after.pickup_window_start == initial_start
+    assert persisted_after.pickup_window_end == same_day_end
 
 
 @pytest.mark.asyncio

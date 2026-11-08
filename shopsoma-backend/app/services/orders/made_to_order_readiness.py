@@ -272,7 +272,7 @@ def ensure_admin_pickup_update_allowed(
     start = update.pickup_window_start or pickup.pickup_window_start
     end = update.pickup_window_end or pickup.pickup_window_end
     if (update.pickup_window_start or update.pickup_window_end) and start and end:
-        if _as_aware(end) < _as_aware(start):
+        if _as_aware(end) <= _as_aware(start):
             raise ReadinessError(400, "Pickup window end must be after the start")
 
     if not made_to_order or pickup.ready_for_pickup_at is not None:
