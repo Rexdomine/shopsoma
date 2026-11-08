@@ -179,6 +179,93 @@ describe('ItemPickupPanel', () => {
     expect(props.onError).toHaveBeenCalledWith('Pickup window end must be after the start');
   });
 
+  it('rejects an equal-time pickup window without calling the API', () => {
+    const props = renderPanel(mtoItem({ readiness_state: 'ready_for_pickup', ready_for_pickup_at: '2026-10-04T09:30:00Z' }));
+
+    fireEvent.click(screen.getByRole('button', { name: 'Schedule pickup' }));
+    fireEvent.change(screen.getByLabelText(/Pickup window start/), { target: { value: '2026-10-12T13:45' } });
+    fireEvent.change(screen.getByLabelText(/Pickup window end/), { target: { value: '2026-10-12T13:45' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Save pickup' }));
+
+    expect(mocks.updatePickupStatus).not.toHaveBeenCalled();
+    expect(props.onError).toHaveBeenCalledWith('Pickup window end must be after the start');
+    expect(screen.getByRole('button', { name: 'Save pickup' })).toBeInTheDocument();
+  });
+
+  it('edits an existing cross-day pickup window to a same-day window when end time is later', async () => {
+    const existingStartIso = new Date('2026-10-12T13:45').toISOString();
+    const existingEndIso = new Date('2026-10-13T13:45').toISOString();
+    const updatedEndIso = new Date('2026-10-12T15:45').toISOString();
+    const updatedOrder = { id: 'order-1' } as OrderDetail;
+    mocks.updatePickupStatus.mockResolvedValue(updatedOrder);
+
+    const props = renderPanel(
+      mtoItem({
+        readiness_state: 'pickup_scheduled',
+        ready_for_pickup_at: '2026-10-10T09:00:00Z',
+        pickup: {
+          id: 'pickup-a',
+          order_item_id: 'item-a',
+          vendor_id: 'vendor-a',
+          status: 'scheduled',
+          pickup_window_start: existingStartIso,
+          pickup_window_end: existingEndIso,
+          courier_name: 'Shopsoma Rider',
+        },
+      })
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: 'Edit pickup' }));
+    expect(screen.getByLabelText(/Pickup window start/)).toHaveValue('2026-10-12T13:45');
+    expect(screen.getByLabelText(/Pickup window end/)).toHaveValue('2026-10-13T13:45');
+
+    fireEvent.change(screen.getByLabelText(/Pickup window end/), { target: { value: '2026-10-12T15:45' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Save pickup' }));
+
+    await waitFor(() => {
+      expect(mocks.updatePickupStatus).toHaveBeenCalledWith('order-1', 'pickup-a', {
+        pickup_window_start: existingStartIso,
+        pickup_window_end: updatedEndIso,
+        courier_name: 'Shopsoma Rider',
+        rider_id: undefined,
+        logistics_partner: undefined,
+        tracking_number: undefined,
+        admin_notes: undefined,
+      });
+    });
+    expect(props.onUpdated).toHaveBeenCalledWith(updatedOrder);
+    expect(props.onSuccess).toHaveBeenCalledWith(expect.stringContaining('Pickup scheduled for Vendor A'));
+    expect(screen.queryByRole('button', { name: 'Save pickup' })).not.toBeInTheDocument();
+  });
+
+  it('surfaces actionable API validation errors when editing pickup fails and keeps editor open', async () => {
+    mocks.updatePickupStatus.mockRejectedValueOnce({
+      response: { data: { detail: [{ msg: 'Value error, Pickup window end must be after the start' }] } },
+    });
+    const props = renderPanel(
+      mtoItem({
+        readiness_state: 'pickup_scheduled',
+        ready_for_pickup_at: '2026-10-10T09:00:00Z',
+        pickup: {
+          id: 'pickup-a',
+          status: 'scheduled',
+          pickup_window_start: new Date('2026-10-12T13:45').toISOString(),
+          pickup_window_end: new Date('2026-10-13T13:45').toISOString(),
+        },
+      })
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: 'Edit pickup' }));
+    fireEvent.change(screen.getByLabelText(/Pickup window end/), { target: { value: '2026-10-12T15:45' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Save pickup' }));
+
+    await waitFor(() => {
+      expect(props.onError).toHaveBeenCalledWith('Value error, Pickup window end must be after the start');
+    });
+    expect(props.onUpdated).not.toHaveBeenCalled();
+    expect(screen.getByRole('button', { name: 'Save pickup' })).toBeInTheDocument();
+  });
+
   it('marks a scheduled item as picked up and surfaces backend errors', async () => {
     mocks.updatePickupStatus.mockRejectedValueOnce({ response: { data: { detail: 'Backend says no' } } });
     const props = renderPanel(
