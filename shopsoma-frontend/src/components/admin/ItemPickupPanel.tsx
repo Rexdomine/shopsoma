@@ -35,12 +35,15 @@ const toIso = (value: string): string | undefined => {
 };
 
 const errorDetail = (err: unknown, fallback: string): string => {
-  const detail = (err as { response?: { data?: { detail?: unknown } } })?.response?.data?.detail;
+  const data = (err as { response?: { data?: { detail?: unknown; message?: unknown; error?: unknown } } })?.response?.data;
+  const detail = data?.detail;
   if (typeof detail === 'string' && detail) return detail;
   if (Array.isArray(detail) && detail.length > 0) {
     const firstMsg = (detail[0] as { msg?: unknown })?.msg;
     if (typeof firstMsg === 'string' && firstMsg) return firstMsg;
   }
+  if (typeof data?.message === 'string' && data.message) return data.message;
+  if (typeof data?.error === 'string' && data.error) return data.error;
   return fallback;
 };
 

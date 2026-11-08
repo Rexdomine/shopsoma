@@ -182,15 +182,26 @@ export default function AdminOrderDetail() {
       return;
     }
 
+    const startDate = new Date(pickupWindowData.pickup_window_start);
+    const endDate = new Date(pickupWindowData.pickup_window_end);
+    if (Number.isNaN(startDate.getTime()) || Number.isNaN(endDate.getTime())) {
+      error('Please select both start and end times for pickup window');
+      return;
+    }
+    if (endDate <= startDate) {
+      error('Pickup window end must be after the start');
+      return;
+    }
+
     try {
       setUpdating(true);
 
       // First update the order status to PICKUP_SCHEDULED with pickup window data
       await updateOrderStatus(order.id, {
         fulfillment_status: 'pickup_scheduled',
-        admin_notes: `Pickup scheduled: ${new Date(pickupWindowData.pickup_window_start).toLocaleString()} - ${new Date(pickupWindowData.pickup_window_end).toLocaleTimeString()}${statusNotes ? ` | ${statusNotes}` : ''}`,
-        pickup_window_start: pickupWindowData.pickup_window_start,
-        pickup_window_end: pickupWindowData.pickup_window_end,
+        admin_notes: `Pickup scheduled: ${startDate.toLocaleString()} - ${endDate.toLocaleTimeString()}${statusNotes ? ` | ${statusNotes}` : ''}`,
+        pickup_window_start: startDate.toISOString(),
+        pickup_window_end: endDate.toISOString(),
         courier_name: pickupWindowData.courier_name || undefined,
         rider_id: pickupWindowData.rider_id || undefined,
       });
@@ -201,7 +212,8 @@ export default function AdminOrderDetail() {
       setStatusNotes('');
     } catch (err) {
       console.error('Failed to schedule pickup:', err);
-      error('Failed to schedule pickup');
+      const detail = (err as { response?: { data?: { detail?: unknown } } })?.response?.data?.detail;
+      error(typeof detail === 'string' && detail ? detail : 'Failed to schedule pickup');
       return;
     } finally {
       setUpdating(false);

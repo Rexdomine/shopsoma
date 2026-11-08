@@ -775,6 +775,28 @@ async def update_order_status(
                 detail=str(exc),
             ) from exc
 
+    parsed_window_start = None
+    parsed_window_end = None
+    if new_status == FulfillmentStatus.PICKUP_SCHEDULED:
+        from dateutil import parser
+
+        if update_data.pickup_window_start:
+            parsed_start = parser.isoparse(update_data.pickup_window_start)
+            parsed_window_start = (
+                parsed_start if parsed_start.tzinfo is not None else parsed_start.replace(tzinfo=timezone.utc)
+            )
+        if update_data.pickup_window_end:
+            parsed_end = parser.isoparse(update_data.pickup_window_end)
+            parsed_window_end = (
+                parsed_end if parsed_end.tzinfo is not None else parsed_end.replace(tzinfo=timezone.utc)
+            )
+        if parsed_window_start and parsed_window_end and parsed_window_end <= parsed_window_start:
+            await db.rollback()
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Pickup window end must be after the start",
+            )
+
     # Update status
     order.fulfillment_status = new_status
 
@@ -801,8 +823,6 @@ async def update_order_status(
     # Update vendor pickups with pickup window data if provided
     pickups = []
     if new_status == FulfillmentStatus.PICKUP_SCHEDULED:
-        from dateutil import parser
-
         # Get all pickups for this order
         pickup_query = select(VendorPickup).where(VendorPickup.order_id == order.id)
         pickup_result = await db.execute(pickup_query)
@@ -821,16 +841,10 @@ async def update_order_status(
                 and pickup.ready_for_pickup_at is None
             ):
                 continue
-            if update_data.pickup_window_start:
-                parsed_start = parser.isoparse(update_data.pickup_window_start)
-                pickup.pickup_window_start = (
-                    parsed_start if parsed_start.tzinfo is not None else parsed_start.replace(tzinfo=timezone.utc)
-                )
-            if update_data.pickup_window_end:
-                parsed_end = parser.isoparse(update_data.pickup_window_end)
-                pickup.pickup_window_end = (
-                    parsed_end if parsed_end.tzinfo is not None else parsed_end.replace(tzinfo=timezone.utc)
-                )
+            if parsed_window_start is not None:
+                pickup.pickup_window_start = parsed_window_start
+            if parsed_window_end is not None:
+                pickup.pickup_window_end = parsed_window_end
             if update_data.courier_name:
                 pickup.courier_name = update_data.courier_name
             if update_data.rider_id:
