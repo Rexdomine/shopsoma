@@ -518,6 +518,23 @@ export interface DhlTrackingRefreshResult {
   refreshed_at: string;
 }
 
+export interface DhlPickupRequest {
+  planned_pickup_at?: string | null;
+  close_time?: string;
+  location?: string;
+  special_instruction?: string;
+}
+
+export interface DhlPickupResult {
+  booking_id: string;
+  order_id: string;
+  tracking_number: string;
+  pickup_confirmation_number: string;
+  pickup_scheduled_for: string;
+  pickup_requested_at: string;
+  replayed: boolean;
+}
+
 /** No automatic operation retry: a lost booking response can hide a shipment. */
 export const createDhlBooking = async (
   orderId: string,
@@ -559,6 +576,19 @@ export const refreshDhlTracking = async (
   return response.data;
 };
 
+export const requestDhlPickup = async (
+  orderId: string,
+  bookingId: string,
+  data: DhlPickupRequest = {}
+): Promise<DhlPickupResult> => {
+  const response = await api.post<DhlPickupResult>(
+    `/admin/orders/${orderId}/dhl/bookings/${bookingId}/pickup`,
+    data,
+    { timeout: 30000 }
+  );
+  return response.data;
+};
+
 export type DhlReconciliationState = 'not_required' | 'in_progress' | 'required' | 'expired_claim_requires_recovery' | 'resolved' | 'inconsistent';
 export type DhlSelectionBlocker = 'order_cancelled' | 'package_not_ready' | 'custody_handed_off' | 'active_seal_missing' | 'active_intent_missing' | 'selected_dhl_quote_missing' | 'active_booking_exists' | 'reconciliation_required' | 'expired_claim_requires_recovery' | 'inconsistent_persisted_state';
 export interface DhlOperationPackage {
@@ -590,6 +620,9 @@ export interface DhlOperationBooking {
   reconciliation_state: DhlReconciliationState;
   reconciliation_resolution: 'confirm_success' | 'confirm_failure' | null;
   reconciliation_recorded_at: string | null;
+  pickup_confirmation_number?: string | null;
+  pickup_scheduled_for?: string | null;
+  pickup_requested_at?: string | null;
 }
 export interface DhlOperations {
   read_at: string;

@@ -51,6 +51,41 @@ interface NewAddress {
   is_default: boolean;
 }
 
+const SUPPORTED_CHECKOUT_COUNTRIES = [
+  { name: 'Nigeria', iso2: 'NG' },
+  { name: 'Ghana', iso2: 'GH' },
+  { name: 'United States', iso2: 'US' },
+  { name: 'United Kingdom', iso2: 'GB' },
+  { name: 'Canada', iso2: 'CA' },
+  { name: 'South Africa', iso2: 'ZA' },
+  { name: 'Kenya', iso2: 'KE' },
+  { name: 'United Arab Emirates', iso2: 'AE' },
+  { name: 'France', iso2: 'FR' },
+  { name: 'Germany', iso2: 'DE' },
+] as const;
+
+const isNigerianCountry = (raw?: string): boolean => {
+  const lower = (raw || '').trim().toLowerCase();
+  return !lower || lower === 'nigeria' || lower === 'ng' || lower === 'nga';
+};
+
+const isSupportedDhlDestinationCountry = (raw?: string): boolean => {
+  const lower = (raw || '').trim().toLowerCase();
+  if (!lower) return false;
+  if (isNigerianCountry(lower)) return true;
+  return SUPPORTED_CHECKOUT_COUNTRIES.some(
+    c => c.name.toLowerCase() === lower || c.iso2.toLowerCase() === lower
+  );
+};
+
+const resolveCountryIso2 = (raw?: string): string => {
+  const lower = (raw || '').trim().toLowerCase();
+  const match = SUPPORTED_CHECKOUT_COUNTRIES.find(
+    c => c.name.toLowerCase() === lower || c.iso2.toLowerCase() === lower
+  );
+  return match?.iso2 || 'NG';
+};
+
 const ALL_PAYMENT_OPTIONS: { id: PaymentGateway; name: string; icon: string; supportedCurrencies: Currency[] }[] = [
   { id: 'paystack', name: 'Paystack', icon: '/images/paystack.svg', supportedCurrencies: ['NGN'] },
   { id: 'stripe', name: 'Stripe', icon: '/images/stripe.svg', supportedCurrencies: ['NGN', 'USD'] },
@@ -160,7 +195,8 @@ export default function Checkout() {
 
   const executeAddressSearch = async (query: string, requestId: number) => {
     try {
-      const suggestions = await fetchAddressSuggestions(query, { country: 'ng' });
+      const countryIso = resolveCountryIso2(newAddress.country).toLowerCase();
+      const suggestions = await fetchAddressSuggestions(query, { country: countryIso });
       if (autocompleteRequestSeq.current !== requestId) return;
       setAddressSuggestions(suggestions);
       setHasSearchedSuggestions(true);
@@ -295,15 +331,20 @@ export default function Checkout() {
 
   const selectedAddress = addresses.find(address => address.id === selectedAddressId);
   const destinationCountry = selectedAddress?.country.trim().toLowerCase();
-  const secureShipping = allDomesticEstimates && (destinationCountry === 'nigeria' || destinationCountry === 'ng');
+  const secureShipping = allDomesticEstimates && isSupportedDhlDestinationCountry(destinationCountry);
   const draftCountry = newAddress.country.trim().toLowerCase();
+  const isDraftNigeria = isNigerianCountry(draftCountry);
   const dhlDomesticShipping = shippingProvider === 'dhl' && secureShipping;
-  const postalCodeRequired = shippingProvider === 'dhl' && allDomesticEstimates && (draftCountry === 'nigeria' || draftCountry === 'ng');
+  const postalCodeRequired = shippingProvider === 'dhl' && allDomesticEstimates && isDraftNigeria;
   const isValidDhlPostalCode = (value?: string) => {
     const postalCode = value?.trim() || '';
     return postalCode.length > 0 && postalCode.length <= 12;
   };
-  const selectedAddressNeedsPostalCode = dhlDomesticShipping && !isValidDhlPostalCode(selectedAddress?.postal_code);
+  const selectedAddressNeedsPostalCode = dhlDomesticShipping && (
+    isNigerianCountry(destinationCountry)
+      ? !isValidDhlPostalCode(selectedAddress?.postal_code)
+      : Boolean(selectedAddress?.postal_code && selectedAddress.postal_code.trim().length > 12)
+  );
   const selectedAddressPostalCodeGuidance = selectedAddress?.postal_code?.trim()
     ? 'Update the selected delivery address with a postal code of 12 characters or fewer before continuing with DHL delivery.'
     : 'Add a postal code to the selected delivery address before continuing with DHL delivery.';
@@ -1580,23 +1621,36 @@ export default function Checkout() {
     return /^(0|234)[789]\d{9}$/.test(digits);
   };
 
+  const isValidCheckoutPhone = (value: string): boolean => {
+    if (isDraftNigeria) return isValidNigerianPhone(value);
+    const digits = value.replace(/\D/g, '');
+    return digits.length >= 7 && digits.length <= 15;
+  };
+
   const hasEmail = email.trim().length > 3 && isValidEmail(email);
-  const isAddressVerified = Boolean(
-    verifiedAddressSelection &&
-    newAddress.address_line1.trim() === verifiedAddressSelection.addressLine1.trim() &&
-    newAddress.city.trim().toLowerCase() === verifiedAddressSelection.city.trim().toLowerCase() &&
-    newAddress.state.trim() === verifiedAddressSelection.state.trim()
-  );
+  const isAddressVerified = isDraftNigeria
+    ? Boolean(
+        verifiedAddressSelection &&
+        newAddress.address_line1.trim() === verifiedAddressSelection.addressLine1.trim() &&
+        newAddress.city.trim().toLowerCase() === verifiedAddressSelection.city.trim().toLowerCase() &&
+        newAddress.state.trim() === verifiedAddressSelection.state.trim()
+      )
+    : Boolean(
+        newAddress.address_line1.trim() &&
+        newAddress.city.trim() &&
+        newAddress.state.trim()
+      );
   const isAddressComplete = Boolean(
     newAddress.full_name.trim() &&
     newAddress.phone_number.trim() &&
-    isValidNigerianPhone(newAddress.phone_number) &&
+    isValidCheckoutPhone(newAddress.phone_number) &&
     newAddress.address_line1.trim() &&
     isAddressVerified &&
     !isResolvingSuggestion &&
     newAddress.city.trim() &&
     newAddress.state.trim() &&
     (!postalCodeRequired || isValidDhlPostalCode(newAddress.postal_code)) &&
+    (!newAddress.postal_code?.trim() || newAddress.postal_code.trim().length <= 12) &&
     newAddress.country.trim()
   );
   const missingAddressFields = [
@@ -1609,8 +1663,10 @@ export default function Checkout() {
   ].filter(Boolean);
   const phoneSaveGuidance = !newAddress.phone_number.trim()
     ? 'Enter a phone number so delivery partners can reach you.'
-    : !isValidNigerianPhone(newAddress.phone_number)
-      ? 'Complete the phone number in Nigerian format, e.g. 08012345678.'
+    : !isValidCheckoutPhone(newAddress.phone_number)
+      ? isDraftNigeria
+        ? 'Complete the phone number in Nigerian format, e.g. 08012345678.'
+        : 'Enter a valid international phone number (7–15 digits, e.g. +14155550100).'
       : '';
   const postalCodeSaveGuidance = postalCodeRequired && !isValidDhlPostalCode(newAddress.postal_code)
     ? newAddress.postal_code?.trim()
@@ -1986,30 +2042,64 @@ export default function Checkout() {
                                 />
                               </div>
                               <div>
+                                <label className="text-xs text-gray-500">Country</label>
+                                <select
+                                  aria-label="Country"
+                                  value={newAddress.country || 'Nigeria'}
+                                  onChange={(e) => {
+                                    const nextCountry = e.target.value;
+                                    const switchingBetweenNigeriaAndExport =
+                                      isNigerianCountry(nextCountry) !== isNigerianCountry(newAddress.country);
+                                    setNewAddress(prev => ({
+                                      ...prev,
+                                      country: nextCountry,
+                                      state: switchingBetweenNigeriaAndExport ? '' : prev.state,
+                                    }));
+                                    if (verifiedAddressSelection) {
+                                      setVerifiedAddressSelection(null);
+                                    }
+                                  }}
+                                  className="w-full border-b border-gray-300 bg-white focus:border-primary focus:outline-none py-2 text-sm"
+                                  required
+                                >
+                                  {SUPPORTED_CHECKOUT_COUNTRIES.map((c) => (
+                                    <option key={c.iso2} value={c.name}>{c.name}</option>
+                                  ))}
+                                </select>
+                              </div>
+                              <div>
                                 <label className="text-xs text-gray-500">Phone number <span className="text-red-500">*</span></label>
                                 <div className="flex items-center gap-2 border-b border-gray-300 focus-within:border-primary py-2">
-                                  <span className="inline-flex items-center gap-2 text-xs font-ui text-gray-500">
-                                    <span className="inline-flex h-4 w-6 overflow-hidden rounded-sm border border-gray-200">
-                                      <span className="h-full w-2 bg-[#137a3a]" />
-                                      <span className="h-full w-2 bg-white" />
-                                      <span className="h-full w-2 bg-[#137a3a]" />
+                                  {isDraftNigeria && (
+                                    <span className="inline-flex items-center gap-2 text-xs font-ui text-gray-500">
+                                      <span className="inline-flex h-4 w-6 overflow-hidden rounded-sm border border-gray-200">
+                                        <span className="h-full w-2 bg-[#137a3a]" />
+                                        <span className="h-full w-2 bg-white" />
+                                        <span className="h-full w-2 bg-[#137a3a]" />
+                                      </span>
+                                      +234
                                     </span>
-                                    +234
-                                  </span>
+                                  )}
                                   <input
                                     type="tel"
                                     value={newAddress.phone_number}
                                     onChange={(e) => setNewAddress({ ...newAddress, phone_number: e.target.value })}
                                     className="w-full bg-transparent focus:outline-none text-sm"
                                     inputMode="tel"
-                                    pattern="^(0|234)[789]\\d{9}$"
-                                    title="Enter a valid Nigerian phone number (e.g. 08012345678 or 2348012345678)"
-                                    placeholder="08012345678"
+                                    pattern={isDraftNigeria ? '^(0|234)[789]\\d{9}$' : '^\\+?[0-9\\s\\-()]{7,20}$'}
+                                    title={
+                                      isDraftNigeria
+                                        ? 'Enter a valid Nigerian phone number (e.g. 08012345678 or 2348012345678)'
+                                        : 'Enter a valid international phone number (e.g. +14155550100)'
+                                    }
+                                    placeholder={isDraftNigeria ? '08012345678' : '+14155550100'}
                                     required
                                   />
                                 </div>
                                 <p className={`mt-1 text-xs ${phoneSaveGuidance ? 'text-amber-700' : 'text-gray-500'}`}>
-                                  {phoneSaveGuidance || 'Required for delivery updates. Use 08012345678 or 2348012345678.'}
+                                  {phoneSaveGuidance || (isDraftNigeria
+                                    ? 'Required for delivery updates. Use 08012345678 or 2348012345678.'
+                                    : 'Required for DHL international delivery updates (include country code, e.g. +14155550100).')}
                                 </p>
                               </div>
                               <div className="relative">
@@ -2260,25 +2350,40 @@ export default function Checkout() {
                                 </div>
                                 <div>
                                   <label className="text-xs text-gray-500">State</label>
-                                  <select
-                                    aria-label="State"
-                                    value={newAddress.state}
-                                    onChange={(e) => {
-                                      const nextState = e.target.value;
-                                      setNewAddress({ ...newAddress, state: nextState });
-                                      if (verifiedAddressSelection) {
-                                        setVerifiedAddressSelection({
-                                          ...verifiedAddressSelection,
-                                          state: nextState,
-                                        });
-                                      }
-                                    }}
-                                    className="w-full border-b border-gray-300 bg-white focus:border-primary focus:outline-none py-2 text-sm"
-                                    required
-                                  >
-                                    <option value="" disabled>Select state</option>
-                                    {NIGERIA_STATES.map((state) => <option key={state} value={state}>{state}</option>)}
-                                  </select>
+                                  {isDraftNigeria ? (
+                                    <select
+                                      aria-label="State"
+                                      value={newAddress.state}
+                                      onChange={(e) => {
+                                        const nextState = e.target.value;
+                                        setNewAddress({ ...newAddress, state: nextState });
+                                        if (verifiedAddressSelection) {
+                                          setVerifiedAddressSelection({
+                                            ...verifiedAddressSelection,
+                                            state: nextState,
+                                          });
+                                        }
+                                      }}
+                                      className="w-full border-b border-gray-300 bg-white focus:border-primary focus:outline-none py-2 text-sm"
+                                      required
+                                    >
+                                      <option value="" disabled>Select state</option>
+                                      {NIGERIA_STATES.map((state) => <option key={state} value={state}>{state}</option>)}
+                                    </select>
+                                  ) : (
+                                    <input
+                                      type="text"
+                                      aria-label="State"
+                                      value={newAddress.state}
+                                      onChange={(e) => {
+                                        const nextState = e.target.value;
+                                        setNewAddress({ ...newAddress, state: nextState });
+                                      }}
+                                      placeholder="State / Province / Region"
+                                      className="w-full border-b border-gray-300 focus:border-primary focus:outline-none py-2 text-sm"
+                                      required
+                                    />
+                                  )}
                                 </div>
                               </div>
                               <div>

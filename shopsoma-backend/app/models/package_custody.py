@@ -479,7 +479,7 @@ class OutboundShipmentIntent(Base):
             ondelete="RESTRICT",
         ),
         CheckConstraint(
-            "destination_country_code = 'NG'",
+            "destination_country_code ~ '^[A-Z]{2}$'",
             name="ck_outbound_intents_country_ng",
         ),
         CheckConstraint(

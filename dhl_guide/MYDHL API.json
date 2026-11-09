@@ -1,0 +1,1409 @@
+{
+    "info": {
+        "name": "MYDHL API",
+        "description": "",
+        "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+    },
+    "item": [
+        {
+            "name": "RE01 - Address",
+            "description": "",
+            "item": [
+                {
+                    "name": "R01 - Address Validation",
+                    "description": "",
+                    "event": [],
+                    "auth": {},
+                    "request": {
+                        "auth": {
+                            "type": "inherit",
+                            "inherit": []
+                        },
+                        "method": "GET",
+                        "body": {},
+                        "header": [],
+                        "url": {
+                            "raw": "{{baseUrl}}/address-validate",
+                            "path": [
+                                "address-validate"
+                            ],
+                            "host": [
+                                "{{baseUrl}}"
+                            ],
+                            "query": [
+                                {
+                                    "key": "type",
+                                    "value": "delivery",
+                                    "description": "",
+                                    "type": "string"
+                                },
+                                {
+                                    "key": "countryCode",
+                                    "value": "{{ng_code}}",
+                                    "description": "",
+                                    "type": "string"
+                                },
+                                {
+                                    "key": "postalCode",
+                                    "value": "{{ng_1_postal}}",
+                                    "description": "",
+                                    "type": "string"
+                                },
+                                {
+                                    "key": "cityName",
+                                    "value": "Abuja",
+                                    "description": "",
+                                    "type": "string"
+                                },
+                                {
+                                    "key": "strictValidation",
+                                    "value": "true",
+                                    "description": "",
+                                    "type": "string"
+                                }
+                            ],
+                            "variable": []
+                        }
+                    },
+                    "response": [],
+                    "protocolProfileBehavior": {
+                        "strictSSL": false,
+                        "followRedirects": true
+                    }
+                }
+            ],
+            "event": [
+                {
+                    "listen": "prerequest",
+                    "script": {
+                        "exec": [],
+                        "type": "text/javascript",
+                        "packages": {}
+                    }
+                },
+                {
+                    "listen": "test",
+                    "script": {
+                        "exec": [],
+                        "type": "text/javascript",
+                        "packages": {}
+                    }
+                }
+            ],
+            "auth": {}
+        },
+        {
+            "name": "RE02 - Rates",
+            "description": "",
+            "item": [
+                {
+                    "name": "GR01 - DOMRateWithinNG",
+                    "description": "",
+                    "item": [
+                        {
+                            "name": "R01 - DocumentOrPackage",
+                            "description": "",
+                            "event": [],
+                            "auth": {},
+                            "request": {
+                                "auth": {
+                                    "type": "inherit",
+                                    "inherit": []
+                                },
+                                "method": "POST",
+                                "body": {
+                                    "mode": "raw",
+                                    "raw": "{\n    \"plannedShippingDateAndTime\": \"{{planned_shipping_date}}\", // changeable\n    \"productCode\": \"N\", // fixed\n    \"unitOfMeasurement\": \"metric\", // fixed\n    \"isCustomsDeclarable\": false, // fixed\n    \"nextBusinessDay\": true, // fixed\n    \"accounts\": [\n        {\n            \"number\": \"{{export_acct}}\", // fixed\n            \"typeCode\": \"shipper\" // fixed\n        }\n    ],\n    \"customerDetails\": { // changeable\n        \"shipperDetails\": {\n            \"addressLine1\": \"Address 1 Compulsory, 45characters\",\n            \"addressLine2\": \"Address 2 Optional, 45characters\",\n            \"addressLine3\": \"Address 3 Optional, 45characters\",\n            \"postalCode\": \"\",\n            \"cityName\": \"{{ng_1_city}}\",\n            \"countyName\": \"{{ng_1_county}}\",\n            \"countryCode\": \"{{ng_code}}\"\n        },\n        \"receiverDetails\": {\n            \"addressLine1\": \"Address 1 Compulsory, 45characters\",\n            \"addressLine2\": \"Address 2 Optional, 45characters\",\n            \"addressLine3\": \"Address 3 Optional, 45characters\",\n            \"postalCode\": \"{{ng_2_postal}}\",\n            \"cityName\": \"{{ng_2_city}}\",\n            \"countyName\": \"{{ng_2_county}}\",\n            \"countryCode\": \"{{ng_code}}\"\n        }\n    },\n    \"packages\": [\n        { // changeable\n            \"weight\": 8,\n            \"dimensions\": {\n                \"length\": 30,\n                \"width\": 30,\n                \"height\": 30\n            }\n        }\n    ]\n}",
+                                    "options": {
+                                        "raw": {
+                                            "language": "json"
+                                        }
+                                    }
+                                },
+                                "header": [],
+                                "url": {
+                                    "raw": "{{baseUrl}}/rates",
+                                    "path": [
+                                        "rates"
+                                    ],
+                                    "host": [
+                                        "{{baseUrl}}"
+                                    ],
+                                    "query": [],
+                                    "variable": []
+                                }
+                            },
+                            "response": [],
+                            "protocolProfileBehavior": {
+                                "strictSSL": false,
+                                "followRedirects": true
+                            }
+                        }
+                    ],
+                    "event": [
+                        {
+                            "listen": "prerequest",
+                            "script": {
+                                "exec": [],
+                                "type": "text/javascript",
+                                "packages": {}
+                            }
+                        },
+                        {
+                            "listen": "test",
+                            "script": {
+                                "exec": [],
+                                "type": "text/javascript",
+                                "packages": {}
+                            }
+                        }
+                    ],
+                    "auth": {}
+                },
+                {
+                    "name": "GR02 - EXPRateNGtoGH",
+                    "description": "",
+                    "item": [
+                        {
+                            "name": "R01 - Document",
+                            "description": "",
+                            "event": [],
+                            "auth": {},
+                            "request": {
+                                "auth": {
+                                    "type": "inherit",
+                                    "inherit": []
+                                },
+                                "method": "POST",
+                                "body": {
+                                    "mode": "raw",
+                                    "raw": "{\n  \"plannedShippingDateAndTime\": \"{{planned_shipping_date}}\", // changeable\n  \"productCode\": \"D\", // fixed\n  \"unitOfMeasurement\": \"metric\", // fixed\n  \"isCustomsDeclarable\": false, // fixed\n  \"nextBusinessDay\": true, // fixed\n  \"customerDetails\": { // changeable\n    \"shipperDetails\": {\n      \"addressLine1\": \"Address 1 Compulsory, 45characters\",\n      \"addressLine2\": \"Address 2 Optional, 45characters\",\n      \"addressLine3\": \"Address 3 Optional, 45characters\",\n      \"postalCode\": \"{{ng_1_postal}}\",\n      \"cityName\": \"{{ng_1_city}}\",\n      \"countyName\": \"{{ng_1_county}}\",\n      \"countryCode\": \"{{ng_code}}\"\n    },\n    \"receiverDetails\": {\n      \"addressLine1\": \"Address 1 Compulsory, 45characters\",\n      \"addressLine2\": \"Address 2 Optional, 45characters\",\n      \"addressLine3\": \"Address 3 Optional, 45characters\",\n      \"postalCode\": \"{{gh_1_postal}}\",\n      \"cityName\": \"{{gh_1_city}}\",\n      \"countyName\": \"{{gh_1_county}}\",\n      \"countryCode\": \"{{gh_code}}\"\n    }\n  },\n  \"accounts\": [\n    {\n      \"number\": \"{{export_acct}}\", // fixed\n      \"typeCode\": \"shipper\" // fixed\n    }\n  ],\n  \"packages\": [\n    { // changeable\n      \"weight\": 1,\n      \"dimensions\": {\n        \"length\": 15,\n        \"width\": 5,\n        \"height\": 10\n      }\n    }\n  ]\n}",
+                                    "options": {
+                                        "raw": {
+                                            "language": "json"
+                                        }
+                                    }
+                                },
+                                "header": [],
+                                "url": {
+                                    "raw": "{{baseUrl}}/rates",
+                                    "path": [
+                                        "rates"
+                                    ],
+                                    "host": [
+                                        "{{baseUrl}}"
+                                    ],
+                                    "query": [],
+                                    "variable": []
+                                }
+                            },
+                            "response": [],
+                            "protocolProfileBehavior": {
+                                "strictSSL": false,
+                                "followRedirects": true
+                            }
+                        },
+                        {
+                            "name": "R02 - Package",
+                            "description": "",
+                            "event": [],
+                            "auth": {},
+                            "request": {
+                                "auth": {
+                                    "type": "inherit",
+                                    "inherit": []
+                                },
+                                "method": "POST",
+                                "body": {
+                                    "mode": "raw",
+                                    "raw": "{\n  \"plannedShippingDateAndTime\": \"{{planned_shipping_date}}\", // changeable\n  \"productCode\": \"P\", // fixed\n  \"unitOfMeasurement\": \"metric\", // fixed\n  \"isCustomsDeclarable\": true, // fixed\n  \"nextBusinessDay\": true, // fixed\n  \"accounts\": [\n    {\n      \"number\": \"{{export_acct}}\", // fixed\n      \"typeCode\": \"shipper\" // fixed\n    }\n  ],\n  \"customerDetails\": { // changeable\n    \"shipperDetails\": {\n      \"addressLine1\": \"Address 1 Compulsory, 45characters\",\n      \"addressLine2\": \"Address 2 Optional, 45characters\",\n      \"addressLine3\": \"Address 3 Optional, 45characters\",\n      \"postalCode\": \"{{ng_1_postal}}\",\n      \"cityName\": \"{{ng_1_city}}\",\n      \"countyName\": \"{{ng_1_county}}\",\n      \"countryCode\": \"{{ng_code}}\"\n    },\n    \"receiverDetails\": {\n      \"addressLine1\": \"Address 1 Compulsory, 45characters\",\n      \"addressLine2\": \"Address 2 Optional, 45characters\",\n      \"addressLine3\": \"Address 3 Optional, 45characters\",\n      \"postalCode\": \"{{gh_1_postal}}\",\n      \"cityName\": \"{{gh_1_city}}\",\n      \"countyName\": \"{{gh_1_county}}\",\n      \"countryCode\": \"{{gh_code}}\"\n    }\n  },\n  \"packages\": [\n    { // changeable\n      \"weight\": 4.0,\n      \"dimensions\": {\n        \"length\": 15,\n        \"width\": 30,\n        \"height\": 10\n      }\n    },\n    { // changeable\n      \"weight\": 4.0,\n      \"dimensions\": {\n        \"length\": 15,\n        \"width\": 30,\n        \"height\": 15\n      }\n    },\n    { // changeable\n      \"weight\": 4.0,\n      \"dimensions\": {\n        \"length\": 15,\n        \"width\": 30,\n        \"height\": 10\n      }\n    }\n  ]\n}",
+                                    "options": {
+                                        "raw": {
+                                            "language": "json"
+                                        }
+                                    }
+                                },
+                                "header": [],
+                                "url": {
+                                    "raw": "{{baseUrl}}/rates",
+                                    "path": [
+                                        "rates"
+                                    ],
+                                    "host": [
+                                        "{{baseUrl}}"
+                                    ],
+                                    "query": [],
+                                    "variable": []
+                                }
+                            },
+                            "response": [],
+                            "protocolProfileBehavior": {
+                                "strictSSL": false,
+                                "followRedirects": true
+                            }
+                        }
+                    ],
+                    "event": [
+                        {
+                            "listen": "prerequest",
+                            "script": {
+                                "exec": [],
+                                "type": "text/javascript",
+                                "packages": {}
+                            }
+                        },
+                        {
+                            "listen": "test",
+                            "script": {
+                                "exec": [],
+                                "type": "text/javascript",
+                                "packages": {}
+                            }
+                        }
+                    ],
+                    "auth": {
+                        "type": "inherit",
+                        "inherit": []
+                    }
+                },
+                {
+                    "name": "GR03 - IMPRateGHtoNG",
+                    "description": "",
+                    "item": [
+                        {
+                            "name": "R01 - Document",
+                            "description": "",
+                            "event": [],
+                            "auth": {},
+                            "request": {
+                                "auth": {
+                                    "type": "inherit",
+                                    "inherit": []
+                                },
+                                "method": "POST",
+                                "body": {
+                                    "mode": "raw",
+                                    "raw": "{\n    \"plannedShippingDateAndTime\": \"{{planned_shipping_date}}\", // changeable\n    \"productCode\": \"D\", // fixed\n    \"payerCountryCode\": \"NG\", // fixed\n    \"unitOfMeasurement\": \"metric\", // fixed\n    \"isCustomsDeclarable\": false, // fixed\n    \"nextBusinessDay\": true, // fixed\n    \"accounts\": [ // fixed\n        {\n            \"number\": \"{{import_acct}}\",\n            \"typeCode\": \"shipper\"\n        }\n    ],\n    \"customerDetails\": { // changeable\n        \"shipperDetails\": {\n            \"addressLine1\": \"Address 1 Compulsory, 45characters\",\n            \"addressLine2\": \"Address 2 Optional, 45characters\",\n            \"addressLine3\": \"Address 3 Optional, 45characters\",\n            \"postalCode\": \"{{gh_1_postal}}\",\n            \"cityName\": \"{{gh_1_city}}\",\n            \"countyName\": \"{{gh_1_county}}\",\n            \"countryCode\": \"{{gh_code}}\"\n        },\n        \"receiverDetails\": {\n            \"addressLine1\": \"Address 1 Compulsory, 45characters\",\n            \"addressLine2\": \"Address 2 Optional, 45characters\",\n            \"addressLine3\": \"Address 3 Optional, 45characters\",\n            \"postalCode\": \"{{ng_1_postal}}\",\n            \"cityName\": \"{{ng_1_city}}\",\n            \"countyName\": \"{{ng_1_county}}\",\n            \"countryCode\": \"{{ng_code}}\"\n        }\n    },\n    \"packages\": [\n        { // changeable\n            \"weight\": 1.0,\n            \"dimensions\": {\n                \"length\": 30,\n                \"width\": 10,\n                \"height\": 10\n            }\n        }\n    ]\n}",
+                                    "options": {
+                                        "raw": {
+                                            "language": "json"
+                                        }
+                                    }
+                                },
+                                "header": [],
+                                "url": {
+                                    "raw": "{{baseUrl}}/rates",
+                                    "path": [
+                                        "rates"
+                                    ],
+                                    "host": [
+                                        "{{baseUrl}}"
+                                    ],
+                                    "query": [],
+                                    "variable": []
+                                }
+                            },
+                            "response": [],
+                            "protocolProfileBehavior": {
+                                "strictSSL": false,
+                                "followRedirects": true
+                            }
+                        },
+                        {
+                            "name": "R02 - Package",
+                            "description": "",
+                            "event": [],
+                            "auth": {},
+                            "request": {
+                                "auth": {
+                                    "type": "inherit",
+                                    "inherit": []
+                                },
+                                "method": "POST",
+                                "body": {
+                                    "mode": "raw",
+                                    "raw": "{\n    \"plannedShippingDateAndTime\": \"{{planned_shipping_date}}\", // changeable\n    \"productCode\": \"P\", // fixed\n    \"payerCountryCode\": \"{{ng_code}}\", // fixed\n    \"unitOfMeasurement\": \"metric\", // fixed\n    \"isCustomsDeclarable\": true, // fixed\n    \"nextBusinessDay\": true, // fixed\n    \"accounts\": [\n        { // fixed\n            \"number\": \"{{import_acct}}\",\n            \"typeCode\": \"shipper\"\n        }\n    ],\n    \"customerDetails\": { // changeable\n        \"shipperDetails\": {\n            \"addressLine1\": \"Address 1 Compulsory, 45characters\",\n            \"addressLine2\": \"Address 2 Optional, 45characters\",\n            \"addressLine3\": \"Address 3 Optional, 45characters\",\n            \"postalCode\": \"{{gh_1_postal}}\",\n            \"cityName\": \"{{gh_1_city}}\",\n            \"countyName\": \"{{gh_1_county}}\",\n            \"countryCode\": \"{{gh_code}}\"\n        },\n        \"receiverDetails\": {\n            \"addressLine1\": \"Address 1 Compulsory, 45characters\",\n            \"addressLine2\": \"Address 2 Optional, 45characters\",\n            \"addressLine3\": \"Address 3 Optional, 45characters\",\n            \"postalCode\": \"{{ng_1_postal}}\",\n            \"cityName\": \"{{ng_1_city}}\",\n            \"countyName\": \"{{ng_1_county}}\",\n            \"countryCode\": \"{{ng_code}}\"\n        }\n    },\n    \"packages\": [\n        { // changeable\n            \"weight\": 8.0,\n            \"dimensions\": {\n                \"length\": 30,\n                \"width\": 30,\n                \"height\": 30\n            }\n        }\n    ]\n}",
+                                    "options": {
+                                        "raw": {
+                                            "language": "json"
+                                        }
+                                    }
+                                },
+                                "header": [],
+                                "url": {
+                                    "raw": "{{baseUrl}}/rates",
+                                    "path": [
+                                        "rates"
+                                    ],
+                                    "host": [
+                                        "{{baseUrl}}"
+                                    ],
+                                    "query": [],
+                                    "variable": []
+                                }
+                            },
+                            "response": [],
+                            "protocolProfileBehavior": {
+                                "strictSSL": false,
+                                "followRedirects": true
+                            }
+                        }
+                    ],
+                    "event": [
+                        {
+                            "listen": "prerequest",
+                            "script": {
+                                "exec": [],
+                                "type": "text/javascript",
+                                "packages": {}
+                            }
+                        },
+                        {
+                            "listen": "test",
+                            "script": {
+                                "exec": [],
+                                "type": "text/javascript",
+                                "packages": {}
+                            }
+                        }
+                    ],
+                    "auth": {}
+                },
+                {
+                    "name": "GR04 - DOMRateWithinGH",
+                    "description": "",
+                    "item": [
+                        {
+                            "name": "R01 - DocumentOrPackage",
+                            "description": "",
+                            "event": [],
+                            "auth": {},
+                            "request": {
+                                "auth": {
+                                    "type": "inherit",
+                                    "inherit": []
+                                },
+                                "method": "POST",
+                                "body": {
+                                    "mode": "raw",
+                                    "raw": "{\n    \"plannedShippingDateAndTime\": \"{{planned_shipping_date}}\", // changeable\n    \"productCode\": \"N\", // fixed\n    \"unitOfMeasurement\": \"metric\", // fixed\n    \"isCustomsDeclarable\": false, // fixed\n    \"nextBusinessDay\": true, // fixed\n    \"accounts\": [\n        {\n            \"number\": \"{{export_acct}}\", // fixed\n            \"typeCode\": \"shipper\" // fixed\n        }\n    ],\n    \"customerDetails\": { // changeable\n        \"shipperDetails\": {\n            \"addressLine1\": \"Address 1 Compulsory, 45characters\",\n            \"addressLine2\": \"Address 2 Optional, 45characters\",\n            \"addressLine3\": \"Address 3 Optional, 45characters\",\n            \"postalCode\": \"{{gh_1_postal}}\",\n            \"cityName\": \"{{gh_1_city}}\",\n            \"countyName\": \"{{gh_1_county}}\",\n            \"countryCode\": \"{{gh_code}}\"\n        },\n        \"receiverDetails\": {\n            \"addressLine1\": \"Address 1 Compulsory, 45characters\",\n            \"addressLine2\": \"Address 2 Optional, 45characters\",\n            \"addressLine3\": \"Address 3 Optional, 45characters\",\n            \"postalCode\": \"{{gh_2_postal}}\",\n            \"cityName\": \"{{gh_2_city}}\",\n            \"countyName\": \"{{gh_2_county}}\",\n            \"countryCode\": \"{{gh_code}}\"\n        }\n    },\n    \"packages\": [\n        { // changeable\n            \"weight\": 8,\n            \"dimensions\": {\n                \"length\": 30,\n                \"width\": 30,\n                \"height\": 30\n            }\n        }\n    ]\n}",
+                                    "options": {
+                                        "raw": {
+                                            "language": "json"
+                                        }
+                                    }
+                                },
+                                "header": [],
+                                "url": {
+                                    "raw": "{{baseUrl}}/rates",
+                                    "path": [
+                                        "rates"
+                                    ],
+                                    "host": [
+                                        "{{baseUrl}}"
+                                    ],
+                                    "query": [],
+                                    "variable": []
+                                }
+                            },
+                            "response": [],
+                            "protocolProfileBehavior": {
+                                "strictSSL": false,
+                                "followRedirects": true
+                            }
+                        }
+                    ],
+                    "event": [
+                        {
+                            "listen": "prerequest",
+                            "script": {
+                                "exec": [],
+                                "type": "text/javascript",
+                                "packages": {}
+                            }
+                        },
+                        {
+                            "listen": "test",
+                            "script": {
+                                "exec": [],
+                                "type": "text/javascript",
+                                "packages": {}
+                            }
+                        }
+                    ],
+                    "auth": {}
+                }
+            ],
+            "event": [
+                {
+                    "listen": "prerequest",
+                    "script": {
+                        "exec": [],
+                        "type": "text/javascript",
+                        "packages": {}
+                    }
+                },
+                {
+                    "listen": "test",
+                    "script": {
+                        "exec": [],
+                        "type": "text/javascript",
+                        "packages": {}
+                    }
+                }
+            ],
+            "auth": {}
+        },
+        {
+            "name": "RE03 - Shipments",
+            "description": "",
+            "item": [
+                {
+                    "name": "GR01 - DOMShipmentWithinNG",
+                    "description": "",
+                    "item": [
+                        {
+                            "name": "R01 - DocumentOrPackage",
+                            "description": "",
+                            "event": [],
+                            "auth": {},
+                            "request": {
+                                "auth": {
+                                    "type": "inherit",
+                                    "inherit": []
+                                },
+                                "method": "POST",
+                                "body": {
+                                    "mode": "raw",
+                                    "raw": "{\n  \"plannedShippingDateAndTime\": \"{{planned_shipping_date}}\",\n  \"productCode\": \"N\",\n  \"pickup\": {\n    \"isRequested\": false\n  },\n  \"outputImageProperties\": {\n    \"allDocumentsInOneImage\": true,\n    \"encodingFormat\": \"pdf\",\n    \"imageOptions\": [\n      {\n        \"templateName\": \"ECOM26_84_A4_001\",\n        \"typeCode\": \"label\"\n      },\n      {\n        \"templateName\": \"ARCH_8X4_A4_002\",\n        \"isRequested\": true,\n        \"typeCode\": \"waybillDoc\",\n        \"hideAccountNumber\": true\n      }\n    ]\n  },\n  \"accounts\": [\n    {\n      \"number\": \"{{export_acct}}\",\n      \"typeCode\": \"shipper\"\n    }\n  ],\n  \"customerDetails\": {\n    \"shipperDetails\": {\n      \"postalAddress\": {\n        \"addressLine1\": \"Address 1 Compulsory, 45characters\",\n        \"addressLine2\": \"Address 2 Optional, 45characters\",\n        \"addressLine3\": \"Address 3 Optional, 45characters\",\n        \"postalCode\": \"{{ng_1_postal}}\",\n        \"cityName\": \"{{ng_1_city}}\",\n        \"countyName\": \"{{ng_1_county}}\",\n        \"countryCode\": \"{{ng_code}}\"\n      },\n      \"contactInformation\": {\n        \"fullName\": \"Shipper Name\",\n        \"companyName\": \"Shipper Company Name\",\n        \"email\": \"shipperemail@example.com\",\n        \"phone\": \"+2348012345678\"\n      },\n      \"typeCode\": \"business\"\n    },\n    \"receiverDetails\": {\n      \"postalAddress\": {\n        \"addressLine1\": \"Address 1 Compulsory, 45characters\",\n        \"addressLine2\": \"Address 2 Optional, 45characters\",\n        \"addressLine3\": \"Address 3 Optional, 45characters\",\n        \"postalCode\": \"{{ng_2_postal}}\",\n        \"cityName\": \"{{ng_2_city}}\",\n        \"countyName\": \"{{ng_2_county}}\",\n        \"countryCode\": \"{{ng_code}}\"\n      },\n      \"contactInformation\": {\n        \"fullName\": \"Receiver Name\",\n        \"companyName\": \"Receiver Company Name\",\n        \"email\": \"receivermail@example.com\",\n        \"phone\": \"+2348087654321\"\n      },\n      \"typeCode\": \"business\"\n    }\n  },\n  \"content\": {\n    \"packages\": [\n      {\n        \"weight\": 8.0,\n        \"dimensions\": {\n          \"length\": 30,\n          \"width\": 30,\n          \"height\": 30\n        }\n      }\n    ],\n    \"isCustomsDeclarable\": false,\n    \"description\": \"Contents Description 70characters\",\n    \"incoterm\": \"DAP\",\n    \"unitOfMeasurement\": \"metric\"\n  }\n}",
+                                    "options": {
+                                        "raw": {
+                                            "language": "json"
+                                        }
+                                    }
+                                },
+                                "header": [],
+                                "url": {
+                                    "raw": "{{baseUrl}}/shipments",
+                                    "path": [
+                                        "shipments"
+                                    ],
+                                    "host": [
+                                        "{{baseUrl}}"
+                                    ],
+                                    "query": [],
+                                    "variable": []
+                                }
+                            },
+                            "response": [],
+                            "protocolProfileBehavior": {
+                                "strictSSL": false,
+                                "followRedirects": true
+                            }
+                        }
+                    ],
+                    "event": [
+                        {
+                            "listen": "prerequest",
+                            "script": {
+                                "exec": [],
+                                "type": "text/javascript",
+                                "packages": {}
+                            }
+                        },
+                        {
+                            "listen": "test",
+                            "script": {
+                                "exec": [],
+                                "type": "text/javascript",
+                                "packages": {}
+                            }
+                        }
+                    ],
+                    "auth": {}
+                },
+                {
+                    "name": "GR02 - EXPShipmentNGtoGH",
+                    "description": "",
+                    "item": [
+                        {
+                            "name": "R01 - Document",
+                            "description": "",
+                            "event": [],
+                            "auth": {},
+                            "request": {
+                                "auth": {
+                                    "type": "inherit",
+                                    "inherit": []
+                                },
+                                "method": "POST",
+                                "body": {
+                                    "mode": "raw",
+                                    "raw": "{\n  \"plannedShippingDateAndTime\": \"{{planned_shipping_date}}\", // changeable\n  \"productCode\": \"D\", // fixed\n  \"accounts\": [\n    { // fixed\n      \"number\": \"{{export_acct}}\",\n      \"typeCode\": \"shipper\"\n    }\n  ],\n  \"pickup\": { // fixed\n    \"isRequested\": false\n  },\n  \"outputImageProperties\": { // fixed\n    \"allDocumentsInOneImage\": true,\n    \"encodingFormat\": \"pdf\",\n    \"imageOptions\": [\n      {\n        \"templateName\": \"ECOM26_84_A4_001\",\n        \"typeCode\": \"label\"\n      },\n      {\n        \"templateName\": \"ARCH_8X4_A4_002\",\n        \"isRequested\": true,\n        \"hideAccountNumber\": true,\n        \"typeCode\": \"waybillDoc\"\n      },\n      {\n        \"templateName\": \"COMMERCIAL_INVOICE_P_10\",\n        \"invoiceType\": \"commercial\",\n        \"languageCode\": \"eng\",\n        \"isRequested\": true,\n        \"typeCode\": \"invoice\"\n      }\n    ]\n  },\n  \"customerDetails\": { // changeable\n    \"shipperDetails\": {\n      \"postalAddress\": {\n        \"addressLine1\": \"Address 1 Compulsory, 45characters\",\n        \"addressLine2\": \"Address 2 Optional, 45characters\",\n        \"addressLine3\": \"Address 3 Optional, 45characters\",\n        \"postalCode\": \"{{ng_1_postal}}\",\n        \"cityName\": \"{{ng_1_city}}\",\n        \"countyName\": \"{{ng_1_county}}\",\n        \"countryCode\": \"{{ng_code}}\"\n      },\n      \"contactInformation\": {\n        \"fullName\": \"Shipper Name\",\n        \"companyName\": \"Shipper Company Name\",\n        \"email\": \"shipperemail@example.com\",\n        \"phone\": \"+2348012345678\"\n      },\n      \"typeCode\": \"business\"\n    },\n    \"receiverDetails\": {\n      \"postalAddress\": {\n        \"addressLine1\": \"Address 1 Compulsory, 45characters\",\n        \"addressLine2\": \"Address 2 Optional, 45characters\",\n        \"addressLine3\": \"Address 3 Optional, 45characters\",\n        \"postalCode\": \"{{gh_1_postal}}\",\n        \"cityName\": \"{{gh_1_city}}\",\n        \"countyName\": \"{{gh_1_county}}\",\n        \"countryCode\": \"{{gh_code}}\"\n      },\n      \"contactInformation\": {\n        \"fullName\": \"Receiver Name\",\n        \"companyName\": \"Receiver Company Name\",\n        \"email\": \"receivermail@example.com\",\n        \"phone\": \"+2348087654321\"\n      },\n      \"typeCode\": \"business\"\n    }\n  },\n  \"content\": {\n    \"packages\": [ // changeable\n      {\n        \"weight\": 1,\n        \"dimensions\": {\n          \"length\": 30,\n          \"width\": 10,\n          \"height\": 10\n        }\n      }\n    ],\n    \"exportDeclaration\": { // changeable\n      \"lineItems\": [\n        {\n          \"number\": 1,\n          \"quantity\": {\n            \"unitOfMeasurement\": \"PCS\", // check documentation for other unit types\n            \"value\": 1\n          },\n          \"price\": 15000.00,\n          \"description\": \"Item description can contain 512characters\",\n          \"weight\": {\n            \"netValue\": 1,\n            \"grossValue\": 1\n          },\n          \"commodityCodes\": [\n            {\n              \"typeCode\": \"outbound\",\n              \"value\": \"123456.78.90\" // valid HS Code for item\n            },\n            {\n              \"typeCode\": \"inbound\",\n              \"value\": \"123456.78.90\" // valid HS Code for item\n            }\n          ],\n          \"exportReasonType\": \"permanent\",\n          \"manufacturerCountry\": \"{{ng_code}}\"\n        }\n      ],\n      \"exportReason\": \"Permanent\",\n      \"invoice\": {\n        \"number\": \"#INVPATTERN\",\n        \"date\": \"{{date}}\"\n      },\n      \"placeOfIncoterm\": \"{{gh_1_city}}\",\n      \"exportReasonType\": \"permanent\",\n      \"shipmentType\": \"personal\"\n    },\n    \"unitOfMeasurement\": \"metric\",\n    \"isCustomsDeclarable\": false,\n    \"incoterm\": \"DAP\",\n    \"description\": \"Content Description can contain 70characters\",\n    \"declaredValueCurrency\": \"{{ng_currency}}\", // the currency of the DHL account country\n    \"declaredValue\": 15000.00 // total prices of each line item must equal to the declared value\n  },\n  \"customerReferences\": [\n    {\n      \"value\": \"Customer Reference 35characters\",\n      \"typeCode\": \"CU\"\n    }\n  ]\n}",
+                                    "options": {
+                                        "raw": {
+                                            "language": "json"
+                                        }
+                                    }
+                                },
+                                "header": [],
+                                "url": {
+                                    "raw": "{{baseUrl}}/shipments",
+                                    "path": [
+                                        "shipments"
+                                    ],
+                                    "host": [
+                                        "{{baseUrl}}"
+                                    ],
+                                    "query": [],
+                                    "variable": []
+                                }
+                            },
+                            "response": [],
+                            "protocolProfileBehavior": {
+                                "strictSSL": false,
+                                "followRedirects": true
+                            }
+                        },
+                        {
+                            "name": "R02 - Package",
+                            "description": "",
+                            "event": [],
+                            "auth": {},
+                            "request": {
+                                "auth": {
+                                    "type": "inherit",
+                                    "inherit": []
+                                },
+                                "method": "POST",
+                                "body": {
+                                    "mode": "raw",
+                                    "raw": "{\n  \"plannedShippingDateAndTime\": \"{{planned_shipping_date}}\",\n  \"productCode\": \"P\",\n  \"accounts\": [\n    {\n      \"number\": \"{{export_acct}}\",\n      \"typeCode\": \"shipper\"\n    }\n  ],\n  \"pickup\": {\n    \"isRequested\": false // do not change\n  },\n  \"outputImageProperties\": { // must be three (3) for international shipments\n    \"allDocumentsInOneImage\": true,\n    \"encodingFormat\": \"pdf\",\n    \"imageOptions\": [\n      {\n        \"templateName\": \"ECOM26_84_A4_001\",\n        \"typeCode\": \"label\"\n      },\n      {\n        \"templateName\": \"ARCH_8X4_A4_002\",\n        \"isRequested\": true,\n        \"hideAccountNumber\": true,\n        \"typeCode\": \"waybillDoc\"\n      },\n      {\n        \"templateName\": \"COMMERCIAL_INVOICE_P_10\",\n        \"invoiceType\": \"commercial\",\n        \"languageCode\": \"eng\",\n        \"isRequested\": true,\n        \"typeCode\": \"invoice\"\n      }\n    ]\n  },\n  \"customerDetails\": {\n    \"shipperDetails\": {\n      \"postalAddress\": {\n        \"addressLine1\": \"Address 1 Compulsory, 45characters\",\n        \"addressLine2\": \"Address 2 Optional, 45characters\",\n        \"addressLine3\": \"Address 3 Optional, 45characters\",\n        \"postalCode\": \"{{ng_1_postal}}\",\n        \"cityName\": \"{{ng_1_city}}\",\n        \"countyName\": \"{{ng_1_county}}\",\n        \"countryCode\": \"{{ng_code}}\"\n      },\n      \"contactInformation\": {\n        \"fullName\": \"Shipper Name\",\n        \"companyName\": \"Shipper Company Name\",\n        \"email\": \"shipperemail@example.com\",\n        \"phone\": \"+2348012345678\"\n      },\n      \"typeCode\": \"business\"\n    },\n    \"receiverDetails\": {\n      \"postalAddress\": {\n        \"addressLine1\": \"Address 1 Compulsory, 45characters\",\n        \"addressLine2\": \"Address 2 Optional, 45characters\",\n        \"addressLine3\": \"Address 3 Optional, 45characters\",\n        \"postalCode\": \"{{gh_1_postal}}\",\n        \"cityName\": \"{{gh_1_city}}\",\n        \"countyName\": \"{{gh_1_county}}\",\n        \"countryCode\": \"{{gh_code}}\"\n      },\n      \"contactInformation\": {\n        \"fullName\": \"Receiver Name\",\n        \"companyName\": \"Receiver Company Name\",\n        \"email\": \"receivermail@example.com\",\n        \"phone\": \"+23348087654321\"\n      },\n      \"typeCode\": \"business\"\n    }\n  },\n  \"content\": {\n    \"packages\": [ // weight of each line item should equal package weight\n      {\n        \"weight\": 12.0,\n        \"dimensions\": {\n          \"length\": 30,\n          \"width\": 30,\n          \"height\": 40\n        }\n      }\n    ],\n    \"exportDeclaration\": {\n      \"lineItems\": [\n        {\n          \"number\": 1,\n          \"quantity\": {\n            \"unitOfMeasurement\": \"PCS\", // check documentation for other unit types\n            \"value\": 10\n          },\n          \"price\": 12000.00,\n          \"description\": \"Item 1 long description can contain 512characters\",\n          \"weight\": {\n            \"netValue\": 4.0,\n            \"grossValue\": 4.0\n          },\n          \"commodityCodes\": [\n            {\n              \"typeCode\": \"inbound\",\n              \"value\": \"85171300\"\n            },\n            {\n              \"typeCode\": \"outbound\",\n              \"value\": \"85171300\"\n            }\n          ],\n          \"customerReferences\": [\n            {\n              \"typeCode\": \"AFE\",\n              \"value\": \"ASCII characters max 35\"\n            }\n          ],\n          \"exportReasonType\": \"permanent\",\n          \"manufacturerCountry\": \"{{ng_code}}\"\n        },\n        {\n          \"number\": 2,\n          \"quantity\": {\n            \"unitOfMeasurement\": \"PCS\",\n            \"value\": 1\n          },\n          \"price\": 60000.00,\n          \"description\": \"Item 2 long description can contain 512characters\",\n          \"weight\": {\n            \"netValue\": 2.0,\n            \"grossValue\": 2.0\n          },\n          \"commodityCodes\": [\n            {\n              \"typeCode\": \"inbound\",\n              \"value\": \"67041100\"\n            },\n            {\n              \"typeCode\": \"outbound\",\n              \"value\": \"67041100\"\n            }\n          ],\n          \"customerReferences\": [\n            {\n              \"typeCode\": \"AFE\",\n              \"value\": \"ASCII characters max 35\"\n            }\n          ],\n          \"exportReasonType\": \"permanent\",\n          \"manufacturerCountry\": \"{{ng_code}}\"\n        },\n        {\n          \"number\": 3,\n          \"quantity\": {\n            \"unitOfMeasurement\": \"PCS\",\n            \"value\": 1\n          },\n          \"price\": 20000.00,\n          \"description\": \"Item 3 long description can contain 512characters\",\n          \"weight\": {\n            \"netValue\": 2.0,\n            \"grossValue\": 2.0\n          },\n          \"commodityCodes\": [\n            {\n              \"typeCode\": \"inbound\",\n              \"value\": \"64041100\"\n            },\n            {\n              \"typeCode\": \"outbound\",\n              \"value\": \"64041100\"\n            }\n          ],\n          \"customerReferences\": [\n            {\n              \"typeCode\": \"AFE\",\n              \"value\": \"ASCII characters max 35\"\n            }\n          ],\n          \"exportReasonType\": \"permanent\",\n          \"manufacturerCountry\": \"{{ng_code}}\"\n        } // total prices of each line item must equal to the declared value\n      ],\n      \"exportReason\": \"Permanent\",\n      \"additionalCharges\": [ // the rate cost generated from Rates API\n        {\n          \"value\": 259760.96,\n          \"typeCode\": \"freight\"\n        }\n      ],\n      \"invoice\": {\n        \"number\": \"#INVPATTERN\",\n        \"date\": \"{{date}}\"\n      },\n      \"remarks\": [ // optional, character limit: 45\n        {\n          \"value\": \"Right side up only\"\n        }\n      ],\n      \"placeOfIncoterm\": \"{{gh_1_city}}\", // the destination city\n      \"exportReasonType\": \"permanent\",\n      \"shipmentType\": \"commercial\"\n    },\n    \"unitOfMeasurement\": \"metric\",\n    \"isCustomsDeclarable\": true,\n    \"incoterm\": \"DAP\",\n    \"description\": \"Contents Description 70characters\",\n    \"declaredValueCurrency\": \"{{ng_currency}}\", // the currency of the DHL account country\n    \"declaredValue\": 200000.00 // total prices of each line item must equal to the declared value\n  },\n  \"valueAddedServices\": [ // optional for insurance\n    {\n      \"serviceCode\": \"II\",\n      \"value\": 20000.00, // refere to account officer for calculation\n      \"currency\": \"{{ng_currency}}\" // the currency of the DHL account country\n    }\n  ],\n  \"customerReferences\": [\n    {\n      \"value\": \"Customer Reference 35characters\",\n      \"typeCode\": \"CU\"\n    }\n  ]\n}",
+                                    "options": {
+                                        "raw": {
+                                            "language": "json"
+                                        }
+                                    }
+                                },
+                                "header": [],
+                                "url": {
+                                    "raw": "{{baseUrl}}/shipments",
+                                    "path": [
+                                        "shipments"
+                                    ],
+                                    "host": [
+                                        "{{baseUrl}}"
+                                    ],
+                                    "query": [],
+                                    "variable": []
+                                }
+                            },
+                            "response": [],
+                            "protocolProfileBehavior": {
+                                "strictSSL": false,
+                                "followRedirects": true
+                            }
+                        }
+                    ],
+                    "event": [
+                        {
+                            "listen": "prerequest",
+                            "script": {
+                                "exec": [],
+                                "type": "text/javascript",
+                                "packages": {}
+                            }
+                        },
+                        {
+                            "listen": "test",
+                            "script": {
+                                "exec": [],
+                                "type": "text/javascript",
+                                "packages": {}
+                            }
+                        }
+                    ],
+                    "auth": {}
+                },
+                {
+                    "name": "GR03 - IMPShipmentGHtoNG",
+                    "description": "",
+                    "item": [
+                        {
+                            "name": "R01 - Document",
+                            "description": "",
+                            "event": [],
+                            "auth": {},
+                            "request": {
+                                "auth": {
+                                    "type": "noauth",
+                                    "noauth": []
+                                },
+                                "method": "POST",
+                                "body": {
+                                    "mode": "raw",
+                                    "raw": "{\n  \"plannedShippingDateAndTime\": \"{{planned_shipping_date}}\",\n  \"productCode\": \"D\",\n  \"accounts\": [\n    {\n      \"number\": \"{{import_acct}}\",\n      \"typeCode\": \"shipper\"\n    }\n  ],\n  \"pickup\": {\n    \"isRequested\": false\n  },\n  \"outputImageProperties\": {\n    \"allDocumentsInOneImage\": true,\n    \"encodingFormat\": \"pdf\",\n    \"imageOptions\": [\n      {\n        \"templateName\": \"ECOM26_84_A4_001\",\n        \"typeCode\": \"label\"\n      },\n      {\n        \"templateName\": \"ARCH_8X4_A4_002\",\n        \"isRequested\": true,\n        \"hideAccountNumber\": true,\n        \"typeCode\": \"waybillDoc\"\n      },\n      {\n        \"templateName\": \"COMMERCIAL_INVOICE_P_10\",\n        \"invoiceType\": \"commercial\",\n        \"languageCode\": \"eng\",\n        \"isRequested\": true,\n        \"typeCode\": \"invoice\"\n      }\n    ]\n  },\n  \"customerDetails\": {\n    \"shipperDetails\": {\n      \"postalAddress\": {\n        \"addressLine1\": \"Address 1 Compulsory, 45characters\",\n        \"addressLine2\": \"Address 2 Optional, 45characters\",\n        \"addressLine3\": \"Address 3 Optional, 45characters\",\n        \"postalCode\": \"{{gh_1_postal}}\",\n        \"cityName\": \"{{gh_1_city}}\",\n        \"countyName\": \"{{gh_1_county}}\",\n        \"countryCode\": \"{{gh_code}}\"\n      },\n      \"contactInformation\": {\n        \"fullName\": \"Shipper Name\",\n        \"companyName\": \"Shipper Company Name\",\n        \"email\": \"shipperemail@example.com\",\n        \"phone\": \"+2348012345678\"\n      },\n      \"typeCode\": \"business\"\n    },\n    \"receiverDetails\": {\n      \"postalAddress\": {\n        \"addressLine1\": \"Address 1 Compulsory, 45characters\",\n        \"addressLine2\": \"Address 2 Optional, 45characters\",\n        \"addressLine3\": \"Address 3 Optional, 45characters\",\n        \"postalCode\": \"{{ng_1_postal}}\",\n        \"cityName\": \"{{ng_1_city}}\",\n        \"countyName\": \"{{ng_1_county}}\",\n        \"countryCode\": \"{{ng_code}}\"\n      },\n      \"contactInformation\": {\n        \"fullName\": \"Receiver Name\",\n        \"companyName\": \"Receiver Company Name\",\n        \"email\": \"receivermail@example.com\",\n        \"phone\": \"+2348087654321\"\n      },\n      \"typeCode\": \"business\"\n    }\n  },\n  \"content\": {\n    \"packages\": [\n      {\n        \"weight\": 1,\n        \"dimensions\": {\n          \"length\": 30,\n          \"width\": 10,\n          \"height\": 10\n        }\n      }\n    ],\n    \"exportDeclaration\": {\n      \"lineItems\": [\n        {\n          \"number\": 1,\n          \"quantity\": {\n            \"unitOfMeasurement\": \"PCS\",\n            \"value\": 1\n          },\n          \"price\": 15000.00,\n          \"description\": \"Item description can contain 512characters\",\n          \"weight\": {\n            \"netValue\": 1,\n            \"grossValue\": 1\n          },\n          \"commodityCodes\": [\n            {\n              \"typeCode\": \"outbound\",\n              \"value\": \"123456.78.90\"\n            },\n            {\n              \"typeCode\": \"inbound\",\n              \"value\": \"123456.78.90\"\n            }\n          ],\n          \"exportReasonType\": \"permanent\",\n          \"manufacturerCountry\": \"{{ng_code}}\"\n        }\n      ],\n      \"exportReason\": \"Permanent\",\n      \"invoice\": {\n        \"number\": \"#INVPATTERN\",\n        \"date\": \"{{date}}\"\n      },\n      \"placeOfIncoterm\": \"{{gh_1_city}}\",\n      \"exportReasonType\": \"permanent\",\n      \"shipmentType\": \"personal\"\n    },\n    \"unitOfMeasurement\": \"metric\",\n    \"isCustomsDeclarable\": false,\n    \"incoterm\": \"DAP\",\n    \"description\": \"Content Description can contain 70characters\",\n    \"declaredValueCurrency\": \"{{ng_currency}}\", // the currency of the DHL account country\n    \"declaredValue\": 15000.00 // total prices of each line item must equal to the declared value\n  },\n  \"customerReferences\": [\n    {\n      \"value\": \"Customer Reference 35characters\",\n      \"typeCode\": \"CU\"\n    }\n  ]\n}",
+                                    "options": {
+                                        "raw": {
+                                            "language": "json"
+                                        }
+                                    }
+                                },
+                                "header": [],
+                                "url": {
+                                    "raw": "{{baseUrl}}/shipments",
+                                    "path": [
+                                        "shipments"
+                                    ],
+                                    "host": [
+                                        "{{baseUrl}}"
+                                    ],
+                                    "query": [],
+                                    "variable": []
+                                }
+                            },
+                            "response": [],
+                            "protocolProfileBehavior": {
+                                "strictSSL": false,
+                                "followRedirects": true
+                            }
+                        },
+                        {
+                            "name": "R02 - Package",
+                            "description": "",
+                            "event": [],
+                            "auth": {},
+                            "request": {
+                                "auth": {
+                                    "type": "inherit",
+                                    "inherit": []
+                                },
+                                "method": "POST",
+                                "body": {
+                                    "mode": "raw",
+                                    "raw": "{\n  \"plannedShippingDateAndTime\": \"{{planned_shipping_date}}\",\n  \"productCode\": \"P\",\n  \"accounts\": [\n    {\n      \"number\": \"{{import_acct}}\",\n      \"typeCode\": \"shipper\"\n    }\n  ],\n  \"pickup\": {\n    \"isRequested\": false\n  },\n  \"outputImageProperties\": {\n    \"allDocumentsInOneImage\": true,\n    \"encodingFormat\": \"pdf\",\n    \"imageOptions\": [\n      {\n        \"templateName\": \"ECOM26_84_A4_001\",\n        \"typeCode\": \"label\"\n      },\n      {\n        \"templateName\": \"ARCH_8X4_A4_002\",\n        \"isRequested\": true,\n        \"hideAccountNumber\": true,\n        \"typeCode\": \"waybillDoc\"\n      },\n      {\n        \"templateName\": \"COMMERCIAL_INVOICE_P_10\",\n        \"invoiceType\": \"commercial\",\n        \"languageCode\": \"eng\",\n        \"isRequested\": true,\n        \"typeCode\": \"invoice\"\n      }\n    ]\n  },\n  \"customerDetails\": {\n    \"shipperDetails\": {\n      \"postalAddress\": {\n        \"addressLine1\": \"Address 1 Compulsory, 45characters\",\n        \"addressLine2\": \"Address 2 Optional, 45characters\",\n        \"addressLine3\": \"Address 3 Optional, 45characters\",\n        \"postalCode\": \"{{gh_1_postal}}\",\n        \"cityName\": \"{{gh_1_city}}\",\n        \"countyName\": \"{{gh_1_county}}\",\n        \"countryCode\": \"{{gh_code}}\"\n      },\n      \"contactInformation\": {\n        \"fullName\": \"Shipper Name\",\n        \"companyName\": \"Shipper Company Name\",\n        \"email\": \"shipperemail@example.com\",\n        \"phone\": \"+2348012345678\"\n      },\n      \"typeCode\": \"business\"\n    },\n    \"receiverDetails\": {\n      \"postalAddress\": {\n        \"addressLine1\": \"Address 1 Compulsory, 45characters\",\n        \"addressLine2\": \"Address 2 Optional, 45characters\",\n        \"addressLine3\": \"Address 3 Optional, 45characters\",\n        \"postalCode\": \"{{ng_1_postal}}\",\n        \"cityName\": \"{{ng_1_city}}\",\n        \"countyName\": \"{{ng_1_county}}\",\n        \"countryCode\": \"{{ng_code}}\"\n      },\n      \"contactInformation\": {\n        \"fullName\": \"Receiver Name\",\n        \"companyName\": \"Receiver Company Name\",\n        \"email\": \"receivermail@example.com\",\n        \"phone\": \"+2348087654321\"\n      },\n      \"typeCode\": \"business\"\n    }\n  },\n  \"content\": {\n    \"packages\": [\n      {\n        \"weight\": 4.0,\n        \"dimensions\": {\n          \"length\": 16,\n          \"width\": 7.5,\n          \"height\": 1\n        }\n      }\n    ],\n    \"exportDeclaration\": {\n      \"lineItems\": [\n        {\n          \"number\": 1,\n          \"quantity\": {\n            \"unitOfMeasurement\": \"PCS\",\n            \"value\": 1\n          },\n          \"price\": 180000.00,\n          \"description\": \"Item description 512characters\",\n          \"weight\": {\n            \"netValue\": 0.5,\n            \"grossValue\": 0.5\n          },\n          \"commodityCodes\": [\n            {\n              \"typeCode\": \"outbound\",\n              \"value\": \"987654.00.44\"\n            },\n            {\n              \"typeCode\": \"inbound\",\n              \"value\": \"987654.00.44\"\n            }\n          ],\n          \"exportReasonType\": \"permanent\",\n          \"manufacturerCountry\": \"{{gh_code}}\"\n        },\n        {\n          \"number\": 2,\n          \"quantity\": {\n            \"unitOfMeasurement\": \"PCS\",\n            \"value\": 2\n          },\n          \"price\": 20000.00,\n          \"description\": \"Item description 512characters\",\n          \"weight\": {\n            \"netValue\": 2.5,\n            \"grossValue\": 2.5\n          },\n          \"commodityCodes\": [\n            {\n              \"typeCode\": \"inbound\",\n              \"value\": \"987654.0044.9954\"\n            }\n          ],\n          \"exportReasonType\": \"permanent\",\n          \"manufacturerCountry\": \"{{gh_code}}\"\n        },\n        {\n          \"number\": 3,\n          \"quantity\": {\n            \"unitOfMeasurement\": \"PCS\",\n            \"value\": 1\n          },\n          \"price\": 30000.00,\n          \"description\": \"Item description 512characters\",\n          \"weight\": {\n            \"netValue\": 1.0,\n            \"grossValue\": 1.0\n          },\n          \"commodityCodes\": [\n            {\n              \"typeCode\": \"inbound\",\n              \"value\": \"987654.0044.9954\"\n            }\n          ],\n          \"exportReasonType\": \"permanent\",\n          \"manufacturerCountry\": \"{{gh_code}}\"\n        }\n      ],\n      \"exportReason\": \"Permanent\",\n      \"additionalCharges\": [\n        {\n          \"value\": 235000,\n          \"typeCode\": \"freight\"\n        }\n      ],\n      \"invoice\": {\n        \"number\": \"#INV2022001\",\n        \"date\": \"{{date}}\"\n      },\n      \"placeOfIncoterm\": \"{{ng_1_city}}\",\n      \"exportReasonType\": \"permanent\",\n      \"shipmentType\": \"commercial\"\n    },\n    \"unitOfMeasurement\": \"metric\",\n    \"isCustomsDeclarable\": true,\n    \"incoterm\": \"DAP\",\n    \"description\": \"Content Description 70characters\",\n    \"declaredValueCurrency\": \"{{ng_currency}}\",\n    \"declaredValue\": 230000.00\n  },\n  \"valueAddedServices\": [\n    {\n      \"serviceCode\": \"II\",\n      \"value\": 23000,\n      \"currency\": \"{{ng_currency}}\"\n    }\n  ],\n  \"customerReferences\": [\n    {\n      \"value\": \"Customer Reference\",\n      \"typeCode\": \"CU\"\n    }\n  ]\n}",
+                                    "options": {
+                                        "raw": {
+                                            "language": "json"
+                                        }
+                                    }
+                                },
+                                "header": [],
+                                "url": {
+                                    "raw": "{{baseUrl}}/shipments",
+                                    "path": [
+                                        "shipments"
+                                    ],
+                                    "host": [
+                                        "{{baseUrl}}"
+                                    ],
+                                    "query": [],
+                                    "variable": []
+                                }
+                            },
+                            "response": [],
+                            "protocolProfileBehavior": {
+                                "strictSSL": false,
+                                "followRedirects": true
+                            }
+                        }
+                    ],
+                    "event": [
+                        {
+                            "listen": "prerequest",
+                            "script": {
+                                "exec": [],
+                                "type": "text/javascript",
+                                "packages": {}
+                            }
+                        },
+                        {
+                            "listen": "test",
+                            "script": {
+                                "exec": [],
+                                "type": "text/javascript",
+                                "packages": {}
+                            }
+                        }
+                    ],
+                    "auth": {}
+                },
+                {
+                    "name": "GR04 - DOMShipmentWithinGH",
+                    "description": "",
+                    "item": [
+                        {
+                            "name": "R01 - DocumentOrPackage",
+                            "description": "",
+                            "event": [],
+                            "auth": {},
+                            "request": {
+                                "auth": {
+                                    "type": "noauth",
+                                    "noauth": []
+                                },
+                                "method": "POST",
+                                "body": {
+                                    "mode": "raw",
+                                    "raw": "{\n  \"plannedShippingDateAndTime\": \"{{planned_shipping_date}}\",\n  \"productCode\": \"N\",\n  \"pickup\": {\n    \"isRequested\": false\n  },\n  \"outputImageProperties\": {\n    \"allDocumentsInOneImage\": true,\n    \"encodingFormat\": \"pdf\",\n    \"imageOptions\": [\n      {\n        \"templateName\": \"ECOM26_84_A4_001\",\n        \"typeCode\": \"label\"\n      },\n      {\n        \"templateName\": \"ARCH_8X4_A4_002\",\n        \"isRequested\": true,\n        \"typeCode\": \"waybillDoc\",\n        \"hideAccountNumber\": true\n      }\n    ]\n  },\n  \"accounts\": [\n    {\n      \"number\": \"{{import_acct}}\",\n      \"typeCode\": \"shipper\"\n    }\n  ],\n  \"customerDetails\": {\n    \"shipperDetails\": {\n      \"postalAddress\": {\n        \"addressLine1\": \"Address 1 Compulsory, 45characters\",\n        \"addressLine2\": \"Address 2 Optional, 45characters\",\n        \"addressLine3\": \"Address 3 Optional, 45characters\",\n        \"postalCode\": \"{{gh_1_postal}}\",\n        \"cityName\": \"{{gh_1_city}}\",\n        \"countyName\": \"{{gh_1_county}}\",\n        \"countryCode\": \"{{gh_code}}\"\n      },\n      \"contactInformation\": {\n        \"fullName\": \"Shipper Name\",\n        \"companyName\": \"Shipper Company Name\",\n        \"email\": \"shipperemail@example.com\",\n        \"phone\": \"+2348012345678\"\n      },\n      \"typeCode\": \"business\"\n    },\n    \"receiverDetails\": {\n      \"postalAddress\": {\n        \"addressLine1\": \"Address 1 Compulsory, 45characters\",\n        \"addressLine2\": \"Address 2 Optional, 45characters\",\n        \"addressLine3\": \"Address 3 Optional, 45characters\",\n        \"postalCode\": \"{{gh_2_postal}}\",\n        \"cityName\": \"{{gh_2_city}}\",\n        \"countyName\": \"{{gh_2_county}}\",\n        \"countryCode\": \"{{gh_code}}\"\n      },\n      \"contactInformation\": {\n        \"fullName\": \"Receiver Name\",\n        \"companyName\": \"Receiver Company Name\",\n        \"email\": \"receivermail@example.com\",\n        \"phone\": \"+2348087654321\"\n      },\n      \"typeCode\": \"business\"\n    }\n  },\n  \"content\": {\n    \"packages\": [\n      {\n        \"weight\": 10,\n        \"dimensions\": {\n          \"length\": 15,\n          \"width\": 8,\n          \"height\": 10\n        }\n      }\n    ],\n    \"isCustomsDeclarable\": false,\n    \"description\": \"Contents Description 70characters\",\n    \"incoterm\": \"DAP\",\n    \"unitOfMeasurement\": \"metric\"\n  }\n}",
+                                    "options": {
+                                        "raw": {
+                                            "language": "json"
+                                        }
+                                    }
+                                },
+                                "header": [],
+                                "url": {
+                                    "raw": "{{baseUrl}}/shipments",
+                                    "path": [
+                                        "shipments"
+                                    ],
+                                    "host": [
+                                        "{{baseUrl}}"
+                                    ],
+                                    "query": [],
+                                    "variable": []
+                                }
+                            },
+                            "response": [],
+                            "protocolProfileBehavior": {
+                                "strictSSL": false,
+                                "followRedirects": true
+                            }
+                        }
+                    ],
+                    "event": [
+                        {
+                            "listen": "prerequest",
+                            "script": {
+                                "exec": [],
+                                "type": "text/javascript",
+                                "packages": {}
+                            }
+                        },
+                        {
+                            "listen": "test",
+                            "script": {
+                                "exec": [],
+                                "type": "text/javascript",
+                                "packages": {}
+                            }
+                        }
+                    ],
+                    "auth": {}
+                }
+            ],
+            "event": [
+                {
+                    "listen": "prerequest",
+                    "script": {
+                        "exec": [],
+                        "type": "text/javascript",
+                        "packages": {}
+                    }
+                },
+                {
+                    "listen": "test",
+                    "script": {
+                        "exec": [],
+                        "type": "text/javascript",
+                        "packages": {}
+                    }
+                }
+            ],
+            "auth": {}
+        },
+        {
+            "name": "RE04 - Pickup",
+            "description": "",
+            "item": [
+                {
+                    "name": "GR01 - DOMPickupWithinNG",
+                    "description": "",
+                    "item": [
+                        {
+                            "name": "R01 - DocumentOrPackage",
+                            "description": "",
+                            "event": [],
+                            "auth": {},
+                            "request": {
+                                "auth": {
+                                    "type": "noauth",
+                                    "noauth": []
+                                },
+                                "method": "POST",
+                                "body": {
+                                    "mode": "raw",
+                                    "raw": "{\n  \"plannedPickupDateAndTime\": \"{{planned_shipping_date}}\",\n  \"closeTime\": \"18:00\",\n  \"location\": \"reception\",\n  \"locationType\": \"business\",\n  \"accounts\": [\n    {\n      \"number\": \"{{export_acct}}\",\n      \"typeCode\": \"shipper\"\n    }\n  ],\n  \"specialInstructions\": [\n    {\n      \"value\": \"Optional special instructions\",\n      \"typeCode\": \"TBD\"\n    }\n  ],\n  \"customerDetails\": {\n    \"shipperDetails\": {\n      \"postalAddress\": {\n        \"addressLine1\": \"Test address 1\",\n        \"postalCode\": \"{{ng_1_postal}}\",\n        \"cityName\": \"{{ng_1_city}}\",\n        \"countyName\": \"{{ng_1_county}}\",\n        \"countryCode\": \"{{ng_code}}\"\n      },\n      \"contactInformation\": {\n        \"fullName\": \"John Doe\",\n        \"companyName\": \"Test Company 1\",\n        \"email\": \"johndoe@testmail.com\",\n        \"phone\": \"+234800000000\"\n      }\n    },\n    \"receiverDetails\": {\n      \"postalAddress\": {\n        \"addressLine1\": \"Test address 2\",\n        \"postalCode\": \"{{ng_2_postal}}\",\n        \"cityName\": \"{{ng_2_city}}\",\n        \"countyName\": \"{{ng_2_county}}\",\n        \"countryCode\": \"{{ng_code}}\"\n      },\n      \"contactInformation\": {\n        \"fullName\": \"Jane Doe\",\n        \"companyName\": \"Test Company 2\",\n        \"email\": \"janedoe@testmail.com\",\n        \"phone\": \"+23400000000\"\n      }\n    }\n  },\n  \"shipmentDetails\": [\n    {\n      \"productCode\": \"N\",\n      \"isCustomsDeclarable\": false,\n      \"unitOfMeasurement\": \"metric\",\n      \"packages\": [\n        {\n          \"weight\": 4.0,\n          \"dimensions\": {\n            \"length\": 10,\n            \"width\": 10,\n            \"height\": 10\n          }\n        }\n      ]\n    }\n  ]\n}",
+                                    "options": {
+                                        "raw": {
+                                            "language": "json"
+                                        }
+                                    }
+                                },
+                                "header": [],
+                                "url": {
+                                    "raw": "{{baseUrl}}/pickups",
+                                    "path": [
+                                        "pickups"
+                                    ],
+                                    "host": [
+                                        "{{baseUrl}}"
+                                    ],
+                                    "query": [],
+                                    "variable": []
+                                }
+                            },
+                            "response": [],
+                            "protocolProfileBehavior": {
+                                "strictSSL": false,
+                                "followRedirects": true
+                            }
+                        }
+                    ],
+                    "event": [
+                        {
+                            "listen": "prerequest",
+                            "script": {
+                                "exec": [],
+                                "type": "text/javascript",
+                                "packages": {}
+                            }
+                        },
+                        {
+                            "listen": "test",
+                            "script": {
+                                "exec": [],
+                                "type": "text/javascript",
+                                "packages": {}
+                            }
+                        }
+                    ],
+                    "auth": {}
+                },
+                {
+                    "name": "GR02 - EXPPickupNGtoUS",
+                    "description": "",
+                    "item": [
+                        {
+                            "name": "R01 - Document",
+                            "description": "",
+                            "event": [],
+                            "auth": {},
+                            "request": {
+                                "auth": {
+                                    "type": "noauth",
+                                    "noauth": []
+                                },
+                                "method": "POST",
+                                "body": {
+                                    "mode": "raw",
+                                    "raw": "{\n  \"plannedPickupDateAndTime\": \"{{planned_shipping_date}}\",\n  \"closeTime\": \"18:00\",\n  \"location\": \"reception\",\n  \"locationType\": \"residence\",\n  \"accounts\": [\n    {\n      \"number\": \"{{export_acct}}\",\n      \"typeCode\": \"shipper\"\n    }\n  ],\n  \"specialInstructions\": [\n    {\n      \"value\": \"Optional special instructions\",\n      \"typeCode\": \"TBD\"\n    }\n  ],\n  \"customerDetails\": {\n    \"shipperDetails\": {\n      \"postalAddress\": {\n        \"addressLine1\": \"Test address 1\",\n        \"postalCode\": \"{{ng_1_postal}}\",\n        \"cityName\": \"{{ng_1_city}}\",\n        \"countyName\": \"{{ng_1_county}}\",\n        \"countryCode\": \"{{ng_code}}\"\n      },\n      \"contactInformation\": {\n        \"fullName\": \"John Doe\",\n        \"companyName\": \"Test Company 1\",\n        \"email\": \"johndoe@testmail.com\",\n        \"phone\": \"+234800000000\"\n      }\n    },\n    \"receiverDetails\": {\n      \"postalAddress\": {\n        \"addressLine1\": \"Test address 2\",\n        \"postalCode\": \"{{us_postal}}\",\n        \"cityName\": \"{{us_city}}\",\n        \"countyName\": \"{{us_county}}\",\n        \"countryCode\": \"{{us_code}}\"\n      },\n      \"contactInformation\": {\n        \"fullName\": \"Jane Doe\",\n        \"companyName\": \"Test Company 2\",\n        \"email\": \"janedoe@testmail.com\",\n        \"phone\": \"+23400000000\"\n      }\n    }\n  },\n  \"shipmentDetails\": [\n    {\n      \"productCode\": \"D\",\n      \"isCustomsDeclarable\": false,\n      \"unitOfMeasurement\": \"metric\",\n      \"packages\": [\n        {\n          \"weight\": 0.5,\n          \"dimensions\": {\n            \"length\": 5,\n            \"width\": 5,\n            \"height\": 2\n          }\n        }\n      ]\n    }\n  ]\n}",
+                                    "options": {
+                                        "raw": {
+                                            "language": "json"
+                                        }
+                                    }
+                                },
+                                "header": [],
+                                "url": {
+                                    "raw": "{{baseUrl}}/pickups",
+                                    "path": [
+                                        "pickups"
+                                    ],
+                                    "host": [
+                                        "{{baseUrl}}"
+                                    ],
+                                    "query": [],
+                                    "variable": []
+                                }
+                            },
+                            "response": [],
+                            "protocolProfileBehavior": {
+                                "strictSSL": false,
+                                "followRedirects": true
+                            }
+                        },
+                        {
+                            "name": "R02 - Package",
+                            "description": "",
+                            "event": [],
+                            "auth": {},
+                            "request": {
+                                "auth": {
+                                    "type": "noauth",
+                                    "noauth": []
+                                },
+                                "method": "POST",
+                                "body": {
+                                    "mode": "raw",
+                                    "raw": "{\n  \"plannedPickupDateAndTime\": \"{{planned_shipping_date}}\",\n  \"closeTime\": \"17:00\",\n  \"location\": \"reception\",\n  \"locationType\": \"business\",\n  \"accounts\": [\n    {\n      \"number\": \"{{export_acct}}\",\n      \"typeCode\": \"shipper\"\n    }\n  ],\n  \"specialInstructions\": [\n    {\n      \"value\": \"Optional special instructions\",\n      \"typeCode\": \"TBD\"\n    }\n  ],\n  \"customerDetails\": {\n    \"shipperDetails\": {\n      \"postalAddress\": {\n        \"addressLine1\": \"Test address 1\",\n        \"postalCode\": \"{{ng_1_postal}}\",\n        \"cityName\": \"{{ng_1_city}}\",\n        \"countyName\": \"{{ng_1_county}}\",\n        \"countryCode\": \"{{ng_code}}\"\n      },\n      \"contactInformation\": {\n        \"fullName\": \"John Doe\",\n        \"companyName\": \"Test Company 1\",\n        \"email\": \"johndoe@testmail.com\",\n        \"phone\": \"+234800000000\"\n      }\n    },\n    \"receiverDetails\": {\n      \"postalAddress\": {\n        \"addressLine1\": \"Test address 2\",\n        \"postalCode\": \"{{us_postal}}\",\n        \"cityName\": \"{{us_city}}\",\n        \"countyName\": \"{{us_county}}\",\n        \"countryCode\": \"{{us_code}}\"\n      },\n      \"contactInformation\": {\n        \"fullName\": \"Jane Doe\",\n        \"companyName\": \"Test Company 2\",\n        \"email\": \"janedoe@testmail.com\",\n        \"phone\": \"+23400000000\"\n      }\n    }\n  },\n  \"shipmentDetails\": [\n    {\n      \"productCode\": \"P\",\n      \"isCustomsDeclarable\": true,\n      \"declaredValue\": 25,\n      \"declaredValueCurrency\": \"{{us_currency}}\",\n      \"unitOfMeasurement\": \"metric\",\n      \"packages\": [\n        {\n          \"weight\": 4.0,\n          \"dimensions\": {\n            \"length\": 10,\n            \"width\": 10,\n            \"height\": 10\n          }\n        }\n      ]\n    }\n  ]\n}",
+                                    "options": {
+                                        "raw": {
+                                            "language": "json"
+                                        }
+                                    }
+                                },
+                                "header": [],
+                                "url": {
+                                    "raw": "{{baseUrl}}/pickups",
+                                    "path": [
+                                        "pickups"
+                                    ],
+                                    "host": [
+                                        "{{baseUrl}}"
+                                    ],
+                                    "query": [],
+                                    "variable": []
+                                }
+                            },
+                            "response": [],
+                            "protocolProfileBehavior": {
+                                "strictSSL": false,
+                                "followRedirects": true
+                            }
+                        }
+                    ],
+                    "event": [
+                        {
+                            "listen": "prerequest",
+                            "script": {
+                                "exec": [],
+                                "type": "text/javascript",
+                                "packages": {}
+                            }
+                        },
+                        {
+                            "listen": "test",
+                            "script": {
+                                "exec": [],
+                                "type": "text/javascript",
+                                "packages": {}
+                            }
+                        }
+                    ],
+                    "auth": {
+                        "type": "inherit",
+                        "inherit": []
+                    }
+                },
+                {
+                    "name": "GR03 - IMPPickupUStoNG",
+                    "description": "",
+                    "item": [
+                        {
+                            "name": "R01 - Document",
+                            "description": "",
+                            "event": [],
+                            "auth": {},
+                            "request": {
+                                "auth": {
+                                    "type": "noauth",
+                                    "noauth": []
+                                },
+                                "method": "POST",
+                                "body": {
+                                    "mode": "raw",
+                                    "raw": "{\n  \"plannedPickupDateAndTime\": \"{{planned_shipping_date}}\",\n  \"closeTime\": \"18:00\",\n  \"location\": \"reception\",\n  \"locationType\": \"residence\",\n  \"accounts\": [\n    {\n      \"number\": \"{{import_acct}}\",\n      \"typeCode\": \"shipper\"\n    }\n  ],\n  \"specialInstructions\": [\n    {\n      \"value\": \"Optional special instructions\",\n      \"typeCode\": \"TBD\"\n    }\n  ],\n  \"customerDetails\": {\n    \"shipperDetails\": {\n      \"postalAddress\": {\n        \"addressLine1\": \"Test address 1\",\n        \"postalCode\": \"{{us_postal}}\",\n        \"cityName\": \"{{us_city}}\",\n        \"countyName\": \"{{us_county}}\",\n        \"countryCode\": \"{{us_code}}\"\n      },\n      \"contactInformation\": {\n        \"fullName\": \"John Doe\",\n        \"companyName\": \"Test Company 1\",\n        \"email\": \"johndoe@testmail.com\",\n        \"phone\": \"+234800000000\"\n      }\n    },\n    \"receiverDetails\": {\n      \"postalAddress\": {\n        \"addressLine1\": \"Test address 2\",\n        \"postalCode\": \"{{ng_1_postal}}\",\n        \"cityName\": \"{{ng_1_city}}\",\n        \"countyName\": \"{{ng_1_county}}\",\n        \"countryCode\": \"{{ng_code}}\"\n      },\n      \"contactInformation\": {\n        \"fullName\": \"Jane Doe\",\n        \"companyName\": \"Test Company 2\",\n        \"email\": \"janedoe@testmail.com\",\n        \"phone\": \"+23400000000\"\n      }\n    }\n  },\n  \"shipmentDetails\": [\n    {\n      \"productCode\": \"D\",\n      \"isCustomsDeclarable\": false,\n      \"unitOfMeasurement\": \"metric\",\n      \"packages\": [\n        {\n          \"weight\": 0.5,\n          \"dimensions\": {\n            \"length\": 5,\n            \"width\": 5,\n            \"height\": 2\n          }\n        }\n      ]\n    }\n  ]\n}",
+                                    "options": {
+                                        "raw": {
+                                            "language": "json"
+                                        }
+                                    }
+                                },
+                                "header": [],
+                                "url": {
+                                    "raw": "{{baseUrl}}/pickups",
+                                    "path": [
+                                        "pickups"
+                                    ],
+                                    "host": [
+                                        "{{baseUrl}}"
+                                    ],
+                                    "query": [],
+                                    "variable": []
+                                }
+                            },
+                            "response": [],
+                            "protocolProfileBehavior": {
+                                "strictSSL": false,
+                                "followRedirects": true
+                            }
+                        },
+                        {
+                            "name": "R02 - Package",
+                            "description": "",
+                            "event": [],
+                            "auth": {},
+                            "request": {
+                                "auth": {
+                                    "type": "noauth",
+                                    "noauth": []
+                                },
+                                "method": "POST",
+                                "body": {
+                                    "mode": "raw",
+                                    "raw": "{\n  \"plannedPickupDateAndTime\": \"{{planned_shipping_date}}\",\n  \"closeTime\": \"17:00\",\n  \"location\": \"reception\",\n  \"locationType\": \"residence\",\n  \"accounts\": [\n    {\n      \"number\": \"{{import_acct}}\",\n      \"typeCode\": \"shipper\"\n    }\n  ],\n  \"specialInstructions\": [\n    {\n      \"value\": \"Optional special instructions\",\n      \"typeCode\": \"TBD\"\n    }\n  ],\n  \"customerDetails\": {\n    \"shipperDetails\": {\n      \"postalAddress\": {\n        \"addressLine1\": \"Test address 1\",\n        \"postalCode\": \"{{us_postal}}\",\n        \"cityName\": \"{{us_city}}\",\n        \"countyName\": \"{{us_county}}\",\n        \"countryCode\": \"{{us_code}}\"\n      },\n      \"contactInformation\": {\n        \"fullName\": \"John Doe\",\n        \"companyName\": \"Test Company 1\",\n        \"email\": \"johndoe@testmail.com\",\n        \"phone\": \"+234800000000\"\n      }\n    },\n    \"receiverDetails\": {\n      \"postalAddress\": {\n        \"addressLine1\": \"Test address 2\",\n        \"postalCode\": \"{{ng_1_postal}}\",\n        \"cityName\": \"{{ng_1_city}}\",\n        \"countyName\": \"{{ng_1_county}}\",\n        \"countryCode\": \"{{ng_code}}\"\n      },\n      \"contactInformation\": {\n        \"fullName\": \"Jane Doe\",\n        \"companyName\": \"Test Company 2\",\n        \"email\": \"janedoe@testmail.com\",\n        \"phone\": \"+23400000000\"\n      }\n    }\n  },\n  \"shipmentDetails\": [\n    {\n      \"productCode\": \"P\",\n      \"isCustomsDeclarable\": true,\n      \"declaredValue\": 2500,\n      \"declaredValueCurrency\": \"{{us_currency}}\",\n      \"unitOfMeasurement\": \"metric\",\n      \"packages\": [\n        {\n          \"weight\": 4.0,\n          \"dimensions\": {\n            \"length\": 10,\n            \"width\": 10,\n            \"height\": 10\n          }\n        }\n      ]\n    }\n  ]\n}",
+                                    "options": {
+                                        "raw": {
+                                            "language": "json"
+                                        }
+                                    }
+                                },
+                                "header": [],
+                                "url": {
+                                    "raw": "{{baseUrl}}/pickups",
+                                    "path": [
+                                        "pickups"
+                                    ],
+                                    "host": [
+                                        "{{baseUrl}}"
+                                    ],
+                                    "query": [],
+                                    "variable": []
+                                }
+                            },
+                            "response": [],
+                            "protocolProfileBehavior": {
+                                "strictSSL": false,
+                                "followRedirects": true
+                            }
+                        }
+                    ],
+                    "event": [
+                        {
+                            "listen": "prerequest",
+                            "script": {
+                                "exec": [],
+                                "type": "text/javascript",
+                                "packages": {}
+                            }
+                        },
+                        {
+                            "listen": "test",
+                            "script": {
+                                "exec": [],
+                                "type": "text/javascript",
+                                "packages": {}
+                            }
+                        }
+                    ],
+                    "auth": {}
+                },
+                {
+                    "name": "GR04 - DOMPickupWithinUS",
+                    "description": "",
+                    "item": [
+                        {
+                            "name": "R01 - DocumentOrPackage",
+                            "description": "",
+                            "event": [],
+                            "auth": {},
+                            "request": {
+                                "auth": {
+                                    "type": "noauth",
+                                    "noauth": []
+                                },
+                                "method": "POST",
+                                "body": {
+                                    "mode": "raw",
+                                    "raw": "{\n  \"plannedPickupDateAndTime\": \"{{planned_shipping_date}}\",\n  \"closeTime\": \"18:00\",\n  \"location\": \"reception\",\n  \"locationType\": \"residence\",\n  \"accounts\": [\n    {\n      \"number\": \"{{import_acct}}\",\n      \"typeCode\": \"shipper\"\n    }\n  ],\n  \"specialInstructions\": [\n    {\n      \"value\": \"Optional special instructions\",\n      \"typeCode\": \"TBD\"\n    }\n  ],\n  \"customerDetails\": {\n    \"shipperDetails\": {\n      \"postalAddress\": {\n        \"addressLine1\": \"Test address 1\",\n        \"postalCode\": \"{{us_postal}}\",\n        \"cityName\": \"{{us_city}}\",\n        \"countyName\": \"{{us_county}}\",\n        \"countryCode\": \"{{us_code}}\"\n      },\n      \"contactInformation\": {\n        \"fullName\": \"John Doe\",\n        \"companyName\": \"Test Company 1\",\n        \"email\": \"johndoe@testmail.com\",\n        \"phone\": \"+234800000000\"\n      }\n    },\n    \"receiverDetails\": {\n      \"postalAddress\": {\n        \"addressLine1\": \"Test address 2\",\n        \"postalCode\": \"{{us_2_postal}}\",\n        \"cityName\": \"{{us_2_city}}\",\n        \"countyName\": \"{{us_2_county}}\",\n        \"countryCode\": \"{{us_code}}\"\n      },\n      \"contactInformation\": {\n        \"fullName\": \"Jane Doe\",\n        \"companyName\": \"Test Company 2\",\n        \"email\": \"janedoe@testmail.com\",\n        \"phone\": \"+23400000000\"\n      }\n    }\n  },\n  \"shipmentDetails\": [\n    {\n      \"productCode\": \"D\",\n      \"isCustomsDeclarable\": false,\n      \"unitOfMeasurement\": \"metric\",\n      \"packages\": [\n        {\n          \"weight\": 0.5,\n          \"dimensions\": {\n            \"length\": 5,\n            \"width\": 5,\n            \"height\": 2\n          }\n        }\n      ]\n    }\n  ]\n}",
+                                    "options": {
+                                        "raw": {
+                                            "language": "json"
+                                        }
+                                    }
+                                },
+                                "header": [],
+                                "url": {
+                                    "raw": "{{baseUrl}}/pickups",
+                                    "path": [
+                                        "pickups"
+                                    ],
+                                    "host": [
+                                        "{{baseUrl}}"
+                                    ],
+                                    "query": [],
+                                    "variable": []
+                                }
+                            },
+                            "response": [],
+                            "protocolProfileBehavior": {
+                                "strictSSL": false,
+                                "followRedirects": true
+                            }
+                        }
+                    ],
+                    "event": [
+                        {
+                            "listen": "prerequest",
+                            "script": {
+                                "exec": [],
+                                "type": "text/javascript",
+                                "packages": {}
+                            }
+                        },
+                        {
+                            "listen": "test",
+                            "script": {
+                                "exec": [],
+                                "type": "text/javascript",
+                                "packages": {}
+                            }
+                        }
+                    ],
+                    "auth": {}
+                },
+                {
+                    "name": "R01 - Delete",
+                    "description": "",
+                    "event": [],
+                    "auth": {},
+                    "request": {
+                        "auth": {
+                            "type": "noauth",
+                            "noauth": []
+                        },
+                        "method": "DELETE",
+                        "body": {},
+                        "header": [],
+                        "url": {
+                            "raw": "{{baseUrl}}/pickups/CBJ251027000281",
+                            "path": [
+                                "pickups",
+                                "CBJ251027000281"
+                            ],
+                            "host": [
+                                "{{baseUrl}}"
+                            ],
+                            "query": [
+                                {
+                                    "key": "requestorName",
+                                    "value": "John Doe",
+                                    "description": "",
+                                    "type": "string"
+                                },
+                                {
+                                    "key": "reason",
+                                    "value": "Unavailable For Pickup",
+                                    "description": "",
+                                    "type": "string"
+                                }
+                            ],
+                            "variable": []
+                        }
+                    },
+                    "response": [],
+                    "protocolProfileBehavior": {
+                        "strictSSL": false,
+                        "followRedirects": true
+                    }
+                }
+            ],
+            "event": [
+                {
+                    "listen": "prerequest",
+                    "script": {
+                        "exec": [],
+                        "type": "text/javascript",
+                        "packages": {}
+                    }
+                },
+                {
+                    "listen": "test",
+                    "script": {
+                        "exec": [],
+                        "type": "text/javascript",
+                        "packages": {}
+                    }
+                }
+            ],
+            "auth": {}
+        },
+        {
+            "name": "RE05 - Tracking",
+            "description": "",
+            "item": [
+                {
+                    "name": "R01 - Tracking",
+                    "description": "",
+                    "event": [],
+                    "auth": {},
+                    "request": {
+                        "auth": {
+                            "type": "inherit",
+                            "inherit": []
+                        },
+                        "method": "GET",
+                        "body": {},
+                        "header": [],
+                        "url": {
+                            "raw": "{{baseUrl}}/shipments/9356579890/tracking",
+                            "path": [
+                                "shipments",
+                                "9356579890",
+                                "tracking"
+                            ],
+                            "host": [
+                                "{{baseUrl}}"
+                            ],
+                            "query": [
+                                {
+                                    "key": "trackingView",
+                                    "value": "all-checkpoints",
+                                    "description": "",
+                                    "type": "string"
+                                },
+                                {
+                                    "key": "levelOfDetail",
+                                    "value": "all",
+                                    "description": "",
+                                    "type": "string"
+                                }
+                            ],
+                            "variable": []
+                        }
+                    },
+                    "response": [],
+                    "protocolProfileBehavior": {
+                        "strictSSL": false,
+                        "followRedirects": true
+                    }
+                }
+            ],
+            "event": [
+                {
+                    "listen": "prerequest",
+                    "script": {
+                        "exec": [],
+                        "type": "text/javascript",
+                        "packages": {}
+                    }
+                },
+                {
+                    "listen": "test",
+                    "script": {
+                        "exec": [],
+                        "type": "text/javascript",
+                        "packages": {}
+                    }
+                }
+            ],
+            "auth": {}
+        },
+        {
+            "name": "Products",
+            "description": "",
+            "event": [],
+            "auth": {},
+            "request": {
+                "auth": {
+                    "type": "inherit",
+                    "inherit": []
+                },
+                "method": "GET",
+                "body": {},
+                "header": [
+                    {
+                        "key": "x-version",
+                        "value": "3.4.0",
+                        "description": "",
+                        "type": "string"
+                    }
+                ],
+                "url": {
+                    "raw": "{{baseUrl}}/products",
+                    "path": [
+                        "products"
+                    ],
+                    "host": [
+                        "{{baseUrl}}"
+                    ],
+                    "query": [
+                        {
+                            "key": "accountNumber",
+                            "value": "{{export_acct}}",
+                            "description": "",
+                            "type": "string"
+                        },
+                        {
+                            "key": "originCountryCode",
+                            "value": "{{ng_code}}",
+                            "description": "",
+                            "type": "string"
+                        },
+                        {
+                            "key": "originCityName",
+                            "value": "{{ng_1_city}}",
+                            "description": "",
+                            "type": "string"
+                        },
+                        {
+                            "key": "destinationCountryCode",
+                            "value": "{{ng_code}}",
+                            "description": "",
+                            "type": "string"
+                        },
+                        {
+                            "key": "destinationCityName",
+                            "value": "{{ng_2_city}}",
+                            "description": "",
+                            "type": "string"
+                        },
+                        {
+                            "key": "weight",
+                            "value": "4",
+                            "description": "",
+                            "type": "string"
+                        },
+                        {
+                            "key": "length",
+                            "value": "1",
+                            "description": "",
+                            "type": "string"
+                        },
+                        {
+                            "key": "width",
+                            "value": "1",
+                            "description": "",
+                            "type": "string"
+                        },
+                        {
+                            "key": "height",
+                            "value": "1",
+                            "description": "",
+                            "type": "string"
+                        },
+                        {
+                            "key": "plannedShippingDate",
+                            "value": "{{date}}",
+                            "description": "",
+                            "type": "string"
+                        },
+                        {
+                            "key": "isCustomsDeclarable",
+                            "value": "false",
+                            "description": "",
+                            "type": "string"
+                        },
+                        {
+                            "key": "unitOfMeasurement",
+                            "value": "metric",
+                            "description": "",
+                            "type": "string"
+                        }
+                    ],
+                    "variable": []
+                }
+            },
+            "response": [],
+            "protocolProfileBehavior": {
+                "strictSSL": false,
+                "followRedirects": true
+            }
+        }
+    ],
+    "variable": [],
+    "event": [],
+    "auth": {}
+}
