@@ -70,6 +70,7 @@ from app.models.product_logistics_profile import ProductLogisticsProfile
 from app.models.user import User, UserRole
 from app.services.admin_shadow_quote import _planned_ship_date_for_shadow_quote
 from app.services.dhl.rating import derive_sandbox_cohort_id
+from app.services.fulfillment.contracts import resolve_country_code
 
 HUB_PREP_SOURCE_SYSTEM = "shopsoma_hub_prep"
 DEFAULT_SANDBOX_NAMESPACE = uuid.UUID("30f204c5-ac27-4719-89fc-cc9208f19032")
@@ -214,9 +215,17 @@ async def _resolve_selected_dhl_service_for_order(
     order: Order,
     planned_ship_date: date,
 ) -> dict[str, Any]:
-    product_code = "N"
-    service_code = "N"
-    service_label = "EXPRESS DOMESTIC"
+    addr = getattr(order, "shipping_address", None)
+    try:
+        dest_country_code = resolve_country_code(
+            (getattr(addr, "country", None) if addr else None) or "NG"
+        )
+    except ValueError:
+        dest_country_code = "NG"
+    is_export = dest_country_code != "NG"
+    product_code = "P" if is_export else "N"
+    service_code = "P" if is_export else "N"
+    service_label = "EXPRESS WORLDWIDE" if is_export else "EXPRESS DOMESTIC"
     amount = Decimal(str(order.shipping_cost or Decimal("13555.09"))).quantize(
         Decimal("0.0001")
     )
@@ -326,6 +335,8 @@ async def _ensure_selected_quote_for_intent(
     fingerprint = hashlib.sha256(
         f"hub-prep:{order.id}:{intent.id}:{package.id}:{seal.id}".encode("utf-8")
     ).hexdigest()
+    dhl_env = "production" if settings.DHL_ENVIRONMENT == "production" else "sandbox"
+    dhl_alias = "dhl-ng-live" if dhl_env == "production" else "dhl-ng-sandbox"
     attempt = DomesticRateAttempt(
         intent_id=intent.id,
         order_id=order.id,
@@ -334,11 +345,11 @@ async def _ensure_selected_quote_for_intent(
         seal_id=seal.id,
         origin_hub_id=hub.id,
         hub_version=hub.version,
-        destination_country_code="NG",
+        destination_country_code=intent.destination_country_code or "NG",
         destination_snapshot_hash=intent.destination_snapshot_hash,
         provider="dhl",
-        environment="sandbox",
-        account_alias="dhl-ng-sandbox",
+        environment=dhl_env,
+        account_alias=dhl_alias,
         initiating_actor_type="admin",
         initiating_actor_id=str(operator_id),
         source_command="admin_shadow_quote",
@@ -885,8 +896,15 @@ async def prepare_dhl_hub_package_for_order(
     dest_line2 = dest_line2_raw.strip()[:255] if dest_line2_raw and dest_line2_raw.strip() else None
     dest_city = ((getattr(addr, "city", None) if addr else None) or "Lagos").strip()[:100]
     dest_state = ((getattr(addr, "state", None) if addr else None) or "Lagos").strip()[:100]
-    dest_postal_raw = (getattr(addr, "postal_code", None) if addr else None) or "101241"
-    dest_postal = dest_postal_raw.strip()[:30] if dest_postal_raw and dest_postal_raw.strip() else "101241"
+    try:
+        dest_country_code = resolve_country_code(
+            (getattr(addr, "country", None) if addr else None) or "NG"
+        )
+    except ValueError:
+        dest_country_code = "NG"
+    default_postal = "101241" if dest_country_code == "NG" else "00000"
+    dest_postal_raw = (getattr(addr, "postal_code", None) if addr else None) or default_postal
+    dest_postal = dest_postal_raw.strip()[:20] if dest_postal_raw and dest_postal_raw.strip() else default_postal
 
     intent_created = await db.scalar(text("SELECT clock_timestamp()"))
     assert intent_created is not None
@@ -903,7 +921,7 @@ async def prepare_dhl_hub_package_for_order(
         destination_city=dest_city,
         destination_state=dest_state,
         destination_postal_code=dest_postal,
-        destination_country_code="NG",
+        destination_country_code=dest_country_code,
         source_command="prepare_outbound",
         idempotency_key=f"prep-intent-{package.id.hex}",
         created_by_id=operator_id,

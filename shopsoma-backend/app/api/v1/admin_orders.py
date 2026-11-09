@@ -61,6 +61,8 @@ from app.schemas.admin_order import (
     DHLBookingReconciliationRequest,
     DHLHandoffRequest,
     DHLHandoffResult,
+    DHLPickupRequest,
+    DHLPickupResult,
     DHLTrackingRefreshRequest,
     DHLTrackingRefreshResult,
 )
@@ -74,6 +76,7 @@ from app.services.dhl.shipments import (
     BookingCommand,
     BookingReconciliationCommand,
     HandoffCommand,
+    PickupRequestCommand,
     TrackingRefreshCommand,
     ShipmentPhase4ConflictError,
     ShipmentPhase4Error,
@@ -86,6 +89,7 @@ from app.services.dhl.shipments import (
     reconcile_unknown_booking_outcome,
     record_collection_handoff,
     refresh_tracking,
+    request_hub_pickup,
 )
 
 router = APIRouter(prefix="/admin/orders", tags=["Admin Orders"])
@@ -1987,3 +1991,68 @@ async def prepare_dhl_package(
         raise HTTPException(status_code=status_code, detail=detail) from exc
 
     return await get_order_detail(order_id=order_id, admin=admin, db=db)
+
+
+@router.post("/{order_id}/dhl/bookings/{booking_id}/pickup", response_model=DHLPickupResult)
+async def request_dhl_booking_pickup(
+    order_id: str,
+    booking_id: str,
+    payload: Optional[DHLPickupRequest] = None,
+    admin: User = Depends(get_current_admin),
+    db: AsyncSession = Depends(get_db),
+    app_settings: Settings = Depends(get_app_settings),
+):
+    """Notify DHL Express for hub collection of a booked shipment (`POST /pickups`)."""
+    try:
+        parsed_order_id = UUID(order_id)
+        parsed_booking_id = UUID(booking_id)
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="Invalid order or booking id",
+        ) from exc
+
+    request_body = payload or DHLPickupRequest()
+    try:
+        result = await request_hub_pickup(
+            db,
+            order_id=parsed_order_id,
+            admin=admin,
+            settings=app_settings,
+            command=PickupRequestCommand(
+                booking_id=parsed_booking_id,
+                planned_pickup_at=request_body.planned_pickup_at,
+                close_time=request_body.close_time,
+                location=request_body.location,
+                special_instruction=request_body.special_instruction,
+            ),
+        )
+        await db.commit()
+    except ShipmentPhase4UnavailableError as exc:
+        await db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=str(exc),
+        ) from exc
+    except ShipmentPhase4ConflictError as exc:
+        await db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=str(exc),
+        ) from exc
+    except ShipmentPhase4Error as exc:
+        await db.rollback()
+        detail = str(exc)
+        status_code = (
+            status.HTTP_404_NOT_FOUND
+            if "not found" in detail
+            else status.HTTP_400_BAD_REQUEST
+        )
+        raise HTTPException(status_code=status_code, detail=detail) from exc
+
+    order = (
+        await db.execute(select(Order).where(Order.id == parsed_order_id))
+    ).scalar_one_or_none()
+    if order is not None:
+        await _broadcast_order_update(order)
+    return DHLPickupResult.model_validate(result)

@@ -126,6 +126,9 @@ class Settings(BaseSettings):
     DHL_DOMESTIC_PROVIDER_CALLS_ENABLED: bool = False
     DHL_DOMESTIC_CHECKOUT_ENABLED: bool = False
     DHL_DOMESTIC_SANDBOX_COHORT_IDS: str = ""
+    DHL_LIVE_ENABLED: bool = False
+    DHL_EXPORT_ENABLED: bool = True
+    DHL_ALLOWED_EXPORT_COUNTRIES: str = "GH,US,GB,CA,ZA,KE,AE,FR,DE"
     DHL_DOMESTIC_QUOTE_TTL_SECONDS: int = Field(default=1800, ge=300, le=3600)
     DHL_DOMESTIC_PAYMENT_WINDOW_SECONDS: int = Field(default=1800, ge=300, le=3600)
     DHL_DOMESTIC_AUTH_GRACE_SECONDS: int = Field(default=900, ge=60, le=1800)
@@ -205,6 +208,28 @@ class Settings(BaseSettings):
         if len(set(cohort_ids)) != len(cohort_ids):
             return frozenset()
         return frozenset(cohort_ids)
+
+    @property
+    def dhl_allowed_export_countries(self) -> frozenset[str]:
+        """Return normalized ISO-2 export destination country allow-list (excluding NG)."""
+        raw = self.DHL_ALLOWED_EXPORT_COUNTRIES.strip()
+        if not raw:
+            return frozenset()
+        codes = {
+            part.strip().upper()
+            for part in raw.split(",")
+            if len(part.strip()) == 2 and part.strip().isalpha()
+        }
+        codes.discard("NG")
+        return frozenset(codes)
+
+    @property
+    def dhl_supported_country_codes(self) -> frozenset[str]:
+        """Return all destination ISO-2 country codes supported by DHL rating/booking."""
+        base = frozenset({"NG"})
+        if not self.DHL_EXPORT_ENABLED:
+            return base
+        return base | self.dhl_allowed_export_countries
 
     @property
     def FRONTEND_URL(self) -> str:

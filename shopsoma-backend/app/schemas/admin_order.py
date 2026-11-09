@@ -243,6 +243,9 @@ class DHLOperationBooking(BaseModel):
     reconciliation_state: Literal["not_required", "in_progress", "required", "expired_claim_requires_recovery", "resolved", "inconsistent"]
     reconciliation_resolution: Optional[Literal["confirm_success", "confirm_failure"]]
     reconciliation_recorded_at: Optional[datetime]
+    pickup_confirmation_number: Optional[str] = None
+    pickup_scheduled_for: Optional[datetime] = None
+    pickup_requested_at: Optional[datetime] = None
 
 
 class DHLOperations(BaseModel):
@@ -523,6 +526,30 @@ class DHLTrackingRefreshResult(BaseModel):
     customer_status: str
     observations_recorded: int
     refreshed_at: datetime
+
+    class Config:
+        from_attributes = True
+
+
+class DHLPickupRequest(BaseModel):
+    planned_pickup_at: Optional[datetime] = None
+    close_time: str = Field(default="18:00", min_length=4, max_length=5)
+    location: str = Field(default="reception", min_length=1, max_length=80)
+    special_instruction: str = Field(
+        default="Collect ready parcel from ShopSoma Hub reception",
+        min_length=1,
+        max_length=75,
+    )
+
+
+class DHLPickupResult(BaseModel):
+    booking_id: UUID
+    order_id: UUID
+    tracking_number: str
+    pickup_confirmation_number: str
+    pickup_scheduled_for: datetime
+    pickup_requested_at: datetime
+    replayed: bool = False
 
     class Config:
         from_attributes = True

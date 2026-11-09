@@ -82,6 +82,7 @@ from app.services.checkout.capabilities import (
     authorize_checkout_actor,
 )
 from app.services.shipping.capabilities import domestic_shipping_capabilities
+from app.services.fulfillment.contracts import resolve_country_code
 from app.services.checkout.reservations import release_active_order_reservations
 
 router = APIRouter(prefix="/orders", tags=["Orders"])
@@ -93,21 +94,33 @@ def _domestic_checkout_is_enforced(
     *, customer_id: UUID, country: str, currency: str, shipping_provider: str = "manual"
 ) -> bool:
     """Assign only explicitly eligible new orders; absence never implies domestic."""
+    country_code = resolve_country_code(country)
     if (
         shipping_provider in ("shipbubble", "combined")
         and settings.shipbubble_configured
-        and country.strip().casefold() in {"nigeria", "ng"}
+        and country_code == "NG"
         and currency in SUPPORTED_ORDER_CURRENCIES
     ):
         return True
     if not settings.DOMESTIC_CHECKOUT_PREREQUISITES_ENABLED:
         return False
+    dhl_env_ok = settings.DHL_ENVIRONMENT == "sandbox" or (
+        settings.DHL_ENVIRONMENT == "production"
+        and bool(getattr(settings, "DHL_LIVE_ENABLED", False))
+    )
     if (
-        (settings.ENVIRONMENT == "production" and shipping_provider not in ("dhl", "combined"))
-        or settings.DHL_ENVIRONMENT != "sandbox"
+        (
+            settings.ENVIRONMENT == "production"
+            and shipping_provider not in ("dhl", "combined")
+            and not bool(getattr(settings, "DHL_LIVE_ENABLED", False))
+        )
+        or not dhl_env_ok
     ):
         return False
-    if country.strip().casefold() not in {"nigeria", "ng"} or currency not in SUPPORTED_ORDER_CURRENCIES:
+    supported_countries = getattr(
+        settings, "dhl_supported_country_codes", frozenset({"NG"})
+    )
+    if country_code not in supported_countries or currency not in SUPPORTED_ORDER_CURRENCIES:
         return False
     if customer_id in settings.domestic_checkout_cohort_ids:
         return True
