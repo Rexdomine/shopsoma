@@ -175,13 +175,20 @@ export default function AdminProductEdit() {
         setComparePrice(data.compare_at_price?.toString() || '');
 
         let initialStock = data.total_stock ?? 0;
-        if (data.product_type === 'variable' && !data.made_to_order && data.variations && data.variations.length > 0) {
-          const varStock = data.variations.reduce(
-            (sum: number, v: any) => sum + (v.size_stocks || []).reduce((sSum: number, s: any) => sSum + (s.stock || 0), 0),
-            0
-          );
-          if (varStock > 0 || initialStock === 0) {
-            initialStock = varStock;
+        if (!data.made_to_order) {
+          if (data.variations && data.variations.length > 0 && (data.product_type === 'variable' || initialStock === 0)) {
+            const varStock = data.variations.reduce(
+              (sum: number, v: any) => sum + (v.size_stocks || []).reduce((sSum: number, s: any) => sSum + (s.stock || 0), 0),
+              0
+            );
+            if (varStock > 0 || initialStock === 0) {
+              initialStock = varStock;
+            }
+          } else if (initialStock === 0 && data.variants && data.variants.length > 0) {
+            const variantStock = data.variants.reduce((sum: number, v: any) => sum + (v.stock || 0), 0);
+            if (variantStock > 0) {
+              initialStock = variantStock;
+            }
           }
         }
         setTotalStock(initialStock.toString());

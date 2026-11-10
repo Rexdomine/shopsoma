@@ -770,14 +770,39 @@ export default function AdminProductDetail() {
                   </>
                 ) : (
                   <>
-                    <div className="flex items-center justify-between">
-                      <span className="text-sm text-gray-500">Total Stock</span>
-                      <span className="text-sm font-medium text-gray-900">{product.total_stock || 0}</span>
-                    </div>
-                    <div className="flex items-center justify-between">
-                      <span className="text-sm text-gray-500">Inventory Quantity</span>
-                      <span className="text-sm font-medium text-gray-900">{product.inventory_quantity || 0}</span>
-                    </div>
+                    {(() => {
+                      let effectiveStock = product.total_stock ?? 0;
+                      if (product.variations && product.variations.length > 0 && (product.product_type === 'variable' || effectiveStock === 0)) {
+                        const varStock = product.variations.reduce(
+                          (sum, v) => sum + (v.size_stocks || []).reduce((sSum, s) => sSum + (s.stock || 0), 0),
+                          0
+                        );
+                        if (varStock > 0 || effectiveStock === 0) {
+                          effectiveStock = varStock;
+                        }
+                      } else if (effectiveStock === 0 && product.variants && product.variants.length > 0) {
+                        const variantStock = product.variants.reduce((sum, v) => sum + (v.stock || 0), 0);
+                        if (variantStock > 0) {
+                          effectiveStock = variantStock;
+                        }
+                      }
+                      const inventoryQuantity =
+                        product.inventory_quantity && product.inventory_quantity > 0
+                          ? product.inventory_quantity
+                          : effectiveStock;
+                      return (
+                        <>
+                          <div className="flex items-center justify-between">
+                            <span className="text-sm text-gray-500">Total Stock</span>
+                            <span className="text-sm font-medium text-gray-900">{effectiveStock}</span>
+                          </div>
+                          <div className="flex items-center justify-between">
+                            <span className="text-sm text-gray-500">Inventory Quantity</span>
+                            <span className="text-sm font-medium text-gray-900">{inventoryQuantity}</span>
+                          </div>
+                        </>
+                      );
+                    })()}
                   </>
                 )}
               </div>
