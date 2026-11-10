@@ -156,68 +156,8 @@ END $$;
         """
     )
 
-    # 7. Relax DHL outbound constraints for international export & production, and add hub pickup columns
-    op.execute(
-        """
-        ALTER TABLE outbound_shipment_intents
-        DROP CONSTRAINT IF EXISTS ck_outbound_intents_country_ng;
-
-        ALTER TABLE outbound_shipment_intents
-        ADD CONSTRAINT ck_outbound_intents_country_ng
-        CHECK (destination_country_code ~ '^[A-Z]{2}$');
-
-        ALTER TABLE domestic_rate_attempts
-        DROP CONSTRAINT IF EXISTS ck_domestic_rate_attempts_lane;
-
-        ALTER TABLE domestic_rate_attempts
-        ADD CONSTRAINT ck_domestic_rate_attempts_lane
-        CHECK (provider = 'dhl' AND environment IN ('sandbox', 'production') AND destination_country_code ~ '^[A-Z]{2}$');
-
-        ALTER TABLE outbound_shipment_booking
-        DROP CONSTRAINT IF EXISTS ck_outbound_shipment_bookings_lane;
-
-        ALTER TABLE outbound_shipment_booking
-        ADD CONSTRAINT ck_outbound_shipment_bookings_lane
-        CHECK (provider = 'dhl' AND environment IN ('sandbox', 'production'));
-
-        ALTER TABLE outbound_shipment_booking
-        ADD COLUMN IF NOT EXISTS pickup_confirmation_number VARCHAR(120),
-        ADD COLUMN IF NOT EXISTS pickup_scheduled_for TIMESTAMPTZ,
-        ADD COLUMN IF NOT EXISTS pickup_requested_at TIMESTAMPTZ;
-        """
-    )
-
 
 def downgrade() -> None:
-    op.execute(
-        """
-        ALTER TABLE outbound_shipment_booking
-        DROP COLUMN IF EXISTS pickup_requested_at,
-        DROP COLUMN IF EXISTS pickup_scheduled_for,
-        DROP COLUMN IF EXISTS pickup_confirmation_number;
-
-        ALTER TABLE outbound_shipment_booking
-        DROP CONSTRAINT IF EXISTS ck_outbound_shipment_bookings_lane;
-
-        ALTER TABLE outbound_shipment_booking
-        ADD CONSTRAINT ck_outbound_shipment_bookings_lane
-        CHECK (provider = 'dhl' AND environment = 'sandbox');
-
-        ALTER TABLE domestic_rate_attempts
-        DROP CONSTRAINT IF EXISTS ck_domestic_rate_attempts_lane;
-
-        ALTER TABLE domestic_rate_attempts
-        ADD CONSTRAINT ck_domestic_rate_attempts_lane
-        CHECK (provider = 'dhl' AND environment = 'sandbox' AND destination_country_code = 'NG');
-
-        ALTER TABLE outbound_shipment_intents
-        DROP CONSTRAINT IF EXISTS ck_outbound_intents_country_ng;
-
-        ALTER TABLE outbound_shipment_intents
-        ADD CONSTRAINT ck_outbound_intents_country_ng
-        CHECK (destination_country_code = 'NG');
-        """
-    )
     op.execute(
         r"""
 CREATE OR REPLACE FUNCTION validate_checkout_estimate_option_write() RETURNS trigger LANGUAGE plpgsql AS $$
