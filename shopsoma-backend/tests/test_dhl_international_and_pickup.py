@@ -458,3 +458,31 @@ def test_phase3_pickup_payload_and_phase4_production_gate() -> None:
     assert shipment_details[0]["productCode"] == "P"
     assert shipment_details[0]["isCustomsDeclarable"] is True
     assert shipment_details[0]["shipmentTrackingNumber"] == "1234567890"
+    # Regression: MyDHL /pickups rejects customs-declarable shipments without these (HTTP 422).
+    assert shipment_details[0]["declaredValue"] > 0
+    assert shipment_details[0]["declaredValueCurrency"] in {"NGN", "USD", "GBP", "EUR", "CAD"}
+
+    ng_intent = SimpleNamespace(**{**vars(intent), "destination_country_code": "NG"})
+    ng_pickup = build_hub_pickup_payload(
+        settings=cast(Settings, prod_enabled),
+        booking=cast(Any, booking),
+        intent=cast(Any, ng_intent),
+        order=cast(Any, order),
+        hub=cast(Any, hub),
+        package_version=cast(Any, package_version),
+        planned_pickup_at=datetime(2026, 11, 12, 14, 0),
+    )
+    ng_details = cast(list[dict[str, Any]], ng_pickup["shipmentDetails"])[0]
+    assert ng_details["productCode"] == "N"
+    assert ng_details["isCustomsDeclarable"] is False
+    assert "declaredValue" not in ng_details
+
+
+def test_phase4_booking_lane_replays_in_the_same_environment() -> None:
+    from app.services.dhl.shipments import _booking_lane
+
+    assert _booking_lane(cast(Settings, _make_settings())) == ("sandbox", "dhl-ng-sandbox")
+    assert _booking_lane(
+        cast(Settings, _make_settings(environment="production", live_enabled=True))
+    ) == ("production", "dhl-ng-production")
+    assert _booking_lane(None) == ("sandbox", "dhl-ng-sandbox")
