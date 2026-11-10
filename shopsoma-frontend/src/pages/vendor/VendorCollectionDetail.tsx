@@ -99,12 +99,29 @@ export default function VendorCollectionDetail() {
 
   const mapProductToSummary = (product: Product): CollectionProductSummary => {
     const primaryImage = product.images?.find((img) => img.is_primary) || product.images?.[0];
+    let totalStock = product.total_stock || 0;
+    if (!product.made_to_order) {
+      if (product.variations && product.variations.length > 0 && (product.product_type === 'variable' || totalStock === 0)) {
+        const varStock = product.variations.reduce(
+          (sum, v) => sum + (v.size_stocks || []).reduce((sSum, s) => sSum + (s.stock || 0), 0),
+          0
+        );
+        if (varStock > 0 || totalStock === 0) {
+          totalStock = varStock;
+        }
+      } else if (totalStock === 0 && product.variants && product.variants.length > 0) {
+        const variantStock = product.variants.reduce((sum, v) => sum + (v.stock || 0), 0);
+        if (variantStock > 0) {
+          totalStock = variantStock;
+        }
+      }
+    }
     return {
       id: product.id,
       title: product.title,
       status: product.status,
       base_price: product.base_price,
-      total_stock: product.total_stock || 0,
+      total_stock: totalStock,
       made_to_order: product.made_to_order,
       made_to_order_timeline: product.made_to_order_timeline,
       created_at: product.created_at,
