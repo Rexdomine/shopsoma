@@ -336,7 +336,7 @@ async def _ensure_selected_quote_for_intent(
         f"hub-prep:{order.id}:{intent.id}:{package.id}:{seal.id}".encode("utf-8")
     ).hexdigest()
     dhl_env = "production" if settings.DHL_ENVIRONMENT == "production" else "sandbox"
-    dhl_alias = "dhl-ng-live" if dhl_env == "production" else "dhl-ng-sandbox"
+    dhl_alias = "dhl-ng-production" if dhl_env == "production" else "dhl-ng-sandbox"
     attempt = DomesticRateAttempt(
         intent_id=intent.id,
         order_id=order.id,

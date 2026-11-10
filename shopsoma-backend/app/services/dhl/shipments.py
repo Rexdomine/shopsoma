@@ -63,7 +63,7 @@ from app.models.fulfillment_hub import FulfillmentHub
 PROVIDER = "dhl"
 ENVIRONMENT = "sandbox"
 ACCOUNT_ALIAS = "dhl-ng-sandbox"
-PROD_ACCOUNT_ALIAS = "dhl-ng-prod"
+PROD_ACCOUNT_ALIAS = "dhl-ng-production"
 MYDHL_TEST_BASE_URL = "https://express.api.dhl.com/mydhlapi/test"
 MYDHL_PROD_BASE_URL = "https://express.api.dhl.com/mydhlapi"
 BOOKING_ADAPTER_VERSION = "mydhl-shipments-v1"
@@ -1058,18 +1058,27 @@ async def _package_cohort_ids(
     return frozenset(rows)
 
 
+def _booking_lane(settings: Settings | None) -> tuple[str, str]:
+    """Return the (environment, account_alias) pair used to persist and replay bookings."""
+    if settings is not None and getattr(settings, "DHL_ENVIRONMENT", "sandbox") == "production":
+        return "production", PROD_ACCOUNT_ALIAS
+    return ENVIRONMENT, ACCOUNT_ALIAS
+
+
 async def _matching_replay(
     db: AsyncSession,
     *,
     order_id: uuid.UUID,
     command: BookingCommand,
+    settings: Settings | None = None,
 ) -> OutboundShipmentBooking | None:
+    lane_environment, lane_alias = _booking_lane(settings)
     existing = (
         await db.execute(
             select(OutboundShipmentBooking).where(
                 OutboundShipmentBooking.provider == PROVIDER,
-                OutboundShipmentBooking.environment == ENVIRONMENT,
-                OutboundShipmentBooking.account_alias == ACCOUNT_ALIAS,
+                OutboundShipmentBooking.environment == lane_environment,
+                OutboundShipmentBooking.account_alias == lane_alias,
                 OutboundShipmentBooking.idempotency_key == command.idempotency_key,
             )
         )
@@ -1936,7 +1945,7 @@ async def book_outbound_shipment(
         seal_id=command.seal_id,
         idempotency_key=_normalize_text(command.idempotency_key, field="idempotency_key"),
     )
-    replay = await _matching_replay(db, order_id=order_id, command=command)
+    replay = await _matching_replay(db, order_id=order_id, command=command, settings=settings)
     if replay is not None:
         now = await db.scalar(text("SELECT clock_timestamp()"))
         assert now is not None
@@ -1962,7 +1971,7 @@ async def book_outbound_shipment(
         )
         quoted_service = await _load_persisted_quoted_service(db, intent_id=intent.id)
         guard = await _load_or_create_guard(db, intent_id=intent.id)
-    replay = await _matching_replay(db, order_id=order_id, command=command)
+    replay = await _matching_replay(db, order_id=order_id, command=command, settings=settings)
     if replay is not None:
         return _booking_result(replay, replayed=True)
     if guard.booking_blocked_reason == "unknown_outcome":
@@ -1990,8 +1999,7 @@ async def book_outbound_shipment(
     now = await db.scalar(text("SELECT clock_timestamp()"))
     assert now is not None
     planned_ship_date = quoted_service.planned_ship_date
-    booking_env = "production" if getattr(settings, "DHL_ENVIRONMENT", "sandbox") == "production" else ENVIRONMENT
-    booking_alias = PROD_ACCOUNT_ALIAS if booking_env == "production" else ACCOUNT_ALIAS
+    booking_env, booking_alias = _booking_lane(settings)
     booking = OutboundShipmentBooking(
         intent_id=intent.id,
         order_id=order.id,
@@ -3266,6 +3274,18 @@ def build_hub_pickup_payload(
     product_code = "P" if is_export else "N"
     account_number = settings.DHL_EXPORT_ACCOUNT_NUMBER.get_secret_value()
     clean_instruction = (special_instruction or "Collect ready parcel from ShopSoma Hub").strip()[:75]
+    customs_fields: dict[str, object] = {}
+    if is_export:
+        # MyDHL /pickups requires declaredValue + declaredValueCurrency for customs-declarable shipments.
+        export_fields = build_export_content_fields(
+            order=order,
+            package_version=package_version,
+            planned_ship_date=planned_pickup_at.date(),
+        )
+        customs_fields = {
+            "declaredValue": export_fields["declaredValue"],
+            "declaredValueCurrency": export_fields["declaredValueCurrency"],
+        }
     return {
         "plannedPickupDateAndTime": _mydhl_planned_pickup_timestamp(planned_pickup_at),
         "closeTime": (close_time or "18:00").strip()[:5],
@@ -3315,6 +3335,7 @@ def build_hub_pickup_payload(
                     }
                 ],
                 "isCustomsDeclarable": is_export,
+                **customs_fields,
                 "unitOfMeasurement": "metric",
                 "shipmentTrackingNumber": booking.tracking_number,
                 "packages": [
