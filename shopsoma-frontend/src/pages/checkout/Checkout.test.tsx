@@ -2369,4 +2369,103 @@ describe('Checkout M5 sequencing and recovery', () => {
     expect(screen.queryByText(/Delivery options changed/i)).not.toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Continue to payment' })).toBeEnabled();
   });
+
+  it('allows switching country when editing an address and selecting an international Google Maps address suggestion', async () => {
+    const ukUpdatedAddress = {
+      ...address,
+      phone_number: '+442079460991',
+      address_line1: '10 Downing Street',
+      city: 'London',
+      state: 'England',
+      postal_code: 'SW1A 2AA',
+      country: 'United Kingdom',
+    };
+    mocks.updateAddress.mockResolvedValueOnce(ukUpdatedAddress);
+
+    window.google = {
+      maps: {
+        places: {
+          PlacesServiceStatus: { OK: 'OK', ZERO_RESULTS: 'ZERO_RESULTS' },
+          AutocompleteService: function () {
+            return {
+              getPlacePredictions: (req: { input: string; componentRestrictions?: { country?: string } }, cb: (predictions: any[], status: string) => void) => {
+                if (req.componentRestrictions?.country === 'gb') {
+                  cb(
+                    [
+                      {
+                        place_id: 'place-uk-10',
+                        description: '10 Downing Street, London, UK',
+                        structured_formatting: {
+                          main_text: '10 Downing Street',
+                          secondary_text: 'London, UK',
+                        },
+                      },
+                    ],
+                    'OK'
+                  );
+                } else {
+                  cb([], 'ZERO_RESULTS');
+                }
+              },
+            };
+          },
+          PlacesService: function () {
+            return {
+              getDetails: (_req: { placeId: string }, cb: (place: any, status: string) => void) => {
+                cb(
+                  {
+                    place_id: 'place-uk-10',
+                    formatted_address: '10 Downing St, London SW1A 2AA, UK',
+                    address_components: [
+                      { long_name: '10', short_name: '10', types: ['street_number'] },
+                      { long_name: 'Downing Street', short_name: 'Downing St', types: ['route'] },
+                      { long_name: 'London', short_name: 'London', types: ['postal_town'] },
+                      { long_name: 'England', short_name: 'England', types: ['administrative_area_level_1'] },
+                      { long_name: 'SW1A 2AA', short_name: 'SW1A 2AA', types: ['postal_code'] },
+                      { long_name: 'United Kingdom', short_name: 'GB', types: ['country'] },
+                    ],
+                  },
+                  'OK'
+                );
+              },
+            };
+          },
+        },
+      },
+    } as any;
+
+    render(<MemoryRouter initialEntries={['/checkout']}><CheckoutTestRoutes /></MemoryRouter>);
+    await waitFor(() => expect(mocks.getAddresses).toHaveBeenCalled());
+
+    fireEvent.click(screen.getByRole('button', { name: 'Edit delivery address' }));
+    expect(screen.getByLabelText('Street Address')).toHaveValue('1 Test Street');
+
+    // Switching country clears the previous Nigerian address fields
+    fireEvent.change(screen.getByLabelText('Country'), { target: { value: 'United Kingdom' } });
+    expect(screen.getByLabelText('Street Address')).toHaveValue('');
+    expect(screen.getByLabelText('City')).toHaveValue('');
+    expect(screen.getByLabelText('State')).toHaveValue('');
+
+    fireEvent.change(screen.getByPlaceholderText('+14155550100'), { target: { value: '+442079460991' } });
+    fireEvent.change(screen.getByLabelText('Street Address'), { target: { value: '10 Downing Street' } });
+    fireEvent.click(await screen.findByRole('button', { name: /10 Downing Street/i }));
+
+    await waitFor(() => expect(screen.getByText(/Verified with Google Maps: 10 Downing St, London SW1A 2AA, UK/i)).toBeInTheDocument());
+    expect(screen.getByLabelText('Country')).toHaveValue('United Kingdom');
+    expect(screen.getByLabelText('City')).toHaveValue('London');
+    expect(screen.getByLabelText('State')).toHaveValue('England');
+    expect(screen.getByLabelText('Postal code')).toHaveValue('SW1A 2AA');
+
+    const saveBtn = screen.getByRole('button', { name: 'Save changes' });
+    expect(saveBtn).toBeEnabled();
+    fireEvent.click(saveBtn);
+
+    await waitFor(() => expect(mocks.updateAddress).toHaveBeenCalledWith('address-1', expect.objectContaining({
+      address_line1: '10 Downing Street',
+      city: 'London',
+      state: 'England',
+      postal_code: 'SW1A 2AA',
+      country: 'United Kingdom',
+    })));
+  });
 });

@@ -193,10 +193,15 @@ export default function Checkout() {
     };
   }, []);
 
-  const executeAddressSearch = async (query: string, requestId: number) => {
+  const executeAddressSearch = async (query: string, requestId: number, countryOverride?: string) => {
     try {
-      const countryIso = resolveCountryIso2(newAddress.country).toLowerCase();
-      const suggestions = await fetchAddressSuggestions(query, { country: countryIso });
+      const targetCountry = countryOverride ?? newAddress.country;
+      const countryIso = resolveCountryIso2(targetCountry).toLowerCase();
+      const supportedRegionCodes = SUPPORTED_CHECKOUT_COUNTRIES.map(c => c.iso2.toLowerCase());
+      const suggestions = await fetchAddressSuggestions(query, {
+        country: countryIso,
+        countries: isNigerianCountry(targetCountry) ? supportedRegionCodes : undefined,
+      });
       if (autocompleteRequestSeq.current !== requestId) return;
       setAddressSuggestions(suggestions);
       setHasSearchedSuggestions(true);
@@ -214,7 +219,7 @@ export default function Checkout() {
     }
   };
 
-  const triggerAddressAutocomplete = (rawInput: string, immediate = false) => {
+  const triggerAddressAutocomplete = (rawInput: string, immediate = false, countryOverride?: string) => {
     if (autocompleteDebounceRef.current) {
       clearTimeout(autocompleteDebounceRef.current);
       autocompleteDebounceRef.current = null;
@@ -237,10 +242,10 @@ export default function Checkout() {
 
     const delayMs = immediate || import.meta.env.MODE === 'test' ? 0 : 180;
     if (delayMs === 0) {
-      void executeAddressSearch(query, requestId);
+      void executeAddressSearch(query, requestId, countryOverride);
     } else {
       autocompleteDebounceRef.current = setTimeout(() => {
-        void executeAddressSearch(query, requestId);
+        void executeAddressSearch(query, requestId, countryOverride);
       }, delayMs);
     }
   };
@@ -258,10 +263,13 @@ export default function Checkout() {
     setIsResolvingSuggestion(true);
 
     try {
-      const normalized = await resolveAddressSuggestion(suggestion);
+      const normalized = await resolveAddressSuggestion(suggestion, { country: newAddress.country });
       if (autocompleteRequestSeq.current !== requestId) return;
       setNewAddress(prev => {
         const nextHouseNumber = prev.house_number?.trim() || prev.address_line2?.trim() || normalized.addressLine2 || '';
+        const resolvedCountry = normalizeCountryName(normalized.country || prev.country || 'Nigeria');
+        const sameCountry =
+          normalizeCountryName(prev.country).toLowerCase() === resolvedCountry.toLowerCase();
         return {
           ...prev,
           address_line1: normalized.addressLine1,
@@ -269,8 +277,8 @@ export default function Checkout() {
           house_number: nextHouseNumber,
           city: normalized.city,
           state: normalized.state,
-          postal_code: normalized.postalCode || prev.postal_code || '',
-          country: normalized.country || 'Nigeria',
+          postal_code: normalized.postalCode || (sameCountry ? prev.postal_code || '' : ''),
+          country: resolvedCountry,
         };
       });
       setVerifiedAddressSelection(normalized);
@@ -511,8 +519,10 @@ export default function Checkout() {
 
   const handleCreateAddress = async () => {
     if (isPaymentLocked || !isAddressVerified || isResolvingSuggestion || isCheckoutRequestPending || isSwitchingCurrency) return;
-    const normalizedState = normalizeNigerianState(newAddress.state) || newAddress.state.trim();
     const normalizedCountry = normalizeCountryName(newAddress.country);
+    const normalizedState = isNigerianCountry(normalizedCountry)
+      ? normalizeNigerianState(newAddress.state) || newAddress.state.trim()
+      : newAddress.state.trim();
     const normalizedPostalCode = (newAddress.postal_code || '').trim().slice(0, 12);
     const normalizedHouseNumber = (newAddress.house_number ?? newAddress.address_line2 ?? '').trim();
 
@@ -1987,8 +1997,10 @@ export default function Checkout() {
                                 aria-label="Edit delivery address"
                                 disabled={isPaymentLocked || isCheckoutRequestPending || isSwitchingCurrency}
                                 onClick={() => {
-                                  const normalizedAddrState = normalizeNigerianState(addr.state) || addr.state;
                                   const normalizedAddrCountry = normalizeCountryName(addr.country);
+                                  const normalizedAddrState = isNigerianCountry(normalizedAddrCountry)
+                                    ? normalizeNigerianState(addr.state) || addr.state
+                                    : addr.state;
                                   const existingHouseNumber = addr.house_number ?? addr.address_line2 ?? '';
                                   resetAutocompleteState();
                                   setNewAddress({
@@ -2048,15 +2060,31 @@ export default function Checkout() {
                                   value={newAddress.country || 'Nigeria'}
                                   onChange={(e) => {
                                     const nextCountry = e.target.value;
-                                    const switchingBetweenNigeriaAndExport =
-                                      isNigerianCountry(nextCountry) !== isNigerianCountry(newAddress.country);
+                                    const currentNormalizedCountry = normalizeCountryName(newAddress.country).toLowerCase();
+                                    const nextNormalizedCountry = normalizeCountryName(nextCountry).toLowerCase();
+                                    const countryChanged = currentNormalizedCountry !== nextNormalizedCountry;
+                                    const editingAddr = editingAddressId ? addresses.find(a => a.id === editingAddressId) : null;
+                                    const hadPreviousCountryAddress = Boolean(
+                                      countryChanged && (
+                                        (editingAddr &&
+                                          newAddress.address_line1.trim() === editingAddr.address_line1.trim() &&
+                                          normalizeCountryName(editingAddr.country).toLowerCase() !== nextNormalizedCountry) ||
+                                        (verifiedAddressSelection &&
+                                          normalizeCountryName(verifiedAddressSelection.country).toLowerCase() !== nextNormalizedCountry)
+                                      )
+                                    );
+                                    const currentStreetInput = newAddress.address_line1;
+                                    resetAutocompleteState();
                                     setNewAddress(prev => ({
                                       ...prev,
                                       country: nextCountry,
-                                      state: switchingBetweenNigeriaAndExport ? '' : prev.state,
+                                      address_line1: hadPreviousCountryAddress ? '' : prev.address_line1,
+                                      city: hadPreviousCountryAddress ? '' : prev.city,
+                                      state: countryChanged ? '' : prev.state,
+                                      postal_code: hadPreviousCountryAddress ? '' : prev.postal_code,
                                     }));
-                                    if (verifiedAddressSelection) {
-                                      setVerifiedAddressSelection(null);
+                                    if (countryChanged && !hadPreviousCountryAddress && currentStreetInput.trim().length >= 2) {
+                                      triggerAddressAutocomplete(currentStreetInput, true, nextCountry);
                                     }
                                   }}
                                   className="w-full border-b border-gray-300 bg-white focus:border-primary focus:outline-none py-2 text-sm"
@@ -2144,9 +2172,15 @@ export default function Checkout() {
                                       const nextValue = e.target.value;
                                       setNewAddress(prev => ({ ...prev, address_line1: nextValue }));
                                       const editingAddr = editingAddressId ? addresses.find(a => a.id === editingAddressId) : null;
-                                      if (editingAddr && nextValue.trim() === editingAddr.address_line1.trim()) {
-                                        const normalizedEditState = normalizeNigerianState(newAddress.state) || newAddress.state;
-                                        const normalizedEditCountry = normalizeCountryName(newAddress.country);
+                                      const normalizedEditCountry = normalizeCountryName(newAddress.country);
+                                      if (
+                                        editingAddr &&
+                                        nextValue.trim() === editingAddr.address_line1.trim() &&
+                                        normalizeCountryName(editingAddr.country).toLowerCase() === normalizedEditCountry.toLowerCase()
+                                      ) {
+                                        const normalizedEditState = isNigerianCountry(normalizedEditCountry)
+                                          ? normalizeNigerianState(newAddress.state) || newAddress.state
+                                          : newAddress.state;
                                         setVerifiedAddressSelection({
                                           placeId: `saved-${editingAddr.id}`,
                                           formattedAddress: [editingAddr.address_line1, newAddress.city, normalizedEditState, normalizedEditCountry].filter(Boolean).join(', '),
@@ -2295,6 +2329,12 @@ export default function Checkout() {
                                         Verified with Google Maps: {verifiedAddressSelection.formattedAddress}
                                       </p>
                                     )
+                                  ) : !isDraftNigeria && newAddress.address_line1.trim() ? (
+                                    <p className="mt-1 text-xs text-gray-500">
+                                      {isAddressVerified
+                                        ? 'International delivery address ready.'
+                                        : 'Select a Google Maps suggestion above or complete your city and state/province below.'}
+                                    </p>
                                   ) : newAddress.address_line1.trim() ? (
                                     <p className="mt-1 text-xs text-amber-700">
                                       Select a Google Maps suggestion above to verify your delivery location.
@@ -2378,6 +2418,12 @@ export default function Checkout() {
                                       onChange={(e) => {
                                         const nextState = e.target.value;
                                         setNewAddress({ ...newAddress, state: nextState });
+                                        if (verifiedAddressSelection) {
+                                          setVerifiedAddressSelection({
+                                            ...verifiedAddressSelection,
+                                            state: nextState,
+                                          });
+                                        }
                                       }}
                                       placeholder="State / Province / Region"
                                       className="w-full border-b border-gray-300 focus:border-primary focus:outline-none py-2 text-sm"
@@ -2395,12 +2441,12 @@ export default function Checkout() {
                                   type="text"
                                   aria-label="Postal code"
                                   autoComplete="postal-code"
-                                  inputMode="numeric"
+                                  inputMode={isDraftNigeria ? 'numeric' : 'text'}
                                   maxLength={12}
                                   value={newAddress.postal_code || ''}
                                   onChange={(e) => setNewAddress({ ...newAddress, postal_code: e.target.value })}
                                   className="w-full border-b border-gray-300 focus:border-primary focus:outline-none py-2 text-sm"
-                                  placeholder="100001"
+                                  placeholder={isDraftNigeria ? '100001' : 'Postal / ZIP code'}
                                   required={postalCodeRequired}
                                 />
                                 {postalCodeRequired && (
