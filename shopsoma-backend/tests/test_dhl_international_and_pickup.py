@@ -22,11 +22,17 @@ from app.services.dhl.client import (
 )
 from app.services.dhl.customs import (
     DEFAULT_HS_CODE,
+    GENERIC_CONTENT_DESCRIPTION,
+    MAX_CONTENT_DESCRIPTION_LENGTH,
+    ShipmentContentLine,
+    build_content_description,
     build_export_content_fields,
+    content_line_from_order_item,
     resolve_hs_code,
 )
 from app.services.dhl.rating import DHLDomesticRateAdapter, DHLResolvedHub
 from app.services.dhl.shipments import (
+    BookingContents,
     DHLShipmentAdapter,
     QuotedShipmentService,
     ShipmentPhase4Error,
@@ -486,3 +492,184 @@ def test_phase4_booking_lane_replays_in_the_same_environment() -> None:
         cast(Settings, _make_settings(environment="production", live_enabled=True))
     ) == ("production", "dhl-ng-production")
     assert _booking_lane(None) == ("sandbox", "dhl-ng-sandbox")
+
+
+def _booking_fixture_parts(destination_country_code: str) -> tuple[Any, Any, Any, Any, QuotedShipmentService]:
+    from app.services.admin_shadow_quote import _planned_ship_date_for_shadow_quote
+
+    now_dt = datetime.now()
+    hub = SimpleNamespace(
+        name="ShopSoma Lagos Hub",
+        contact_name="ShopSoma Dispatch",
+        contact_phone="+2348000000000",
+        contact_email="hub@shopsoma.com",
+        address_line1="12 Admiralty Way",
+        address_line2=None,
+        city="Lagos",
+        state="Lagos",
+        postal_code="100001",
+        country_code="NG",
+        version=1,
+    )
+    intent = SimpleNamespace(
+        created_at=now_dt,
+        destination_name="Bello Karimu",
+        destination_phone="+447700900123",
+        destination_address_line1="10 Downing Street",
+        destination_address_line2=None,
+        destination_city="London" if destination_country_code != "NG" else "Lagos",
+        destination_state="London" if destination_country_code != "NG" else "Lagos",
+        destination_postal_code="SW1A 2AA" if destination_country_code != "NG" else "100001",
+        destination_country_code=destination_country_code,
+    )
+    package_version = SimpleNamespace(
+        weight_kg=Decimal("1.8"),
+        length_cm=Decimal("30"),
+        width_cm=Decimal("25"),
+        height_cm=Decimal("10"),
+    )
+    # ORM orders arrive without loaded relationships in async booking; model that here.
+    order = SimpleNamespace(id=uuid.uuid4(), order_number="SHP-TEST-1", currency="NGN", subtotal=Decimal("720000.00"))
+    is_export = destination_country_code != "NG"
+    quoted = QuotedShipmentService(
+        product_code="P" if is_export else "N",
+        service_code="P" if is_export else "N",
+        hub_version=1,
+        planned_ship_date=_planned_ship_date_for_shadow_quote(now_dt),
+    )
+    return hub, intent, package_version, order, quoted
+
+
+_PACKED_CONTENTS = BookingContents(
+    lines=(
+        ShipmentContentLine(
+            title="Aifo skirt",
+            quantity=2,
+            unit_price=Decimal("210000.00"),
+            variant_label="Size 8, Black",
+            hs_hints=("skirts", "Skirts"),
+        ),
+        ShipmentContentLine(
+            title="Eyo layered skirt",
+            quantity=1,
+            unit_price=Decimal("300000.00"),
+        ),
+    ),
+    receiver_email="bello@example.com",
+)
+
+
+def test_content_description_lists_item_names_and_quantities_within_dhl_limit() -> None:
+    assert build_content_description(_PACKED_CONTENTS.lines) == (
+        "2x Aifo skirt (Size 8, Black), 1x Eyo layered skirt"
+    )
+    assert build_content_description([]) == GENERIC_CONTENT_DESCRIPTION
+
+    many = [
+        ShipmentContentLine(title=f"Handwoven Aso Oke Statement Piece {n}", quantity=n)
+        for n in range(1, 6)
+    ]
+    summary = build_content_description(many)
+    assert len(summary) <= MAX_CONTENT_DESCRIPTION_LENGTH
+    assert summary.startswith("1x Handwoven Aso Oke Statement Piece 1")
+    assert summary.endswith("more items")
+
+    long_single = [ShipmentContentLine(title="X" * 120, quantity=3)]
+    truncated = build_content_description(long_single)
+    assert len(truncated) <= MAX_CONTENT_DESCRIPTION_LENGTH
+    assert truncated.startswith("3x ") and truncated.endswith("...")
+
+
+def test_content_line_uses_package_quantity_and_variant_details() -> None:
+    item = SimpleNamespace(
+        product_title="Amaré Coconut Milk Leggings",
+        quantity=4,
+        unit_price=Decimal("15000.00"),
+        variant_details={"size": "M", "color": "Coconut Milk", "color_hex": "#fff"},
+    )
+    line = content_line_from_order_item(item, quantity=1)
+    assert line.quantity == 1
+    assert line.title == "Amare Coconut Milk Leggings"
+    assert line.variant_label == "Size M, Coconut Milk"
+    assert line.unit_price == Decimal("15000.00")
+
+
+def test_domestic_booking_payload_describes_packed_items_and_customer_email() -> None:
+    adapter = DHLShipmentAdapter(cast(Settings, _make_settings()))
+    hub, intent, package_version, order, quoted = _booking_fixture_parts("NG")
+
+    payload = adapter.prepare_booking_payload(
+        cast(Any, intent), cast(Any, order), cast(Any, hub), cast(Any, package_version), quoted,
+        contents=_PACKED_CONTENTS,
+    )
+
+    content = cast(dict[str, Any], payload["content"])
+    assert content["isCustomsDeclarable"] is False
+    assert content["description"] == "2x Aifo skirt (Size 8, Black), 1x Eyo layered skirt"
+    assert "exportDeclaration" not in content
+    receiver = cast(dict[str, Any], payload["customerDetails"])["receiverDetails"]
+    assert receiver["contactInformation"]["email"] == "bello@example.com"
+    image_opts = cast(dict[str, Any], payload["outputImageProperties"])["imageOptions"]
+    assert [opt["typeCode"] for opt in image_opts] == ["label", "waybillDoc"]
+
+
+def test_international_booking_payload_itemizes_commercial_invoice_from_package_contents() -> None:
+    adapter = DHLShipmentAdapter(cast(Settings, _make_settings()))
+    hub, intent, package_version, order, quoted = _booking_fixture_parts("GB")
+
+    payload = adapter.prepare_booking_payload(
+        cast(Any, intent), cast(Any, order), cast(Any, hub), cast(Any, package_version), quoted,
+        contents=_PACKED_CONTENTS,
+    )
+
+    assert payload["productCode"] == "P"
+    content = cast(dict[str, Any], payload["content"])
+    assert content["isCustomsDeclarable"] is True
+    assert content["description"] == "2x Aifo skirt (Size 8, Black), 1x Eyo layered skirt"
+    assert content["declaredValue"] == 720000.0
+    assert content["declaredValueCurrency"] == "NGN"
+    lines = cast(dict[str, Any], content["exportDeclaration"])["lineItems"]
+    assert [(line["description"], line["quantity"]["value"], line["price"]) for line in lines] == [
+        ("Aifo skirt - Size 8, Black", 2, 210000.0),
+        ("Eyo layered skirt", 1, 300000.0),
+    ]
+    assert lines[0]["commodityCodes"][0]["value"] == "62034200"
+    assert sum(line["weight"]["netValue"] for line in lines) <= 1.8
+    image_opts = cast(dict[str, Any], payload["outputImageProperties"])["imageOptions"]
+    # Label + waybill + commercial invoice => the 3-page international PDF.
+    assert [opt["typeCode"] for opt in image_opts] == ["label", "waybillDoc", "invoice"]
+    receiver = cast(dict[str, Any], payload["customerDetails"])["receiverDetails"]
+    assert receiver["contactInformation"]["email"] == "bello@example.com"
+
+
+def test_booking_payload_without_loaded_contents_keeps_generic_fallback() -> None:
+    adapter = DHLShipmentAdapter(cast(Settings, _make_settings()))
+    hub, intent, package_version, order, quoted = _booking_fixture_parts("GB")
+
+    payload = adapter.prepare_booking_payload(
+        cast(Any, intent), cast(Any, order), cast(Any, hub), cast(Any, package_version), quoted,
+    )
+
+    content = cast(dict[str, Any], payload["content"])
+    assert content["description"] == GENERIC_CONTENT_DESCRIPTION
+    lines = cast(dict[str, Any], content["exportDeclaration"])["lineItems"]
+    assert len(lines) == 1 and lines[0]["price"] == 720000.0
+
+
+def test_international_pickup_declares_packed_contents_value() -> None:
+    settings = _make_settings()
+    hub, intent, package_version, order, _quoted = _booking_fixture_parts("GB")
+    pickup = build_hub_pickup_payload(
+        settings=cast(Settings, settings),
+        booking=cast(Any, SimpleNamespace(tracking_number="9097117632")),
+        intent=cast(Any, intent),
+        order=cast(Any, order),
+        hub=cast(Any, hub),
+        package_version=cast(Any, package_version),
+        planned_pickup_at=datetime(2026, 11, 12, 14, 0),
+        contents=_PACKED_CONTENTS,
+    )
+    details = cast(list[dict[str, Any]], pickup["shipmentDetails"])[0]
+    assert details["declaredValue"] == 720000.0
+    receiver = cast(dict[str, Any], pickup["customerDetails"])["receiverDetails"]
+    assert receiver["contactInformation"]["email"] == "bello@example.com"

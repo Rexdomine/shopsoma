@@ -477,6 +477,31 @@ describe('Checkout M5 sequencing and recovery', () => {
     expect(mocks.createOrder).not.toHaveBeenCalled();
   });
 
+  it('requires a postal code on a saved international address whose DHL lane needs one', async () => {
+    const ukAddressWithoutPostalCode = {
+      ...address, city: 'London', state: 'London', postal_code: '', country: 'United Kingdom', phone_number: '+447700900123',
+    };
+    mocks.getAddresses.mockResolvedValueOnce({ addresses: [ukAddressWithoutPostalCode] });
+    mocks.getShippingProviderSettings.mockResolvedValueOnce({ provider: 'combined', checkout_estimates_required: true });
+    render(<MemoryRouter initialEntries={['/checkout']}><CheckoutTestRoutes /></MemoryRouter>);
+
+    await screen.findByText(/Add a postal code to the selected delivery address/i);
+    expect(screen.getByRole('button', { name: 'Continue' })).toBeDisabled();
+    expect(mocks.createOrder).not.toHaveBeenCalled();
+  });
+
+  it('keeps postal code optional for international destinations without postal codes', async () => {
+    const ghanaAddress = {
+      ...address, city: 'Accra', state: 'Greater Accra', postal_code: '', country: 'Ghana', phone_number: '+233244123456',
+    };
+    mocks.getAddresses.mockResolvedValueOnce({ addresses: [ghanaAddress] });
+    mocks.getShippingProviderSettings.mockResolvedValueOnce({ provider: 'combined', checkout_estimates_required: true });
+    render(<MemoryRouter initialEntries={['/checkout']}><CheckoutTestRoutes /></MemoryRouter>);
+
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Continue' })).toBeEnabled());
+    expect(screen.queryByText(/Add a postal code to the selected delivery address/i)).not.toBeInTheDocument();
+  });
+
   it('waits for shipping configuration before allowing a checkout address to be saved', async () => {
     mocks.auth.isAuthenticated = false;
     let resolveSettings!: (value: { provider: string; checkout_estimates_required: boolean }) => void;

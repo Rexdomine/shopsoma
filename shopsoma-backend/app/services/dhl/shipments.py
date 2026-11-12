@@ -32,7 +32,8 @@ from app.models.dhl_shipment import (
     OutboundShipmentTrackingRefresh,
     OutboundShipmentTrackingSnapshot,
 )
-from app.models.order import FulfillmentStatus, Order
+from app.models.category import Category
+from app.models.order import FulfillmentStatus, Order, OrderItem
 from app.models.package_custody import (
     CustodyEvent,
     CustodyStream,
@@ -43,6 +44,7 @@ from app.models.package_custody import (
     OutboundShipmentIntent,
     OutboundShipmentIntentInvalidation,
 )
+from app.models.product import Product
 from app.models.user import User
 from app.services.admin_shadow_quote import (
     _blank_optional_text_to_none,
@@ -53,7 +55,13 @@ from app.services.dhl.client import (
     DHLClient,
     DHLConfigurationError,
 )
-from app.services.dhl.customs import build_export_content_fields
+from app.services.dhl.customs import (
+    ShipmentContentLine,
+    build_content_description,
+    build_export_content_fields,
+    content_line_from_order_item,
+    content_lines_from_order,
+)
 from app.services.dhl.rating import (
     DHLDomesticRateAdapter,
     resolve_nigeria_dhl_state_fallback,
@@ -277,6 +285,19 @@ class QuotedShipmentService:
     planned_ship_date: date
 
 
+@dataclass(frozen=True, slots=True)
+class BookingContents:
+    """Eagerly loaded package contents and receiver contact for a booking payload.
+
+    The booking payload builder is synchronous, so order relationships (items,
+    customer) must be loaded beforehand; async lazy loads would silently fail and
+    degrade the label/commercial invoice to a generic one-line description.
+    """
+
+    lines: tuple[ShipmentContentLine, ...] = ()
+    receiver_email: str | None = None
+
+
 class ShipmentAdapter(Protocol):
     def prepare_booking_payload(
         self,
@@ -285,6 +306,7 @@ class ShipmentAdapter(Protocol):
         hub: FulfillmentHub,
         package_version: HubPackageVersion,
         quoted_service: QuotedShipmentService,
+        contents: BookingContents | None = None,
     ) -> dict[str, object]: ...
 
     async def book(
@@ -360,6 +382,7 @@ class DHLShipmentAdapter:
         hub: FulfillmentHub,
         package_version: HubPackageVersion,
         quoted_service: QuotedShipmentService,
+        contents: BookingContents | None = None,
     ) -> dict[str, object]:
         quoted_hub_version = getattr(quoted_service, "hub_version", None)
         current_hub_version = getattr(hub, "version", None)
@@ -400,9 +423,15 @@ class DHLShipmentAdapter:
             else None
         )
         receiver_email = (
-            getattr(order_customer, "email", None)
+            (contents.receiver_email if contents is not None else None)
+            or getattr(order_customer, "email", None)
             or getattr(order, "customer_email", None)
             or "orders@shopsoma.com"
+        )
+        content_lines = (
+            list(contents.lines)
+            if contents is not None and contents.lines
+            else content_lines_from_order(order)
         )
         is_export = str(intent.destination_country_code or "NG").strip().upper() != "NG"
         image_options: list[dict[str, object]] = [
@@ -470,7 +499,7 @@ class DHLShipmentAdapter:
             "content": {
                 "unitOfMeasurement": "metric",
                 "isCustomsDeclarable": False,
-                "description": "Fashion apparel and accessories",
+                "description": build_content_description(content_lines),
                 "packages": [{
                     "weight": float(package_version.weight_kg),
                     "dimensions": {
@@ -488,6 +517,7 @@ class DHLShipmentAdapter:
                     order=order,
                     package_version=package_version,
                     planned_ship_date=planned_ship_date,
+                    content_lines=content_lines,
                 )
             )
             payload["content"] = content_dict
@@ -1681,6 +1711,63 @@ async def _load_authoritative_subject(
     return order, package, seal, intent, package_version, frozenset(item.cohort_id for item in package_items)
 
 
+async def _load_booking_contents(
+    db: AsyncSession,
+    *,
+    order: Order,
+    package_id: uuid.UUID,
+    package_version: int,
+) -> BookingContents:
+    """Load the exact items packed in this package version plus the receiver email.
+
+    Quantities come from the immutable package composition so split shipments
+    only declare what is physically inside the parcel.
+    """
+    quantity_rows = (
+        await db.execute(
+            select(HubPackageItem.order_item_id, func.sum(HubPackageItem.quantity))
+            .where(
+                HubPackageItem.package_id == package_id,
+                HubPackageItem.package_version == package_version,
+            )
+            .group_by(HubPackageItem.order_item_id)
+        )
+    ).all()
+    packed_quantities = {row[0]: int(row[1] or 0) for row in quantity_rows}
+    item_rows = (
+        await db.execute(
+            select(OrderItem, Category.slug, Category.name)
+            .outerjoin(Product, Product.id == OrderItem.product_id)
+            .outerjoin(Category, Category.id == Product.category_id)
+            .where(OrderItem.order_id == order.id)
+            .order_by(OrderItem.created_at, OrderItem.id)
+        )
+    ).all()
+    lines: list[ShipmentContentLine] = []
+    for item, category_slug, category_name in item_rows:
+        if packed_quantities and packed_quantities.get(item.id, 0) <= 0:
+            continue
+        line = content_line_from_order_item(
+            item,
+            quantity=packed_quantities.get(item.id) if packed_quantities else None,
+        )
+        lines.append(
+            ShipmentContentLine(
+                title=line.title,
+                quantity=line.quantity,
+                unit_price=line.unit_price,
+                variant_label=line.variant_label,
+                hs_hints=(category_slug, category_name, *line.hs_hints),
+            )
+        )
+    receiver_email = (
+        await db.scalar(select(User.email).where(User.id == order.customer_id))
+        if getattr(order, "customer_id", None) is not None
+        else None
+    )
+    return BookingContents(lines=tuple(lines), receiver_email=receiver_email or None)
+
+
 async def _load_persisted_booking_intent(
     db: AsyncSession,
     *,
@@ -2059,12 +2146,19 @@ async def book_outbound_shipment(
         )
         planned_ship_date = quoted_service.planned_ship_date
         booking.planned_ship_date = planned_ship_date
+        booking_contents = await _load_booking_contents(
+            db,
+            order=order,
+            package_id=package.id,
+            package_version=package.current_version,
+        )
         prepared_payload = adapter.prepare_booking_payload(
             intent,
             order,
             hub,
             package_version,
             quoted_service,
+            contents=booking_contents,
         )
     except ShipmentPhase4Error as exc:
         order = await _load_order(db, order_id=order_id, lock_for_update=True)
@@ -2157,12 +2251,19 @@ async def book_outbound_shipment(
                 # than the durable booking audit can later reconstruct.
                 await db.commit()
                 continue
+            booking_contents = await _load_booking_contents(
+                db,
+                order=order,
+                package_id=package.id,
+                package_version=package.current_version,
+            )
             prepared_payload = adapter.prepare_booking_payload(
                 intent,
                 order,
                 hub,
                 package_version,
                 quoted_service,
+                contents=booking_contents,
             )
             break
         # Keep the refreshed package/seal/intent snapshot locked across the
@@ -3242,6 +3343,7 @@ def build_hub_pickup_payload(
     close_time: str = "18:00",
     location: str = "reception",
     special_instruction: str = "Collect ready parcel from ShopSoma Hub reception",
+    contents: BookingContents | None = None,
 ) -> dict[str, object]:
     shipper = _provider_safe_booking_party(
         line1=hub.address_line1,
@@ -3266,7 +3368,8 @@ def build_hub_pickup_payload(
         else None
     )
     receiver_email = (
-        getattr(order_customer, "email", None)
+        (contents.receiver_email if contents is not None else None)
+        or getattr(order_customer, "email", None)
         or getattr(order, "customer_email", None)
         or "orders@shopsoma.com"
     )
@@ -3281,6 +3384,7 @@ def build_hub_pickup_payload(
             order=order,
             package_version=package_version,
             planned_ship_date=planned_pickup_at.date(),
+            content_lines=contents.lines if contents is not None and contents.lines else None,
         )
         customs_fields = {
             "declaredValue": export_fields["declaredValue"],
@@ -3411,6 +3515,12 @@ async def request_hub_pickup(
 
     now = await db.scalar(text("SELECT clock_timestamp()")) or datetime.now(UTC)
     planned_pickup_at = command.planned_pickup_at or _next_lagos_pickup_datetime(now)
+    pickup_contents = await _load_booking_contents(
+        db,
+        order=order,
+        package_id=booking.package_id,
+        package_version=booking.package_version,
+    )
     payload = build_hub_pickup_payload(
         settings=settings,
         booking=booking,
@@ -3422,6 +3532,7 @@ async def request_hub_pickup(
         close_time=command.close_time,
         location=command.location,
         special_instruction=command.special_instruction,
+        contents=pickup_contents,
     )
     client = DHLClient(config=settings)
     try:
