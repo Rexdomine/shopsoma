@@ -86,6 +86,13 @@ const resolveCountryIso2 = (raw?: string): string => {
   return match?.iso2 || 'NG';
 };
 
+// International destinations where DHL Express cannot rate/book without a real
+// postal code (an empty value falls back to "00000" and DHL returns no service).
+const INTERNATIONAL_POSTAL_CODE_COUNTRIES = new Set(['US', 'GB', 'CA', 'ZA', 'FR', 'DE']);
+
+const isInternationalPostalCodeCountry = (raw?: string): boolean =>
+  !isNigerianCountry(raw) && INTERNATIONAL_POSTAL_CODE_COUNTRIES.has(resolveCountryIso2(raw));
+
 const ALL_PAYMENT_OPTIONS: { id: PaymentGateway; name: string; icon: string; supportedCurrencies: Currency[] }[] = [
   { id: 'paystack', name: 'Paystack', icon: '/images/paystack.svg', supportedCurrencies: ['NGN'] },
   { id: 'stripe', name: 'Stripe', icon: '/images/stripe.svg', supportedCurrencies: ['NGN', 'USD'] },
@@ -343,15 +350,21 @@ export default function Checkout() {
   const draftCountry = newAddress.country.trim().toLowerCase();
   const isDraftNigeria = isNigerianCountry(draftCountry);
   const dhlDomesticShipping = shippingProvider === 'dhl' && secureShipping;
-  const postalCodeRequired = shippingProvider === 'dhl' && allDomesticEstimates && isDraftNigeria;
+  const postalCodeRequired = allDomesticEstimates && (
+    (shippingProvider === 'dhl' && isDraftNigeria) || isInternationalPostalCodeCountry(draftCountry)
+  );
   const isValidDhlPostalCode = (value?: string) => {
     const postalCode = value?.trim() || '';
     return postalCode.length > 0 && postalCode.length <= 12;
   };
-  const selectedAddressNeedsPostalCode = dhlDomesticShipping && (
+  const selectedAddressNeedsPostalCode = (dhlDomesticShipping && (
     isNigerianCountry(destinationCountry)
       ? !isValidDhlPostalCode(selectedAddress?.postal_code)
       : Boolean(selectedAddress?.postal_code && selectedAddress.postal_code.trim().length > 12)
+  )) || (
+    secureShipping
+    && isInternationalPostalCodeCountry(destinationCountry)
+    && !isValidDhlPostalCode(selectedAddress?.postal_code)
   );
   const selectedAddressPostalCodeGuidance = selectedAddress?.postal_code?.trim()
     ? 'Update the selected delivery address with a postal code of 12 characters or fewer before continuing with DHL delivery.'
