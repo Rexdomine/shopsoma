@@ -47,10 +47,15 @@ describe('googleMapsAutocomplete', () => {
   });
 
   describe('normalizeCountryName and normalizePostalCode', () => {
-    it('normalizes country codes and names to Nigeria', () => {
+    it('normalizes country codes and names to Nigeria and supported international countries', () => {
       expect(normalizeCountryName('NG')).toBe('Nigeria');
       expect(normalizeCountryName('nigeria')).toBe('Nigeria');
       expect(normalizeCountryName('Federal Republic of Nigeria')).toBe('Nigeria');
+      expect(normalizeCountryName('US')).toBe('United States');
+      expect(normalizeCountryName('USA')).toBe('United States');
+      expect(normalizeCountryName('GB')).toBe('United Kingdom');
+      expect(normalizeCountryName('UK')).toBe('United Kingdom');
+      expect(normalizeCountryName('', '10 Downing St, London SW1A 2AA, UK')).toBe('United Kingdom');
       expect(normalizeCountryName('')).toBe('Nigeria');
     });
 
@@ -287,6 +292,66 @@ describe('googleMapsAutocomplete', () => {
         country: 'Nigeria',
         latitude: 6.4396331,
         longitude: 3.45613,
+      });
+    });
+
+    it('fetches and resolves international addresses for other countries without defaulting to Nigeria', async () => {
+      const fetchAutocompleteSuggestions = vi.fn().mockResolvedValue({
+        suggestions: [
+          {
+            placePrediction: {
+              placeId: 'place-london-10',
+              text: { text: '10 Downing Street, London, UK' },
+              structuredFormat: {
+                mainText: { text: '10 Downing Street' },
+                secondaryText: { text: 'London, UK' },
+              },
+              toPlace: () => ({
+                id: 'place-london-10',
+                formattedAddress: '10 Downing St, London SW1A 2AA, UK',
+                addressComponents: [
+                  { longText: '10', shortText: '10', types: ['street_number'] },
+                  { longText: 'Downing Street', shortText: 'Downing St', types: ['route'] },
+                  { longText: 'London', shortText: 'London', types: ['postal_town'] },
+                  { longText: 'England', shortText: 'England', types: ['administrative_area_level_1'] },
+                  { longText: 'SW1A 2AA', shortText: 'SW1A 2AA', types: ['postal_code'] },
+                  { longText: 'United Kingdom', shortText: 'GB', types: ['country'] },
+                ],
+                location: { latitude: 51.5033635, longitude: -0.1276248 },
+                fetchFields: vi.fn().mockResolvedValue(undefined),
+              }),
+            },
+          },
+        ],
+      });
+
+      window.google = {
+        maps: {
+          places: {
+            AutocompleteSuggestion: { fetchAutocompleteSuggestions },
+          },
+        },
+      };
+
+      const suggestions = await fetchAddressSuggestions('10 Downing Street', { country: 'gb' });
+      expect(fetchAutocompleteSuggestions).toHaveBeenCalledWith({
+        input: '10 Downing Street',
+        includedRegionCodes: ['gb'],
+      });
+      expect(suggestions).toHaveLength(1);
+
+      const resolved = await resolveAddressSuggestion(suggestions[0], { country: 'United Kingdom' });
+      expect(resolved).toEqual({
+        placeId: 'place-london-10',
+        formattedAddress: '10 Downing St, London SW1A 2AA, UK',
+        addressLine1: '10 Downing Street',
+        addressLine2: undefined,
+        city: 'London',
+        state: 'England',
+        postalCode: 'SW1A 2AA',
+        country: 'United Kingdom',
+        latitude: 51.5033635,
+        longitude: -0.1276248,
       });
     });
   });
