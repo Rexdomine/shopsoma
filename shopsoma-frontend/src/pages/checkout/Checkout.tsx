@@ -384,6 +384,7 @@ export default function Checkout() {
     discount_type: 'percentage' | 'fixed_amount';
     discount_value: number;
     discount_amount: number;
+    currency?: 'NGN' | 'USD';
   } | null>(null);
 
   // Order review state
@@ -718,8 +719,39 @@ export default function Checkout() {
     }
   };
 
+  const isPromoLocked = Boolean(currentPaymentGateway || showStripePaymentModal);
+
+  const resetPrePaymentOrderForPromoChange = async () => {
+    if (!enforcedOrder) {
+      return;
+    }
+    try {
+      await checkoutService.cancelOrder(
+        enforcedOrder.id,
+        'Customer updated promo code before payment',
+        checkoutCapability,
+      );
+    } catch (error: any) {
+      const terminalAuthorization = error?.response?.status === 404 || error?.response?.status === 410;
+      if (!terminalAuthorization) {
+        throw error;
+      }
+    }
+    discardExpiredCheckout();
+    setOrderReview(null);
+    setCheckoutQuote(null);
+    setPriceChangeNotice(null);
+    setStep(selectedAddressId ? 'shipping' : 'address');
+  };
+
   const handleApplyPromo = async () => {
-    if (!promo.trim()) {
+    if (isPromoLocked) {
+      setPromoError('Promo code cannot be changed after payment has been initialized.');
+      return;
+    }
+
+    const cleanedCode = promo.trim().toUpperCase();
+    if (!cleanedCode) {
       setPromoError('Please enter a promo code');
       return;
     }
@@ -728,19 +760,37 @@ export default function Checkout() {
     setPromoError('');
 
     try {
+      const subtotalForValidation =
+        currency === 'USD'
+          ? convertCurrencyWithRates(cartSubtotalInNgn, 'NGN', 'USD', exchangeRates)
+          : cartSubtotalInNgn;
+
       const result = await checkoutService.validatePromoCode({
-        code: promo,
-        order_subtotal: cartSubtotalInNgn,
+        code: cleanedCode,
+        order_subtotal: subtotalForValidation,
+        currency,
+        customer_email: email.trim() || undefined,
       });
 
-      if (result.valid && result.discount_amount) {
-        setAppliedPromo({
+      if (result.valid && result.discount_amount != null) {
+        const nextApplied = {
           code: result.code!,
           discount_type: result.discount_type!,
           discount_value: result.discount_value!,
           discount_amount: result.discount_amount,
-        });
+          currency: result.currency || currency,
+        };
+        if (enforcedOrder) {
+          await resetPrePaymentOrderForPromoChange();
+        } else if (!orderReview || secureShipping) {
+          setCheckoutQuote(null);
+        }
+        setPromo(nextApplied.code);
+        setAppliedPromo(nextApplied);
         setPromoError('');
+        if (!enforcedOrder && orderReview && !secureShipping) {
+          await handleReviewOrder(nextApplied.code);
+        }
       } else {
         setAppliedPromo(null);
         setPromoError(result.message || 'Invalid promo code');
@@ -748,7 +798,34 @@ export default function Checkout() {
     } catch (error: any) {
       console.error('Error validating promo code:', error);
       setAppliedPromo(null);
-      setPromoError(error.response?.data?.detail || 'Failed to validate promo code');
+      setPromoError(error.response?.data?.detail || error.message || 'Failed to validate promo code');
+    } finally {
+      setIsApplyingPromo(false);
+    }
+  };
+
+  const handleRemovePromo = async () => {
+    if (isPromoLocked) {
+      setPromoError('Promo code cannot be removed after payment has been initialized.');
+      return;
+    }
+
+    setIsApplyingPromo(true);
+    setPromoError('');
+    try {
+      if (enforcedOrder) {
+        await resetPrePaymentOrderForPromoChange();
+      } else if (!orderReview || secureShipping) {
+        setCheckoutQuote(null);
+      }
+      setAppliedPromo(null);
+      setPromo('');
+      if (!enforcedOrder && orderReview && !secureShipping) {
+        await handleReviewOrder(null);
+      }
+    } catch (error: any) {
+      console.error('Error removing promo code:', error);
+      setPromoError(error.response?.data?.detail || error.message || 'Failed to remove promo code');
     } finally {
       setIsApplyingPromo(false);
     }
@@ -861,7 +938,7 @@ export default function Checkout() {
     setPriceChangeNotice(null);
   };
 
-  const handleReviewOrder = async (): Promise<OrderReview | null> => {
+  const handleReviewOrder = async (promoOverride?: string | null): Promise<OrderReview | null> => {
     if (!selectedAddressId) return null;
 
     try {
@@ -874,13 +951,20 @@ export default function Checkout() {
 
       // Get selected address
       const selectedAddress = addresses.find(addr => addr.id === selectedAddressId);
+      const effectivePromoCode =
+        typeof promoOverride === 'string'
+          ? promoOverride
+          : promoOverride === null
+            ? undefined
+            : appliedPromo?.code;
 
       // Prepare request based on guest vs authenticated user
       const reviewRequest: any = {
         items,
         currency,
+        customer_email: email.trim() || undefined,
         shipping_rate_id: secureShipping ? undefined : selectedShippingRateId || undefined,
-        promo_code: appliedPromo?.code,
+        promo_code: effectivePromoCode,
         ...(checkoutQuote?.quote_token ? { quote_token: checkoutQuote.quote_token } : {}),
       };
 
@@ -1718,7 +1802,12 @@ export default function Checkout() {
     ? convertCurrencyWithRates(Number(selectedShippingRate.base_rate), 'NGN', currency, exchangeRates)
     : 0;
   const promoDiscountInSelectedCurrency = appliedPromo
-    ? convertCurrencyWithRates(Number(appliedPromo.discount_amount || 0), 'NGN', currency, exchangeRates)
+    ? convertCurrencyWithRates(
+        Number(appliedPromo.discount_amount || 0),
+        appliedPromo.currency || 'NGN',
+        currency,
+        exchangeRates,
+      )
     : 0;
   const reviewSummaryCurrency = orderReview?.summary.currency ?? checkoutQuote?.currency ?? 'NGN';
   const committedLegacyOrder = enforcedOrder?.workflow_cohort !== 'domestic_checkout_v1'
@@ -2998,19 +3087,30 @@ export default function Checkout() {
                   <input
                     type="text"
                     value={promo}
-                    disabled={!!enforcedOrder}
+                    disabled={isPromoLocked}
                     onChange={(e) => setPromo(e.target.value)}
                     placeholder="Promo code"
-                    className="flex-1 border border-gray-300 rounded-sm px-3 py-2 text-sm focus:outline-none focus:border-primary"
+                    className="flex-1 border border-gray-300 rounded-sm px-3 py-2 text-sm focus:outline-none focus:border-primary disabled:bg-gray-100"
                   />
-                  <button
-                    type="button"
-                    onClick={handleApplyPromo}
-                    disabled={isApplyingPromo || !!enforcedOrder}
-                    className="px-4 py-2 rounded-sm bg-primary text-white text-sm font-semibold disabled:opacity-50"
-                  >
-                    {isApplyingPromo ? '...' : 'Apply'}
-                  </button>
+                  {appliedPromo ? (
+                    <button
+                      type="button"
+                      onClick={handleRemovePromo}
+                      disabled={isApplyingPromo || isPromoLocked}
+                      className="px-4 py-2 rounded-sm border border-gray-300 text-gray-700 text-sm font-semibold hover:bg-gray-50 disabled:opacity-50"
+                    >
+                      {isApplyingPromo ? '...' : 'Remove'}
+                    </button>
+                  ) : (
+                    <button
+                      type="button"
+                      onClick={handleApplyPromo}
+                      disabled={isApplyingPromo || isPromoLocked}
+                      className="px-4 py-2 rounded-sm bg-primary text-white text-sm font-semibold disabled:opacity-50"
+                    >
+                      {isApplyingPromo ? '...' : 'Apply'}
+                    </button>
+                  )}
                 </div>
                 {promoError && (
                   <p className="text-xs text-red-500">{promoError}</p>
@@ -3019,7 +3119,7 @@ export default function Checkout() {
                   <p className="text-xs text-green-600">
                     Promo applied! {appliedPromo.discount_type === 'percentage'
                       ? `${appliedPromo.discount_value}% off`
-                      : `${formatPrice(appliedPromo.discount_value)} off`}
+                      : `${formatPrice(convertCurrencyWithRates(appliedPromo.discount_value, 'NGN', currency, exchangeRates))} off`}
                   </p>
                 )}
               </div>

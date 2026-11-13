@@ -1,7 +1,8 @@
 """Promo code endpoints"""
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, and_
+from sqlalchemy import or_, select
+from typing import Optional
 from uuid import UUID
 from datetime import datetime, timezone
 from decimal import Decimal
@@ -17,9 +18,16 @@ from app.schemas.promo_code import (
     PromoCodeValidateRequest,
     PromoCodeValidateResponse,
 )
-from app.api.dependencies import get_current_active_user
+from app.api.dependencies import get_current_active_user, get_optional_user
+from app.services.promo_code_service import evaluate_promo_code
 
 router = APIRouter(prefix="/promo-codes", tags=["Promo Codes"])
+
+
+def _normalize_dt(value: datetime) -> datetime:
+    if value.tzinfo is None:
+        return value.replace(tzinfo=timezone.utc)
+    return value
 
 
 def require_admin(current_user: User = Depends(get_current_active_user)) -> User:
@@ -35,6 +43,7 @@ def require_admin(current_user: User = Depends(get_current_active_user)) -> User
 @router.post("/validate", response_model=PromoCodeValidateResponse)
 async def validate_promo_code(
     validate_data: PromoCodeValidateRequest,
+    current_user: Optional[User] = Depends(get_optional_user),
     db: AsyncSession = Depends(get_db)
 ):
     """
@@ -42,78 +51,27 @@ async def validate_promo_code(
 
     - **code**: Promo code to validate
     - **order_subtotal**: Order subtotal amount
+    - **currency**: Checkout currency (NGN or USD)
+    - **customer_email**: Optional customer email for per-user limit checks during guest checkout
 
     Returns validation status and calculated discount if valid.
     """
-    # Get promo code
-    query = select(PromoCode).where(
-        and_(
-            PromoCode.code == validate_data.code.upper(),
-            PromoCode.is_active == True
-        )
+    evaluation = await evaluate_promo_code(
+        db=db,
+        code=validate_data.code,
+        subtotal=validate_data.order_subtotal,
+        currency=validate_data.currency,
+        user_id=current_user.id if current_user else None,
+        customer_email=validate_data.customer_email,
     )
-
-    result = await db.execute(query)
-    promo = result.scalar_one_or_none()
-
-    if not promo:
-        return PromoCodeValidateResponse(
-            valid=False,
-            message=f"Promo code '{validate_data.code}' not found"
-        )
-
-    # Check validity period
-    now = datetime.now(timezone.utc)
-    if now < promo.valid_from:
-        return PromoCodeValidateResponse(
-            valid=False,
-            message=f"Promo code not yet valid. Valid from {promo.valid_from.strftime('%Y-%m-%d')}"
-        )
-
-    if now > promo.valid_until:
-        return PromoCodeValidateResponse(
-            valid=False,
-            message=f"Promo code expired on {promo.valid_until.strftime('%Y-%m-%d')}"
-        )
-
-    # Check usage limit
-    if promo.usage_limit and promo.usage_count >= promo.usage_limit:
-        return PromoCodeValidateResponse(
-            valid=False,
-            message="Promo code usage limit reached"
-        )
-
-    # Check minimum purchase amount
-    if promo.min_purchase_amount and validate_data.order_subtotal < promo.min_purchase_amount:
-        return PromoCodeValidateResponse(
-            valid=False,
-            message=f"Minimum purchase amount of ₦{promo.min_purchase_amount:,.2f} required"
-        )
-
-    # Calculate discount
-    discount_amount = Decimal("0.00")
-
-    if promo.discount_type == DiscountType.PERCENTAGE:
-        discount_amount = (validate_data.order_subtotal * promo.discount_value) / Decimal("100")
-
-        # Apply max discount cap if specified
-        if promo.max_discount_amount and discount_amount > promo.max_discount_amount:
-            discount_amount = promo.max_discount_amount
-
-    elif promo.discount_type == DiscountType.FIXED_AMOUNT:
-        discount_amount = promo.discount_value
-
-        # Don't exceed order subtotal
-        if discount_amount > validate_data.order_subtotal:
-            discount_amount = validate_data.order_subtotal
-
     return PromoCodeValidateResponse(
-        valid=True,
-        code=promo.code,
-        discount_type=promo.discount_type,
-        discount_value=promo.discount_value,
-        discount_amount=discount_amount,
-        message=f"₦{discount_amount:,.2f} discount applied"
+        valid=evaluation.valid,
+        code=evaluation.code,
+        discount_type=evaluation.discount_type,
+        discount_value=evaluation.discount_value,
+        discount_amount=evaluation.discount_amount if evaluation.valid else None,
+        currency=evaluation.currency,
+        message=evaluation.message,
     )
 
 
@@ -137,14 +95,21 @@ async def create_promo_code(
         )
 
     # Validate dates
-    if promo_data.valid_from >= promo_data.valid_until:
+    if _normalize_dt(promo_data.valid_from) >= _normalize_dt(promo_data.valid_until):
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="valid_until must be after valid_from"
         )
 
+    if promo_data.discount_type == DiscountType.PERCENTAGE and promo_data.discount_value > Decimal("100"):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Percentage discount value cannot exceed 100"
+        )
+
+    payload = promo_data.model_dump(exclude={"code"})
     new_promo = PromoCode(
-        **promo_data.model_dump(),
+        **payload,
         code=promo_data.code.upper()
     )
 
@@ -158,6 +123,7 @@ async def create_promo_code(
 @router.get("", response_model=PromoCodeListResponse)
 async def list_promo_codes(
     active_only: bool = False,
+    search: Optional[str] = Query(None, max_length=100),
     current_user: User = Depends(require_admin),
     db: AsyncSession = Depends(get_db)
 ):
@@ -168,6 +134,15 @@ async def list_promo_codes(
 
     if active_only:
         query = query.where(PromoCode.is_active == True)
+
+    if search and search.strip():
+        pattern = f"%{search.strip()}%"
+        query = query.where(
+            or_(
+                PromoCode.code.ilike(pattern),
+                PromoCode.description.ilike(pattern),
+            )
+        )
 
     query = query.order_by(PromoCode.created_at.desc())
 
@@ -224,9 +199,39 @@ async def update_promo_code(
 
     # Update fields
     update_data = promo_data.model_dump(exclude_unset=True)
+
+    if "code" in update_data and update_data["code"]:
+        normalized_code = update_data["code"].upper()
+        existing = await db.execute(
+            select(PromoCode).where(
+                PromoCode.code == normalized_code,
+                PromoCode.id != promo_id,
+            )
+        )
+        if existing.scalar_one_or_none():
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Promo code '{normalized_code}' already exists"
+            )
+        update_data["code"] = normalized_code
+
+    next_valid_from = update_data.get("valid_from", promo.valid_from)
+    next_valid_until = update_data.get("valid_until", promo.valid_until)
+    if _normalize_dt(next_valid_from) >= _normalize_dt(next_valid_until):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="valid_until must be after valid_from"
+        )
+
+    next_discount_type = update_data.get("discount_type", promo.discount_type)
+    next_discount_value = update_data.get("discount_value", promo.discount_value)
+    if next_discount_type == DiscountType.PERCENTAGE and Decimal(next_discount_value) > Decimal("100"):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Percentage discount value cannot exceed 100"
+        )
+
     for field, value in update_data.items():
-        if field == "code" and value:
-            value = value.upper()
         setattr(promo, field, value)
 
     await db.commit()

@@ -84,6 +84,10 @@ from app.services.checkout.capabilities import (
 from app.services.shipping.capabilities import domestic_shipping_capabilities
 from app.services.fulfillment.contracts import resolve_country_code
 from app.services.checkout.reservations import release_active_order_reservations
+from app.services.promo_code_service import (
+    evaluate_promo_code,
+    format_promo_money,
+)
 
 router = APIRouter(prefix="/orders", tags=["Orders"])
 logger = logging.getLogger(__name__)
@@ -156,52 +160,6 @@ def _inventory_snapshot(product: Product, *, stock_source: str, stock_id: UUID) 
         "inventory_source_evidence_hash": hashlib.sha256(evidence).hexdigest(),
         "inventory_policy_snapshot_at": func.statement_timestamp(),
     }
-
-
-# Simple promo code configuration (should eventually move to dedicated table/service)
-PROMO_CODES = {
-    "WELCOME10": {"type": "percentage", "value": Decimal("0.10")},
-    "SAVE5000": {"type": "fixed_amount", "value": Decimal("5000")},
-}
-
-
-def calculate_promo_discount(
-    promo_code: Optional[str],
-    subtotal: Decimal,
-    currency: str = "NGN",
-    usd_to_ngn_rate: Decimal = Decimal("833"),
-):
-    """Calculate promo discount based on configured codes."""
-    if not promo_code:
-        return Decimal("0.00"), None
-
-    config = PROMO_CODES.get(promo_code.upper())
-    if not config:
-        return Decimal("0.00"), None
-
-    discount = Decimal("0.00")
-    promo_meta = {"code": promo_code.upper()}
-
-    if config["type"] == "percentage":
-        discount = (subtotal * config["value"]).quantize(
-            Decimal("0.01"), rounding=ROUND_HALF_UP
-        )
-        promo_meta["discount_percent"] = int(config["value"] * 100)
-        promo_meta["discount_amount"] = float(discount)
-    else:
-        discount = _convert_currency(
-            config["value"],
-            "NGN",
-            currency,
-            usd_to_ngn_rate,
-        )
-        promo_meta["discount_amount"] = float(discount)
-
-    if discount > subtotal:
-        discount = subtotal
-        promo_meta["discount_amount"] = float(discount)
-
-    return discount, promo_meta
 
 
 # Tax rate (VAT 7.5% in Nigeria)
@@ -948,12 +906,33 @@ async def review_order(
     )
 
     # Calculate discount (if promo code provided)
-    discount_amount, applied_promo = calculate_promo_discount(
-        review_data.promo_code,
-        subtotal,
-        checkout_currency,
-        usd_to_ngn_rate,
-    )
+    discount_amount = Decimal("0.00")
+    applied_promo = None
+    normalized_promo_code = review_data.promo_code.strip().upper() if review_data.promo_code else None
+    if normalized_promo_code:
+        promo_eval = await evaluate_promo_code(
+            db=db,
+            code=normalized_promo_code,
+            subtotal=subtotal,
+            currency=checkout_currency,
+            usd_to_ngn_rate=usd_to_ngn_rate,
+            user_id=current_user.id if current_user else None,
+            customer_email=review_data.customer_email,
+        )
+        if not promo_eval.valid:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=promo_eval.message or "Invalid promo code",
+            )
+        discount_amount = promo_eval.discount_amount
+        normalized_promo_code = promo_eval.code
+        applied_promo = {
+            "code": promo_eval.code,
+            "discount_type": promo_eval.discount_type.value if promo_eval.discount_type else None,
+            "discount_value": float(promo_eval.discount_value) if promo_eval.discount_value is not None else None,
+            "discount_amount": float(promo_eval.discount_amount),
+            "message": format_promo_money(promo_eval.discount_amount, checkout_currency),
+        }
 
     # Calculate totals
     tax_amount = _quantize_money((subtotal + shipping_cost) * TAX_RATE)
@@ -979,7 +958,7 @@ async def review_order(
         discount_amount=discount_amount,
         total_amount=total_amount,
         shipping_rate_id=str(selected_rate.id),
-        promo_code=review_data.promo_code,
+        promo_code=normalized_promo_code,
         prior_quote_payload=prior_quote_payload,
     )
 
@@ -1331,12 +1310,27 @@ async def create_order(
         )
 
     # Calculate discount
-    discount_amount, _ = calculate_promo_discount(
-        order_data.promo_code,
-        subtotal,
-        checkout_currency,
-        usd_to_ngn_rate,
-    )
+    discount_amount = Decimal("0.00")
+    applied_promo_id = None
+    applied_promo_code = order_data.promo_code.strip().upper() if order_data.promo_code else None
+    if applied_promo_code:
+        promo_eval = await evaluate_promo_code(
+            db=db,
+            code=applied_promo_code,
+            subtotal=subtotal,
+            currency=checkout_currency,
+            usd_to_ngn_rate=usd_to_ngn_rate,
+            user_id=current_user.id if current_user else None,
+            customer_email=order_data.customer_email,
+        )
+        if not promo_eval.valid:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=promo_eval.message or "Invalid promo code",
+            )
+        discount_amount = promo_eval.discount_amount
+        applied_promo_id = promo_eval.promo.id if promo_eval.promo else None
+        applied_promo_code = promo_eval.code
 
     # Calculate totals
     tax_amount = _quantize_money((subtotal + shipping_cost) * TAX_RATE)
@@ -1368,7 +1362,7 @@ async def create_order(
             discount_amount=discount_amount,
             total_amount=total_amount,
             shipping_rate_id=str(selected_rate.id) if selected_rate else None,
-            promo_code=order_data.promo_code,
+            promo_code=applied_promo_code,
             prior_quote_payload=prior_quote_payload,
         )
 
@@ -1488,6 +1482,8 @@ async def create_order(
         shipping_cost=shipping_cost,
         tax_amount=tax_amount,
         discount_amount=discount_amount,
+        promo_code_id=applied_promo_id,
+        promo_code=applied_promo_code,
         total_amount=total_amount,
         customer_notes=order_data.customer_notes,
         payment_status=PaymentStatus.PENDING,

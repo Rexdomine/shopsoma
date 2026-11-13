@@ -31,7 +31,7 @@ REVISIONS = (
 MILESTONE_FOUR_REVISION = "b3c4d5e6f7a8"
 FREE_SHIPPING_REVISION = "c4d5e6f7a8b9"
 PREVIOUS_HEAD_REVISION = "e6f7a8b9c0d1"
-CURRENT_HEAD_REVISION = "d1e2f3a4b5c7"
+CURRENT_HEAD_REVISION = "e2f3a4b5c6d8"
 
 
 def _script():
@@ -53,7 +53,8 @@ def test_milestone_two_revisions_are_sequential_from_current_head() -> None:
     free_shipping = script.get_revision(FREE_SHIPPING_REVISION)
     assert free_shipping.down_revision == MILESTONE_FOUR_REVISION
     current = script.get_revision(CURRENT_HEAD_REVISION)
-    assert current.down_revision == "b9c0d1e2f3a4"
+    assert current.down_revision == "d1e2f3a4b5c7"
+    assert script.get_revision("d1e2f3a4b5c7").down_revision == "b9c0d1e2f3a4"
     assert script.get_revision("b9c0d1e2f3a4").down_revision == "a8b9c0d1e2f3"
     assert script.get_revision("a8b9c0d1e2f3").down_revision == "z9a0b1c2d3e4"
     assert script.get_revision("z9a0b1c2d3e4").down_revision == "y8z9a0b1c2d3"
@@ -3853,7 +3854,7 @@ def test_postgresql_active_writer_has_single_owner_projection_authority(
     from app.models.order import Order
 
     app_url, sync_url = disposable_m2_database
-    _run_alembic(app_url, "upgrade", REVISIONS[-1])
+    _run_alembic(app_url, "upgrade", CURRENT_HEAD_REVISION)
     engine = create_engine(sync_url)
     customer_id = uuid.uuid4()
     order_id = uuid.uuid4()

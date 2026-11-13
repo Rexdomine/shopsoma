@@ -287,6 +287,7 @@ class OrderDetail(BaseModel):
     shipping_cost: Decimal
     tax_amount: Decimal
     discount_amount: Decimal
+    promo_code: Optional[str] = None
     total_amount: Decimal
 
     # Status
