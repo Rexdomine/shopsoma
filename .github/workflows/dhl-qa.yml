@@ -1,0 +1,88 @@
+name: Isolated DHL integration QA
+
+on:
+  pull_request:
+    branches: [develop]
+    types: [opened, synchronize]
+    paths:
+      - 'qa/dhl/**'
+      - '.github/workflows/dhl-qa.yml'
+
+permissions:
+  contents: read
+  pull-requests: read
+
+jobs:
+  dhl-qa:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    # One dedicated execution per revision; no reruns, schedule or dispatch.
+    if: github.run_attempt == 1 && github.event.pull_request.head.repo.full_name == github.repository
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          path: harness
+          persist-credentials: false
+      - name: Verify recorded target against current PR head
+        id: target
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            const pin = JSON.parse(fs.readFileSync('harness/qa/dhl/target.json'));
+            if (!/^[a-f0-9]{40}$/.test(pin.sha) || pin.pull_request !== 213) {
+              throw new Error('Invalid explicit target pin');
+            }
+            const {data: pr} = await github.rest.pulls.get({...context.repo, pull_number: pin.pull_request});
+            if (pr.head.sha !== pin.sha || pr.base.ref !== 'develop') {
+              throw new Error('Target changed: record a new explicit pin and obtain fresh evidence');
+            }
+            core.setOutput('sha', pin.sha);
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ steps.target.outputs.sha }}
+          path: target
+          persist-credentials: false
+      - name: Assert both immutable checkouts
+        env:
+          HARNESS_SHA: ${{ github.event.pull_request.head.sha }}
+          TARGET_SHA: ${{ steps.target.outputs.sha }}
+        run: |
+          test "$(git -C harness rev-parse HEAD)" = "$HARNESS_SHA"
+          test "$(git -C target rev-parse HEAD)" = "$TARGET_SHA"
+          mkdir evidence
+          python3 - <<'PY'
+          import json, os
+          from pathlib import Path
+          Path('evidence/revisions.json').write_text(json.dumps({
+            'harness': os.environ['HARNESS_SHA'], 'target': os.environ['TARGET_SHA'],
+            'run': os.environ['GITHUB_SERVER_URL'] + '/' + os.environ['GITHUB_REPOSITORY'] + '/actions/runs/' + os.environ['GITHUB_RUN_ID'],
+            'checkout_kind': 'exact heads, not generated merge'
+          }, indent=2))
+          PY
+      - name: Install dependencies in disposable image
+        run: |
+          cp harness/qa/dhl/dockerignore .dockerignore
+          docker build -f harness/qa/dhl/Dockerfile -t "dhl-qa:$GITHUB_RUN_ID" .
+      - name: Run contained tests (one worker)
+        run: |
+          docker run --init --name "dhl-qa-$GITHUB_RUN_ID" --network none \
+            --cap-drop ALL --security-opt no-new-privileges --pids-limit 512 \
+            --shm-size 1g --cpus 2 --memory 8g "dhl-qa:$GITHUB_RUN_ID"
+      - name: Collect evidence and remove owned container
+        if: always()
+        run: |
+          if docker container inspect "dhl-qa-$GITHUB_RUN_ID" >/dev/null 2>&1; then
+            docker cp "dhl-qa-$GITHUB_RUN_ID:/evidence/." evidence/
+            docker rm -f "dhl-qa-$GITHUB_RUN_ID"
+            printf '%s\n' 'Owned CI container removed' > evidence/container-teardown.txt
+          fi
+      - name: Upload synthetic evidence only
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: dhl-qa-${{ github.event.pull_request.head.sha }}
+          path: evidence/
+          retention-days: 7
+          if-no-files-found: error
