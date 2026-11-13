@@ -2493,4 +2493,54 @@ describe('Checkout M5 sequencing and recovery', () => {
       country: 'United Kingdom',
     })));
   });
+
+  it('applies, shows error for invalid, and removes promo codes in checkout', async () => {
+    const { checkoutService } = await import('../../services/checkoutService');
+    const validateSpy = vi.mocked(checkoutService.validatePromoCode);
+
+    mocks.getAddresses.mockResolvedValue({ addresses: [address], total: 1 });
+    validateSpy
+      .mockResolvedValueOnce({
+        valid: false,
+        message: 'Promo code expired on 2026-01-01',
+      })
+      .mockResolvedValueOnce({
+        valid: true,
+        code: 'SAVE10',
+        discount_type: 'percentage',
+        discount_value: 10,
+        discount_amount: 6000,
+        currency: 'NGN',
+        message: '₦6,000.00 discount applied',
+      });
+
+    render(<MemoryRouter initialEntries={['/checkout']}><CheckoutTestRoutes /></MemoryRouter>);
+    await waitFor(() => expect(mocks.getAddresses).toHaveBeenCalled());
+
+    const promoInput = screen.getByPlaceholderText('Promo code');
+    fireEvent.change(promoInput, { target: { value: 'EXPIRED' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Apply' }));
+
+    expect(await screen.findByText('Promo code expired on 2026-01-01')).toBeInTheDocument();
+
+    fireEvent.change(promoInput, { target: { value: 'save10' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Apply' }));
+
+    await waitFor(() => {
+      expect(validateSpy).toHaveBeenLastCalledWith(
+        expect.objectContaining({
+          code: 'SAVE10',
+          currency: 'NGN',
+        }),
+      );
+    });
+    expect(await screen.findByText(/Promo applied! 10% off/i)).toBeInTheDocument();
+    expect(screen.getByText('Promo (SAVE10)')).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Remove' }));
+    await waitFor(() => {
+      expect(screen.queryByText('Promo (SAVE10)')).not.toBeInTheDocument();
+    });
+    expect(screen.getByRole('button', { name: 'Apply' })).toBeInTheDocument();
+  });
 });

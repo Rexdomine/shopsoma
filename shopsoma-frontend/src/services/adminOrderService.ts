@@ -160,6 +160,7 @@ export interface OrderDetail {
   shipping_cost: number;
   tax_amount: number;
   discount_amount: number;
+  promo_code?: string | null;
   total_amount: number;
   payment_status: PaymentStatus;
   fulfillment_status: FulfillmentStatus;

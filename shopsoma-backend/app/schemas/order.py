@@ -159,6 +159,7 @@ class OrderReviewRequest(BaseModel):
     items: list[OrderItemCreate] = Field(..., min_length=1)
     shipping_address_id: Optional[UUID] = None
     guest_address: Optional[GuestAddressData] = None
+    customer_email: Optional[str] = None
     shipping_rate_id: Optional[UUID] = None
     promo_code: Optional[str] = None
     currency: str = Field("NGN", pattern="^(NGN|USD)$", description="Checkout currency")
@@ -207,6 +208,7 @@ class OrderResponse(BaseModel):
     shipping_cost: Decimal
     tax_amount: Decimal
     discount_amount: Decimal
+    promo_code: Optional[str] = None
     total_amount: Decimal
     payment_status: PaymentStatus
     fulfillment_status: FulfillmentStatus

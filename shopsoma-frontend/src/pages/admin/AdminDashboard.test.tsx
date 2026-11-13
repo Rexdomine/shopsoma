@@ -28,6 +28,7 @@ describe('AdminDashboard', () => {
     expect(screen.getByRole('link', { name: /^Orders/ })).toHaveAttribute('href', '/admin/orders');
     expect(screen.getByRole('link', { name: /^Products/ })).toHaveAttribute('href', '/admin/products');
     expect(screen.getByRole('link', { name: /^Payouts/ })).toHaveAttribute('href', '/admin/payouts');
+    expect(screen.getByRole('link', { name: /^Marketing & Discounts/ })).toHaveAttribute('href', '/admin/marketing');
     expect(screen.getByRole('link', { name: /^Settings/ })).toHaveAttribute('href', '/admin/settings');
     expect(screen.queryByRole('link', { name: /^Analytics/ })).not.toBeInTheDocument();
   });

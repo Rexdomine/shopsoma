@@ -49,6 +49,7 @@ from app.services.checkout.reservations import (
     reclaim_unattempted_reservations_for_subject,
 )
 from app.services.shipping.capabilities import DomesticShippingCapabilities
+from app.services.promo_code_service import record_order_promo_redemption
 
 
 class PaymentBridgeError(Exception):
@@ -1227,6 +1228,7 @@ async def finalize_verified_payment(
             payment.status = TransactionStatus.COMPLETED
             payment.completed_at = datetime.now(timezone.utc)
             order.payment_status = PaymentStatus.PAID
+            await record_order_promo_redemption(session, order)
             order.fulfillment_status = FulfillmentStatus.PREPARING_FOR_PICKUP
         return PaymentFinalizationResult(False, replay, order)
 
@@ -1278,6 +1280,7 @@ async def finalize_verified_payment(
             observed_at=observed_at,
         )
         order.payment_status = PaymentStatus.PAID
+        await record_order_promo_redemption(session, order)
         await _enqueue_payment_event(
             session,
             attempt=attempt,
@@ -1291,6 +1294,7 @@ async def finalize_verified_payment(
             payment.status = TransactionStatus.COMPLETED
             payment.completed_at = attempt.terminal_at
         order.payment_status = PaymentStatus.PAID
+        await record_order_promo_redemption(session, order)
         order.fulfillment_status = bridge_fulfilment_status(
             paid=True,
             package_ready=await package_ready_for_attempt(session, attempt=attempt),
@@ -1384,6 +1388,7 @@ async def finalize_verified_payment(
     payment.status = TransactionStatus.COMPLETED
     payment.completed_at = observed_at
     order.payment_status = PaymentStatus.PAID
+    await record_order_promo_redemption(session, order)
     order.fulfillment_status = bridge_fulfilment_status(
         paid=True,
         package_ready=await package_ready_for_attempt(session, attempt=attempt),
