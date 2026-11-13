@@ -658,7 +658,7 @@ async def get_order_detail(
         shipping_cost=order.shipping_cost,
         tax_amount=order.tax_amount,
         discount_amount=order.discount_amount,
-        promo_code=order.promo_code,
+        promo_code=getattr(order, "promo_code", None),
         total_amount=order.total_amount,
         payment_status=order.payment_status,
         fulfillment_status=order.fulfillment_status,

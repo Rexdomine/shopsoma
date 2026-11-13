@@ -559,3 +559,16 @@ async def test_checkout_promo_integration_cancellation_and_idempotent_redemption
     assert admin_detail.status_code == 200, admin_detail.text
     assert admin_detail.json()["promo_code"] == "VIP20"
     assert Decimal(str(admin_detail.json()["discount_amount"])) == Decimal("3000.00")
+
+
+@pytest.mark.asyncio
+async def test_record_order_promo_redemption_handles_order_stub_without_promo_fields():
+    from types import SimpleNamespace
+    from app.services.promo_code_service import record_order_promo_redemption
+
+    class UncalledSession:
+        async def execute(self, *_args, **_kwargs):
+            raise AssertionError("DB should not be queried when promo_code_id is absent")
+
+    stub_order = SimpleNamespace(id="order-stub")
+    assert await record_order_promo_redemption(UncalledSession(), stub_order) is False

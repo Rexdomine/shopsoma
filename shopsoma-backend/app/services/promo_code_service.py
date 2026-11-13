@@ -232,7 +232,8 @@ async def evaluate_promo_code(
 
 async def record_order_promo_redemption(db: AsyncSession, order: Order) -> bool:
     """Atomically increment promo_codes.usage_count once per paid order."""
-    if not order.promo_code_id or order.promo_usage_counted:
+    promo_code_id = getattr(order, "promo_code_id", None)
+    if not promo_code_id or bool(getattr(order, "promo_usage_counted", False)):
         return False
 
     claim = await db.execute(
@@ -249,7 +250,7 @@ async def record_order_promo_redemption(db: AsyncSession, order: Order) -> bool:
 
     await db.execute(
         update(PromoCode)
-        .where(PromoCode.id == order.promo_code_id)
+        .where(PromoCode.id == promo_code_id)
         .values(usage_count=func.coalesce(PromoCode.usage_count, 0) + 1)
     )
     order.promo_usage_counted = True
