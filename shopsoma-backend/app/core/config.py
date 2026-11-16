@@ -100,6 +100,8 @@ class Settings(BaseSettings):
     BREVO_SENDER_EMAIL: str = "noreply@shopsoma.com"
     BREVO_SENDER_NAME: str = "Shopsoma"
     BREVO_NEWSLETTER_LIST_ID: Optional[int] = None
+    ALLOW_NON_PROD_EXTERNAL_EMAILS: bool = False
+    NON_PROD_EMAIL_ALLOWLIST: str = ""
 
     # ShipBubble Shipping Service
     # Docs: https://docs.shipbubble.com

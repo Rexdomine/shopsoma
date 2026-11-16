@@ -14,6 +14,10 @@ from app.core.config import settings
 from app.core.database import get_db
 from app.models.order import FulfillmentStatus, Order
 from app.models.shipbubble_shipment import ShipbubbleShipment, ShipbubbleWebhookEvent
+from app.services.orders.fulfillment_sync import (
+    can_apply_carrier_status_transition,
+    sync_vendor_items_and_pickups_for_order_status,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -135,22 +139,48 @@ async def shipbubble_webhook(
                     order.tracking_number = sb_order_id
 
                 status_lower = (status_val or "").lower().strip()
-                if status_lower in ("picked_up", "pickup_completed"):
-                    order.fulfillment_status = FulfillmentStatus.PICKED_UP
-                elif status_lower in ("in_transit", "in-transit"):
-                    order.fulfillment_status = FulfillmentStatus.IN_TRANSIT
-                elif status_lower in ("out_for_delivery", "out-for-delivery"):
-                    order.fulfillment_status = FulfillmentStatus.OUT_FOR_DELIVERY
-                elif status_lower in ("delivered", "completed"):
-                    order.fulfillment_status = FulfillmentStatus.DELIVERED
-                    if order.delivered_at is None:
-                        order.delivered_at = datetime.now(timezone.utc)
-                elif status_lower in ("delivery_failed", "failed"):
-                    order.fulfillment_status = FulfillmentStatus.DELIVERY_FAILED
-                elif status_lower in ("returned",):
-                    order.fulfillment_status = FulfillmentStatus.RETURNED
-                elif status_lower in ("cancelled", "canceled"):
-                    order.fulfillment_status = FulfillmentStatus.CANCELLED
+                webhook_status_map = {
+                    "picked_up": FulfillmentStatus.PICKED_UP,
+                    "pickup_completed": FulfillmentStatus.PICKED_UP,
+                    "in_transit": FulfillmentStatus.IN_TRANSIT,
+                    "in-transit": FulfillmentStatus.IN_TRANSIT,
+                    "out_for_delivery": FulfillmentStatus.OUT_FOR_DELIVERY,
+                    "out-for-delivery": FulfillmentStatus.OUT_FOR_DELIVERY,
+                    "delivered": FulfillmentStatus.DELIVERED,
+                    "completed": FulfillmentStatus.DELIVERED,
+                    "delivery_failed": FulfillmentStatus.DELIVERY_FAILED,
+                    "failed": FulfillmentStatus.DELIVERY_FAILED,
+                    "returned": FulfillmentStatus.RETURNED,
+                    "cancelled": FulfillmentStatus.CANCELLED,
+                    "canceled": FulfillmentStatus.CANCELLED,
+                }
+                target_status = webhook_status_map.get(status_lower)
+                if target_status is not None:
+                    if can_apply_carrier_status_transition(
+                        old_status,
+                        target_status,
+                        is_webhook=True,
+                    ):
+                        now_utc = datetime.now(timezone.utc)
+                        order.fulfillment_status = target_status
+                        if target_status == FulfillmentStatus.DELIVERED and order.delivered_at is None:
+                            order.delivered_at = now_utc
+                        elif target_status == FulfillmentStatus.CANCELLED and order.cancelled_at is None:
+                            order.cancelled_at = now_utc
+                        await sync_vendor_items_and_pickups_for_order_status(
+                            db,
+                            order=order,
+                            new_status=target_status,
+                            now_utc=now_utc,
+                        )
+                    elif target_status != old_status:
+                        logger.info(
+                            "[ShipBubble Webhook] Ignoring non-forward status '%s' (%s) for order %s currently at '%s'",
+                            status_lower,
+                            target_status.value,
+                            order.order_number,
+                            old_status.value if hasattr(old_status, "value") else old_status,
+                        )
 
                 db.add(order)
 
