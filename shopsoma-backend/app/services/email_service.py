@@ -259,6 +259,29 @@ class EmailService:
         </html>
         """
 
+    @staticmethod
+    def _is_recipient_allowed_in_current_env(to_email: str) -> bool:
+        """Guard non-production environments from emailing real seeded vendor/customer addresses."""
+        env = (getattr(settings, "ENVIRONMENT", "development") or "development").strip().lower()
+        if env == "production":
+            return True
+        if bool(getattr(settings, "ALLOW_NON_PROD_EXTERNAL_EMAILS", False)):
+            return True
+
+        normalized_recipient = (to_email or "").strip().lower()
+        if not normalized_recipient:
+            return False
+
+        raw_allowlist = getattr(settings, "NON_PROD_EMAIL_ALLOWLIST", "") or ""
+        entries = [entry.strip().lower() for entry in raw_allowlist.split(",") if entry.strip()]
+        for entry in entries:
+            if entry.startswith("@"):
+                if normalized_recipient.endswith(entry):
+                    return True
+            elif normalized_recipient == entry:
+                return True
+        return False
+
     async def send_email(
         self,
         to_email: str,
@@ -267,6 +290,18 @@ class EmailService:
         html_content: str,
         template_params: Optional[Dict[str, Any]] = None
     ) -> bool:
+        # Suppress external emails in development/staging unless explicitly allowlisted
+        if not self._is_recipient_allowed_in_current_env(to_email):
+            env = (getattr(settings, "ENVIRONMENT", "development") or "development").strip()
+            logger.warning(
+                "[Email Guard] Suppressed outbound email in non-production environment='%s' to='%s' subject='%s'. "
+                "Add recipient/domain to NON_PROD_EMAIL_ALLOWLIST or set ALLOW_NON_PROD_EXTERNAL_EMAILS=true to send.",
+                env,
+                to_email,
+                subject,
+            )
+            return False
+
         # Check if email service is enabled
         api_key = getattr(settings, "BREVO_API_KEY", "") or ""
         if not self.enabled or self.api_instance is None or not api_key:

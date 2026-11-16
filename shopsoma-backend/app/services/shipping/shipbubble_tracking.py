@@ -22,6 +22,10 @@ from app.services.shipbubble_service import (
     ShipBubbleError,
     get_shipbubble_service,
 )
+from app.services.orders.fulfillment_sync import (
+    can_apply_carrier_status_transition,
+    sync_vendor_items_and_pickups_for_order_status,
+)
 from app.services.shipping.shipbubble_booking import book_shipbubble_shipment_if_selected
 
 logger = logging.getLogger(__name__)
@@ -448,10 +452,33 @@ async def sync_shipbubble_shipment_status(
                 "returned": FulfillmentStatus.RETURNED,
                 "cancelled": FulfillmentStatus.CANCELLED,
             }
-            if sb_status in status_mapping:
-                order.fulfillment_status = status_mapping[sb_status]
-                if order.fulfillment_status == FulfillmentStatus.DELIVERED and not order.delivered_at:
-                    order.delivered_at = datetime.now(timezone.utc)
+            target_status = status_mapping.get(sb_status)
+            if target_status is not None:
+                if can_apply_carrier_status_transition(
+                    old_status,
+                    target_status,
+                    is_webhook=False,
+                ):
+                    now_utc = datetime.now(timezone.utc)
+                    order.fulfillment_status = target_status
+                    if order.fulfillment_status == FulfillmentStatus.DELIVERED and not order.delivered_at:
+                        order.delivered_at = now_utc
+                    elif order.fulfillment_status == FulfillmentStatus.CANCELLED and not order.cancelled_at:
+                        order.cancelled_at = now_utc
+                    await sync_vendor_items_and_pickups_for_order_status(
+                        db,
+                        order=order,
+                        new_status=target_status,
+                        now_utc=now_utc,
+                    )
+                elif target_status != old_status:
+                    logger.info(
+                        "[ShipBubble] Ignoring non-forward poll status '%s' (%s) for order %s currently at '%s'",
+                        sb_status,
+                        target_status.value,
+                        order.order_number,
+                        old_status.value if hasattr(old_status, "value") else old_status,
+                    )
 
             db.add(shipment)
             db.add(order)

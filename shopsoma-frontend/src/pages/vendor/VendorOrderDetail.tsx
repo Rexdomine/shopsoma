@@ -56,7 +56,13 @@ function MadeToOrderReadinessPanel({
   onCancelConfirm: () => void;
   onConfirm: () => void;
 }) {
-  const state = item.readiness_state ?? 'being_prepared';
+  const itemStatusLower = (item.fulfillment_status || '').toLowerCase();
+  const state =
+    itemStatusLower === 'cancelled'
+      ? 'cancelled'
+      : ['picked_up', 'in_transit', 'out_for_delivery', 'delivered', 'returned'].includes(itemStatusLower)
+        ? 'picked_up'
+        : (item.readiness_state ?? 'being_prepared');
   const readyAt = formatReadyAt(item.ready_for_pickup_at);
   const pickup = item.pickup;
   const windowStart = pickup?.pickup_window_start || pickup?.scheduled_pickup_date;
@@ -146,7 +152,11 @@ function ReadyToWearReadinessPanel({
   onCancelConfirm: () => void;
   onConfirm: () => void;
 }) {
-  const isReady = Boolean(
+  const itemStatusLower = (item.fulfillment_status || '').toLowerCase();
+  const isCancelled = itemStatusLower === 'cancelled' || item.readiness_state === 'cancelled';
+  const isDelivered = itemStatusLower === 'delivered';
+  const isCollected = ['picked_up', 'in_transit', 'out_for_delivery', 'delivered', 'returned'].includes(itemStatusLower) || item.readiness_state === 'picked_up';
+  const isReady = isCollected || Boolean(
     item.ready_for_pickup_at ||
     item.readiness_state === 'ready_for_pickup' ||
     item.readiness_state === 'pickup_scheduled' ||
@@ -160,13 +170,20 @@ function ReadyToWearReadinessPanel({
     <div className="mt-3 rounded-xl border border-gray-200 bg-gray-50 p-3 space-y-2" data-testid={`rtw-panel-${item.id}`}>
       <div className="flex flex-wrap items-center gap-2">
         <ReadyToWearTag />
-        {isReady ? (
+        {isCancelled ? (
+          <span
+            className="inline-flex items-center gap-1.5 rounded-full border border-red-200 bg-red-50 px-2.5 py-1 text-xs font-semibold text-red-700"
+            data-testid="rtw-readiness-badge"
+          >
+            Cancelled
+          </span>
+        ) : isReady ? (
           <span
             className="inline-flex items-center gap-1.5 rounded-full border border-emerald-200 bg-emerald-50 px-2.5 py-1 text-xs font-semibold text-emerald-700"
             data-testid="rtw-readiness-badge"
           >
             <CheckCircle2 className="h-3.5 w-3.5" />
-            Available & Ready for pickup
+            {isDelivered ? 'Delivered' : isCollected ? 'Picked up' : 'Available & Ready for pickup'}
           </span>
         ) : (
           <span
@@ -182,14 +199,14 @@ function ReadyToWearReadinessPanel({
       {readyAt && (
         <p className="text-xs text-gray-600">Confirmed ready: {readyAt}</p>
       )}
-      {item.readiness_state === 'pickup_scheduled' && windowStart && (
+      {item.readiness_state === 'pickup_scheduled' && !isCollected && windowStart && (
         <p className="text-xs text-gray-600">
           Shopsoma pickup: {formatReadyAt(windowStart)}
           {pickup?.pickup_window_end ? ` – ${formatReadyAt(pickup.pickup_window_end)}` : ''}
         </p>
       )}
 
-      {!isReady && (
+      {!isReady && !isCancelled && (
         canMarkReady ? (
           isConfirming ? (
             <div className="space-y-2">
@@ -823,6 +840,13 @@ export default function VendorOrderDetail() {
               <div className="divide-y divide-gray-200">
                 {order.items.map((item) => {
                   const variantSummary = getVariantSummary(item.variant_details);
+                  const effectiveItemStatus =
+                    ['delivered', 'delivery_failed', 'returned', 'cancelled'].includes(
+                      (order.fulfillment_status || '').toLowerCase()
+                    ) && (item.fulfillment_status || '').toLowerCase() !== 'cancelled'
+                      ? order.fulfillment_status.toLowerCase()
+                      : (item.fulfillment_status || 'order_received').toLowerCase();
+                  const effectiveItem = { ...item, fulfillment_status: effectiveItemStatus };
                   return (
                     <div key={item.id} className="py-4 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
                       <div className="flex items-center gap-3 sm:gap-4 min-w-0">
@@ -860,10 +884,10 @@ export default function VendorOrderDetail() {
                           <p className="text-xs text-gray-500 mt-1">Payout: {formatBasePrice(item.vendor_payout)}</p>
                           {item.made_to_order ? (
                             <MadeToOrderReadinessPanel
-                              item={item}
+                              item={effectiveItem}
                               canMarkReady={
                                 (order.payment_status || '').toLowerCase() === 'paid' &&
-                                (item.fulfillment_status || '').toLowerCase() !== 'cancelled' &&
+                                effectiveItemStatus !== 'cancelled' &&
                                 (order.fulfillment_status || '').toLowerCase() !== 'cancelled'
                               }
                               isConfirming={confirmReadyItemId === item.id}
@@ -874,10 +898,10 @@ export default function VendorOrderDetail() {
                             />
                           ) : (
                             <ReadyToWearReadinessPanel
-                              item={item}
+                              item={effectiveItem}
                               canMarkReady={
                                 (order.payment_status || '').toLowerCase() === 'paid' &&
-                                (item.fulfillment_status || '').toLowerCase() !== 'cancelled' &&
+                                effectiveItemStatus !== 'cancelled' &&
                                 (order.fulfillment_status || '').toLowerCase() !== 'cancelled'
                               }
                               isConfirming={confirmReadyItemId === item.id}
@@ -890,14 +914,29 @@ export default function VendorOrderDetail() {
                         </div>
                       </div>
                       <div className="flex items-center gap-3 shrink-0 self-start sm:self-center">
-                        <span className={`px-3 py-1 rounded-full text-xs font-semibold ${
-                          item.fulfillment_status === 'delivered' ? 'bg-[#E8F7EF] text-[#19984B]' :
-                          item.fulfillment_status === 'shipped' ? 'bg-blue-100 text-blue-700' :
-                          item.fulfillment_status === 'processing' ? 'bg-amber-100 text-amber-700' :
-                          'bg-gray-100 text-gray-700'
-                        }`}>
-                          {item.fulfillment_status}
-                        </span>
+                        {(() => {
+                          const itemStatusBadges: Record<string, { label: string; className: string }> = {
+                            order_received: { label: 'Order Received', className: 'bg-amber-100 text-amber-700' },
+                            preparing_for_pickup: { label: 'Preparing for Pickup', className: 'bg-[#FEF3E2] text-[#D97706]' },
+                            pickup_scheduled: { label: 'Pickup Scheduled', className: 'bg-purple-100 text-purple-700' },
+                            picked_up: { label: 'Picked Up', className: 'bg-indigo-100 text-indigo-700' },
+                            in_transit: { label: 'In Transit', className: 'bg-blue-100 text-blue-700' },
+                            out_for_delivery: { label: 'Out for Delivery', className: 'bg-cyan-100 text-cyan-700' },
+                            delivered: { label: 'Delivered', className: 'bg-[#E8F7EF] text-[#19984B]' },
+                            delivery_failed: { label: 'Delivery Failed', className: 'bg-orange-100 text-orange-700' },
+                            returned: { label: 'Returned', className: 'bg-yellow-100 text-yellow-700' },
+                            cancelled: { label: 'Cancelled', className: 'bg-red-100 text-red-700' },
+                          };
+                          const badge = itemStatusBadges[effectiveItemStatus] || {
+                            label: effectiveItemStatus.replace(/_/g, ' '),
+                            className: 'bg-gray-100 text-gray-700',
+                          };
+                          return (
+                            <span className={`px-3 py-1 rounded-full text-xs font-semibold ${badge.className}`}>
+                              {badge.label}
+                            </span>
+                          );
+                        })()}
                       </div>
                     </div>
                   );

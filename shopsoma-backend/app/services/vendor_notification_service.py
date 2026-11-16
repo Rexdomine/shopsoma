@@ -82,16 +82,18 @@ class VendorNotificationService:
             return
 
         try:
-            await self.email_service.send_vendor_new_order_email(
-                email=vendor.user.email,
-                name=vendor.business_name,
-                order_number=order_number,
-                order_date=order_date,
-                items=items,
-                total_payout=total_payout,
-                pickup_date=scheduled_pickup_date,
-                currency=currency,
-                fulfillment_status=current_fulfillment_status,
+            sent = bool(
+                await self.email_service.send_vendor_new_order_email(
+                    email=vendor.user.email,
+                    name=vendor.business_name,
+                    order_number=order_number,
+                    order_date=order_date,
+                    items=items,
+                    total_payout=total_payout,
+                    pickup_date=scheduled_pickup_date,
+                    currency=currency,
+                    fulfillment_status=current_fulfillment_status,
+                )
             )
 
             # Update or create notification email_sent status
@@ -105,8 +107,9 @@ class VendorNotificationService:
             notification = notification_result.scalar_one_or_none()
 
             if notification:
-                notification.email_sent = True
-                notification.email_sent_at = datetime.utcnow()
+                if sent:
+                    notification.email_sent = True
+                    notification.email_sent_at = datetime.utcnow()
             else:
                 notification = VendorNotification(
                     vendor_id=vendor_id,
@@ -120,17 +123,24 @@ class VendorNotificationService:
                         "total_payout": total_payout,
                         "currency": currency,
                     },
-                    email_sent=True,
-                    email_sent_at=datetime.utcnow(),
+                    email_sent=sent,
+                    email_sent_at=datetime.utcnow() if sent else None,
                 )
                 db.add(notification)
             await db.commit()
 
-            logger.info(
-                "[Vendor Email] New order email sent to vendor_id=%s order=%s",
-                vendor_id,
-                order_number
-            )
+            if sent:
+                logger.info(
+                    "[Vendor Email] New order email sent to vendor_id=%s order=%s",
+                    vendor_id,
+                    order_number
+                )
+            else:
+                logger.info(
+                    "[Vendor Email] In-app notification recorded without outbound email for vendor_id=%s order=%s",
+                    vendor_id,
+                    order_number,
+                )
 
         except Exception as e:
             logger.exception(

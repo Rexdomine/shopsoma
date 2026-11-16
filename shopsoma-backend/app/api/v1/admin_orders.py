@@ -24,6 +24,10 @@ from app.models.product import Product
 from app.models.payment import Payment
 from app.models.setting import Setting
 from app.models.package_custody import HubPackage, CustodyEvent
+from app.services.orders.fulfillment_sync import (
+    resolve_effective_item_fulfillment_status,
+    sync_vendor_items_and_pickups_for_order_status,
+)
 from app.services.orders.made_to_order_readiness import (
     ReadinessError,
     ensure_admin_pickup_update_allowed,
@@ -366,7 +370,7 @@ def _build_admin_order_item_detail(
         commission_rate=item.commission_rate,
         commission_amount=item.commission_amount,
         vendor_payout=item.vendor_payout,
-        fulfillment_status=item.fulfillment_status,
+        fulfillment_status=resolve_effective_item_fulfillment_status(item, order, pickup),
         vendor=build_vendor_info(item.vendor),
         pickup=_build_pickup_info(pickup) if pickup is not None else None,
         **readiness_fields(item, pickup),
@@ -811,9 +815,10 @@ async def update_order_status(
         else:
             order.admin_notes = f"[{datetime.now().isoformat()}] {update_data.admin_notes}"
 
-    # Always refresh delivered_at when status is set to DELIVERED
+    # Preserve original delivered_at if already recorded so payout hold timers do not reset
     if new_status == FulfillmentStatus.DELIVERED:
-        order.delivered_at = datetime.now(timezone.utc)
+        if order.delivered_at is None:
+            order.delivered_at = datetime.now(timezone.utc)
         logger.info(
             "[Order Status] order=%s status=%s delivered_at=%s",
             order.order_number,
@@ -824,6 +829,12 @@ async def update_order_status(
     # Set cancelled_at timestamp if status is CANCELLED
     if new_status == FulfillmentStatus.CANCELLED and not order.cancelled_at:
         order.cancelled_at = datetime.now(timezone.utc)
+
+    await sync_vendor_items_and_pickups_for_order_status(
+        db,
+        order=order,
+        new_status=new_status,
+    )
 
     # Update vendor pickups with pickup window data if provided
     pickups = []
@@ -1389,15 +1400,25 @@ async def bulk_update_status(
             else:
                 order.admin_notes = note
 
-        # Always refresh delivered_at when status is set to DELIVERED
+        # Preserve original delivered_at if already recorded so payout hold timers do not reset
         if update_data.fulfillment_status == FulfillmentStatus.DELIVERED:
-            order.delivered_at = datetime.now(timezone.utc)
+            if order.delivered_at is None:
+                order.delivered_at = datetime.now(timezone.utc)
             logger.info(
                 "[Order Status] order=%s status=%s delivered_at=%s",
                 order.order_number,
                 update_data.fulfillment_status.value,
                 order.delivered_at.isoformat(),
             )
+
+        if update_data.fulfillment_status == FulfillmentStatus.CANCELLED and not order.cancelled_at:
+            order.cancelled_at = datetime.now(timezone.utc)
+
+        await sync_vendor_items_and_pickups_for_order_status(
+            db,
+            order=order,
+            new_status=update_data.fulfillment_status,
+        )
 
         if previous_status != update_data.fulfillment_status:
             orders_to_notify.append(order)
