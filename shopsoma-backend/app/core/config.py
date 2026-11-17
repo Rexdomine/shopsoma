@@ -116,6 +116,7 @@ class Settings(BaseSettings):
     # Docs: https://developer.dhl.com/api-reference/dhl-express-mydhl-api
     DHL_ENABLED: bool = False
     DHL_ENVIRONMENT: Literal["sandbox", "production"] = "sandbox"
+    DHL_BASE_URL: Optional[str] = None
     DHL_API_USERNAME: SecretStr = SecretStr("")
     DHL_API_PASSWORD: SecretStr = SecretStr("")
     DHL_EXPORT_ACCOUNT_NUMBER: SecretStr = SecretStr("")
@@ -172,6 +173,8 @@ class Settings(BaseSettings):
     @property
     def dhl_base_url(self) -> str:
         """Return the fixed official MyDHL API URL for the selected environment."""
+        if self.DHL_BASE_URL:
+            return self.DHL_BASE_URL.strip().rstrip("/")
         if self.DHL_ENVIRONMENT == "production":
             return "https://express.api.dhl.com/mydhlapi"
         return "https://express.api.dhl.com/mydhlapi/test"
@@ -291,6 +294,23 @@ class Settings(BaseSettings):
     @model_validator(mode="after")
     def _validate_settings(self):
         environment = self.ENVIRONMENT.lower()
+
+        if self.DHL_BASE_URL is not None:
+            normalized_dhl_url = self.DHL_BASE_URL.strip().rstrip("/")
+            allowed_dhl_urls = {
+                "https://express.api.dhl.com/mydhlapi/test",
+                "https://express.api.dhl.com/mydhlapi",
+            }
+            if not normalized_dhl_url:
+                self.DHL_BASE_URL = None
+            elif normalized_dhl_url not in allowed_dhl_urls:
+                raise ValueError(
+                    "DHL_BASE_URL must be one of the official MyDHL API URLs: "
+                    "https://express.api.dhl.com/mydhlapi/test or "
+                    "https://express.api.dhl.com/mydhlapi"
+                )
+            else:
+                self.DHL_BASE_URL = normalized_dhl_url
 
         if self.DHL_ENABLED:
             required_dhl_fields = {
