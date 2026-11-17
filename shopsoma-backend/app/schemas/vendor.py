@@ -194,6 +194,7 @@ class DesignerResponse(BaseModel):
     business_description: Optional[str] = None
     logo_url: Optional[str] = None
     featured_storefront_image_url: Optional[str] = None
+    is_featured_storefront: bool = False
     image_url: Optional[str] = None
     campaign_image_url: Optional[str] = None
     total_products: int = 0

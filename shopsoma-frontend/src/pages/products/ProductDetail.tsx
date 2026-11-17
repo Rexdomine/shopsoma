@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState, useRef, type SVGProps } from 'react';
-import { useLocation, useNavigate, useParams } from 'react-router-dom';
+import { Link, useLocation, useNavigate, useParams } from 'react-router-dom';
 import { ArrowLeft, Bookmark, Minus, Plus, X } from 'lucide-react';
+import { designerPath } from '../designers/designerUtils';
 import type { Product, ProductVariant, SizeGuide } from '../../types';
 import { productService } from '../../services/productService';
 import { wishlistService } from '../../services/wishlistService';
@@ -902,9 +903,18 @@ export default function ProductDetail() {
           <div className="flex items-start justify-between gap-4">
             <div className="min-w-0">
               {product.vendor_name && (
-                <p className="font-ui text-sm uppercase tracking-[0.25em] text-primary/60">
-                  {product.vendor_name}
-                </p>
+                product.vendor_id ? (
+                  <Link
+                    to={designerPath(product.vendor_id)}
+                    className="font-ui text-sm uppercase tracking-[0.25em] text-primary underline underline-offset-4"
+                  >
+                    {product.vendor_name}
+                  </Link>
+                ) : (
+                  <p className="font-ui text-sm uppercase tracking-[0.25em] text-primary/60">
+                    {product.vendor_name}
+                  </p>
+                )
               )}
               <h1 className="mt-2 text-2xl sm:text-3xl font-display font-medium leading-tight text-primary md:text-4xl break-words">
                 {product.title}

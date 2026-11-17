@@ -169,6 +169,7 @@ async def _hydrate_designers(
                 business_description=vendor.business_description,
                 logo_url=resolved_logo,
                 featured_storefront_image_url=featured_image,
+                is_featured_storefront=bool(vendor.is_featured_storefront),
                 image_url=best_image,
                 campaign_image_url=campaign_image,
                 total_products=vendor.total_products or 0,

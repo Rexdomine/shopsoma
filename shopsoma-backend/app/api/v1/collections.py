@@ -11,7 +11,7 @@ import re
 
 from app.core.database import get_db
 from app.models.collection import Collection
-from app.models.product import Product, ProductStatus
+from app.models.product import Product, ProductStatus, Variation
 from app.models.user import User
 from app.schemas.collection import (
     CollectionCreate,
@@ -23,6 +23,7 @@ from app.schemas.collection import (
     CollectionProductSummary,
     CollectionProductAssignRequest,
 )
+from app.schemas.product import resolve_product_total_stock
 from app.api.dependencies import get_current_user
 from app.models.vendor_pickup import VendorNotification
 
@@ -339,6 +340,8 @@ async def list_collection_products(
     query = select(Product).options(
         selectinload(Product.images),
         selectinload(Product.collection),
+        selectinload(Product.variations).selectinload(Variation.size_stocks),
+        selectinload(Product.variants),
     ).where(
         and_(
             Product.vendor_id == vendor.id,
@@ -369,7 +372,7 @@ async def list_collection_products(
                 title=product.title,
                 status=product.status.value if hasattr(product.status, "value") else str(product.status),
                 base_price=float(product.base_price),
-                total_stock=product.total_stock or 0,
+                total_stock=resolve_product_total_stock(product),
                 made_to_order=bool(product.made_to_order),
                 made_to_order_timeline=product.made_to_order_timeline,
                 created_at=product.created_at,
@@ -411,6 +414,8 @@ async def list_available_collection_products(
     query = select(Product).options(
         selectinload(Product.images),
         selectinload(Product.collection),
+        selectinload(Product.variations).selectinload(Variation.size_stocks),
+        selectinload(Product.variants),
     ).where(
         and_(
             Product.vendor_id == vendor.id,
@@ -441,7 +446,7 @@ async def list_available_collection_products(
                 title=product.title,
                 status=product.status.value if hasattr(product.status, "value") else str(product.status),
                 base_price=float(product.base_price),
-                total_stock=product.total_stock or 0,
+                total_stock=resolve_product_total_stock(product),
                 made_to_order=bool(product.made_to_order),
                 made_to_order_timeline=product.made_to_order_timeline,
                 created_at=product.created_at,

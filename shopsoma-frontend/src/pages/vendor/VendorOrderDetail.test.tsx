@@ -236,4 +236,26 @@ describe('VendorOrderDetail made-to-order readiness', () => {
       'Ready for pickup'
     );
   });
+
+  it('displays Delivered badge and hides readiness confirmation prompt when order is delivered', async () => {
+    mocks.getVendorOrder.mockResolvedValue({
+      ...order([
+        item({
+          id: 'item-socks',
+          product_title: 'MMBM SOCKS',
+          made_to_order: false,
+          fulfillment_status: 'order_received',
+          ready_for_pickup_at: null,
+          readiness_state: null,
+        }),
+      ]),
+      fulfillment_status: 'delivered',
+    });
+
+    renderPage();
+    const panel = await screen.findByTestId('rtw-panel-item-socks');
+    expect(within(panel).getByText('Delivered')).toBeInTheDocument();
+    expect(within(panel).queryByText('Confirmation needed')).not.toBeInTheDocument();
+    expect(within(panel).queryByRole('button', { name: 'Ready for Shopsoma Pickup' })).not.toBeInTheDocument();
+  });
 });

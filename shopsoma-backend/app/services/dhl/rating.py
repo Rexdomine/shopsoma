@@ -21,9 +21,11 @@ from app.services.shipping.contracts import DomesticRate, DomesticRateRequest
 from app.services.shipping.rate_identity import canonical_rate_fingerprint
 
 MYDHL_TEST_BASE_URL = "https://express.api.dhl.com/mydhlapi/test"
+MYDHL_PROD_BASE_URL = "https://express.api.dhl.com/mydhlapi"
 ADAPTER_VERSION = "dhl-rates-v1"
 SCHEMA_VERSION = "mydhl-rates-v1"
 ACCOUNT_ALIAS = "dhl-ng-sandbox"
+PROD_ACCOUNT_ALIAS = "dhl-ng-production"
 _PRODUCT_CODE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:-]{0,5}\Z")
 _LOCAL_PRODUCT_CODE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:-]{0,2}\Z")
 _INTERNAL_IDENTIFIER = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:-]{0,99}\Z")
@@ -279,6 +281,16 @@ class DHLDomesticRateAdapter:
         self._client = DHLClient(config=config, transport=transport)
 
     def _guard_sandbox(self) -> frozenset[UUID]:
+        if self._config.DHL_ENVIRONMENT == "production" and bool(
+            getattr(self._config, "DHL_LIVE_ENABLED", False)
+        ):
+            if self._config.dhl_base_url != MYDHL_PROD_BASE_URL:
+                raise DHLRateAdapterError(
+                    "domestic DHL rates require the fixed MyDHL production base"
+                )
+            if not domestic_shipping_capabilities(self._config).provider_calls_enabled:
+                raise DHLRateAdapterError("domestic DHL provider calls are disabled")
+            return self._config.dhl_domestic_sandbox_cohort_ids
         if self._config.DHL_ENVIRONMENT != "sandbox":
             raise DHLRateAdapterError("domestic DHL rates require sandbox environment")
         if self._config.dhl_base_url != MYDHL_TEST_BASE_URL:
@@ -328,18 +340,29 @@ class DHLDomesticRateAdapter:
                 "rate request must match the authoritative shipment subject"
             )
         request_cohort_ids = {item.cohort.id for item in request.package.composition}
-        expected_cohort_ids = sandbox_cohort_ids | derive_sandbox_cohort_ids(
-            sandbox_cohort_ids,
-            resolved_hub.order_id,
-            resolved_hub.cohort_count or len(request_cohort_ids),
-        )
-        if not request_cohort_ids or not request_cohort_ids.issubset(expected_cohort_ids):
-            raise DHLRateAdapterError(
-                "domestic DHL rates require a restricted synthetic sandbox cohort"
+        if self._config.DHL_ENVIRONMENT == "production" and bool(
+            getattr(self._config, "DHL_LIVE_ENABLED", False)
+        ) and not sandbox_cohort_ids:
+            if not request_cohort_ids:
+                raise DHLRateAdapterError(
+                    "domestic DHL rates require a restricted synthetic sandbox cohort"
+                )
+        else:
+            expected_cohort_ids = sandbox_cohort_ids | derive_sandbox_cohort_ids(
+                sandbox_cohort_ids,
+                resolved_hub.order_id,
+                resolved_hub.cohort_count or len(request_cohort_ids),
             )
+            if not request_cohort_ids or not request_cohort_ids.issubset(expected_cohort_ids):
+                raise DHLRateAdapterError(
+                    "domestic DHL rates require a restricted synthetic sandbox cohort"
+                )
+        supported_countries = getattr(
+            self._config, "dhl_supported_country_codes", frozenset({"NG"})
+        )
         if (
             resolved_hub.country_code != "NG"
-            or request.destination.country_code != "NG"
+            or request.destination.country_code not in supported_countries
             or request.content_type != "merchandise"
             or request.movement_direction != "outbound"
         ):
@@ -425,7 +448,7 @@ class DHLDomesticRateAdapter:
                 f"{request.planned_ship_date.isoformat()}T12:00:00GMT+01:00"
             ),
             "unitOfMeasurement": "metric",
-            "isCustomsDeclarable": False,
+            "isCustomsDeclarable": request.destination.country_code != "NG",
             "accounts": [{"typeCode": "shipper", "number": account}],
             "customerDetails": {
                 "shipperDetails": shipper,
@@ -591,12 +614,15 @@ class DHLDomesticRateAdapter:
         except (TypeError, ValueError, InvalidOperation, OverflowError):
             raise DHLRateAdapterError("DHL returned an invalid rate response") from None
 
+        is_prod = self._config.DHL_ENVIRONMENT == "production" and bool(
+            getattr(self._config, "DHL_LIVE_ENABLED", False)
+        )
         fingerprint = canonical_rate_fingerprint(
             request=request,
             resolved_hub=resolved_hub,
             provider="dhl",
-            environment="sandbox",
-            account_alias=ACCOUNT_ALIAS,
+            environment="production" if is_prod else "sandbox",
+            account_alias=PROD_ACCOUNT_ALIAS if is_prod else ACCOUNT_ALIAS,
             adapter_version=ADAPTER_VERSION,
             schema_version=SCHEMA_VERSION,
             key_version=self._identity_key_version,
@@ -741,17 +767,25 @@ def create_sandbox_domestic_rate_adapter(
     identity_key: bytes,
     identity_key_version: str,
 ) -> DHLDomesticRateAdapter:
-    """Create an adapter only for the immutable official MyDHL sandbox boundary."""
-    if config.DHL_ENVIRONMENT != "sandbox":
-        raise DHLRateAdapterError("domestic DHL rates require sandbox environment")
-    if config.dhl_base_url != MYDHL_TEST_BASE_URL:
-        raise DHLRateAdapterError(
-            "domestic DHL rates require the fixed MyDHL test base"
-        )
-    if not config.dhl_domestic_sandbox_cohort_ids:
-        raise DHLRateAdapterError(
-            "domestic DHL rates require a restricted synthetic sandbox cohort"
-        )
+    """Create an adapter for the official MyDHL boundary (sandbox or live production)."""
+    if config.DHL_ENVIRONMENT == "production" and bool(
+        getattr(config, "DHL_LIVE_ENABLED", False)
+    ):
+        if config.dhl_base_url != MYDHL_PROD_BASE_URL:
+            raise DHLRateAdapterError(
+                "domestic DHL rates require the fixed MyDHL production base"
+            )
+    else:
+        if config.DHL_ENVIRONMENT != "sandbox":
+            raise DHLRateAdapterError("domestic DHL rates require sandbox environment")
+        if config.dhl_base_url != MYDHL_TEST_BASE_URL:
+            raise DHLRateAdapterError(
+                "domestic DHL rates require the fixed MyDHL test base"
+            )
+        if not config.dhl_domestic_sandbox_cohort_ids:
+            raise DHLRateAdapterError(
+                "domestic DHL rates require a restricted synthetic sandbox cohort"
+            )
     if not domestic_shipping_capabilities(config).provider_calls_enabled:
         raise DHLRateAdapterError("domestic DHL provider calls are disabled")
     if not isinstance(identity_key, bytes) or not identity_key:

@@ -145,6 +145,9 @@ def operations_snapshot_query(order_id: UUID):
                 b.claim_expires_at,
                 b.reconciliation_resolution,
                 b.reconciliation_recorded_at,
+                b.pickup_confirmation_number,
+                b.pickup_scheduled_for,
+                b.pickup_requested_at,
             ).where(b.order_id == order_id, b.provider == "dhl")
         ).label("bookings"),
         _rows(
@@ -288,6 +291,9 @@ def project_operations(snapshot):
                 },
                 "booking_id": b["id"],
                 "reconciliation_state": state,
+                "pickup_confirmation_number": b.get("pickup_confirmation_number"),
+                "pickup_scheduled_for": b.get("pickup_scheduled_for"),
+                "pickup_requested_at": b.get("pickup_requested_at"),
             }
         )
     packages = []

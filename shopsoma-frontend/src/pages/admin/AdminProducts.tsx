@@ -38,6 +38,12 @@ interface Product {
       stock: number;
     }>;
   }>;
+  variants?: Array<{
+    id?: string;
+    size?: string;
+    color?: string;
+    stock: number;
+  }>;
   made_to_order: boolean;
   made_to_order_timeline?: string | null;
   status: 'draft' | 'active' | 'inactive' | 'archived';
@@ -728,14 +734,19 @@ export default function AdminProducts() {
       );
     }
 
-    let stockQty = product.total_stock;
-    if (product.product_type === 'variable' && product.variations && product.variations.length > 0) {
+    let stockQty = product.total_stock ?? 0;
+    if (product.variations && product.variations.length > 0 && (product.product_type === 'variable' || stockQty === 0)) {
       const varStock = product.variations.reduce(
         (sum: number, v) => sum + (v.size_stocks || []).reduce((sSum: number, s) => sSum + (s.stock || 0), 0),
         0
       );
-      if (varStock > 0 || (stockQty ?? 0) === 0) {
+      if (varStock > 0 || stockQty === 0) {
         stockQty = varStock;
+      }
+    } else if (stockQty === 0 && product.variants && product.variants.length > 0) {
+      const variantStock = product.variants.reduce((sum: number, v) => sum + (v.stock || 0), 0);
+      if (variantStock > 0) {
+        stockQty = variantStock;
       }
     }
 

@@ -160,4 +160,38 @@ describe('ProductDetail per-size pricing and default main size selection', () =>
       })
     );
   });
+
+  it('navigates to the Kester Club designer storefront when clicking the displayed designer name on the product page', async () => {
+    productMocks.getProduct.mockResolvedValue({
+      id: 'soma-11-overshirt',
+      vendor_id: 'kester-club-id',
+      vendor_name: 'Kester Club',
+      title: 'SOMA-11 Test Overshirt',
+      description: 'Structured overshirt',
+      base_price: 150,
+      currency: 'USD',
+      total_stock: 8,
+      status: 'active',
+      moderation_status: 'approved',
+      product_type: 'single',
+      made_to_order: false,
+      images: [],
+      variations: [],
+      variants: [],
+    });
+
+    render(
+      <MemoryRouter initialEntries={['/products/soma-11-overshirt']}>
+        <Routes>
+          <Route path="/products/:id" element={<ProductDetail />} />
+          <Route path="/designers/:designerId" element={<div data-testid="kester-storefront">Kester Club Storefront</div>} />
+        </Routes>
+      </MemoryRouter>
+    );
+
+    const kesterLink = await screen.findByRole('link', { name: 'Kester Club' });
+    expect(kesterLink).toHaveAttribute('href', '/designers/kester-club-id');
+    fireEvent.click(kesterLink);
+    expect(await screen.findByTestId('kester-storefront')).toBeInTheDocument();
+  });
 });

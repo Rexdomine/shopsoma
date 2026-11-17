@@ -93,6 +93,7 @@ export const ROUTES = {
   ADMIN_PRODUCT_DETAIL: '/admin/products/:id',
   ADMIN_PRODUCT_EDIT: '/admin/products/:id/edit',
   ADMIN_PAYOUTS: '/admin/payouts',
+  ADMIN_MARKETING: '/admin/marketing',
   ADMIN_RETURNS: '/admin/returns',
   ADMIN_RETURN_DETAIL: '/admin/returns/:id',
   PROFILE: '/profile',

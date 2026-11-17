@@ -124,6 +124,8 @@ export interface ShippingCalculation {
 export interface PromoCodeValidation {
   code: string;
   order_subtotal: number;
+  currency?: 'NGN' | 'USD';
+  customer_email?: string;
 }
 
 export interface PromoCodeResult {
@@ -132,6 +134,7 @@ export interface PromoCodeResult {
   discount_type?: 'percentage' | 'fixed_amount';
   discount_value?: number;
   discount_amount?: number;
+  currency?: 'NGN' | 'USD';
   message?: string;
 }
 
@@ -177,6 +180,7 @@ export interface OrderReviewRequest {
   currency: 'NGN' | 'USD';
   shipping_address_id?: string;
   guest_address?: CreateAddressData;
+  customer_email?: string;
   promo_code?: string;
   shipping_rate_id?: string;
   quote_token?: string;

@@ -719,4 +719,61 @@ describe('admin product view/edit API boundaries', () => {
     expect((screen.getByLabelText('Product Title *') as HTMLInputElement).value).toBe('Preserve this title');
     expect(screen.getByTestId('location').textContent).toBe('/admin/products/product-1/edit');
   });
+  it('displays derived variation stock on both admin product list and admin product detail when total_stock is 0', async () => {
+    const variableProduct = {
+      ...product,
+      title: 'TEST Tailored Ivory Silk Dress',
+      sku: 'IMG-3B2C154E-V-014',
+      total_stock: 0,
+      inventory_quantity: 0,
+      product_type: 'variable' as const,
+      made_to_order: false,
+      variations: [
+        {
+          id: 'var-ivory',
+          title: 'Ivory',
+          type: 'color',
+          size_stocks: [
+            { id: 'ss-s', size: 'S', stock: 3 },
+            { id: 'ss-m', size: 'M', stock: 3 },
+            { id: 'ss-l', size: 'L', stock: 5 },
+          ],
+        },
+      ],
+      vendor: { id: 'vendor-1', business_name: 'Kester Club' },
+      moderated_at: null,
+      moderation_notes: null,
+    };
+
+    mocks.get.mockImplementation(async (url: string) => {
+      if (url === '/admin/products/product-1') return { data: variableProduct };
+      if (url.startsWith('/admin/products?')) {
+        return {
+          data: {
+            items: [variableProduct],
+            total: 1,
+            page: 1,
+            page_size: 20,
+            total_pages: 1,
+          },
+        };
+      }
+      if (url === '/categories/all') return { data: [] };
+      if (url === '/admin/collections') return { data: [] };
+      throw { response: { status: 404, data: { detail: 'Not found' } } };
+    });
+
+    const { unmount } = render(<MemoryRouter><AdminProducts /></MemoryRouter>);
+    await screen.findByText('TEST Tailored Ivory Silk Dress');
+    const row = screen.getByText('TEST Tailored Ivory Silk Dress').closest('tr');
+    expect(row).toBeTruthy();
+    expect(within(row as HTMLElement).getByText('11')).toBeInTheDocument();
+    unmount();
+
+    mount('view');
+    await screen.findByRole('heading', { name: 'TEST Tailored Ivory Silk Dress' });
+    const inventoryCard = screen.getByRole('heading', { name: 'Inventory' }).closest('div');
+    expect(inventoryCard).toBeTruthy();
+    expect(within(inventoryCard as HTMLElement).getAllByText('11')).toHaveLength(2);
+  });
 });

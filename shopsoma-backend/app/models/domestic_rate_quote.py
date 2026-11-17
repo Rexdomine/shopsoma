@@ -120,8 +120,8 @@ class DomesticRateAttempt(Base):
             ondelete="RESTRICT",
         ),
         CheckConstraint(
-            "provider = 'dhl' AND environment = 'sandbox' "
-            "AND destination_country_code = 'NG'",
+            "provider = 'dhl' AND environment IN ('sandbox', 'production') "
+            "AND destination_country_code ~ '^[A-Z]{2}$'",
             name="ck_domestic_rate_attempts_lane",
         ),
         CheckConstraint(

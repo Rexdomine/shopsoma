@@ -1,103 +1,29 @@
 import { useEffect, useMemo, useState } from 'react';
-import { useParams } from 'react-router-dom';
-import Loading from '../../components/common/Loading';
-import NotFound from '../errors/NotFound';
+import { Link, useParams } from 'react-router-dom';
+import Layout from '../../components/layout/Layout';
+import { designerService, type Designer } from '../../services/designerService';
 import ProductList from '../products/ProductList';
-import {
-  designerService,
-  getDesignerCampaignImageUrl,
-  type Designer,
-} from '../../services/designerService';
-import type { Category } from '../../types';
+import { DesignerHero, DesignerMessage } from './DesignerVisuals';
+import { readyDesigners } from './designerUtils';
 
 export default function DesignerStorefront() {
-  const { designerId } = useParams<{ designerId: string }>();
-  const [designer, setDesigner] = useState<Designer | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [notFound, setNotFound] = useState(false);
-
+  const { designerId } = useParams();
+  const [state, setState] = useState<{ id?: string; designer?: Designer; error?: boolean; done?: boolean }>({});
+  const [attempt, setAttempt] = useState(0);
   useEffect(() => {
-    let isCurrent = true;
-
-    const loadDesigner = async () => {
-      if (!designerId) {
-        if (isCurrent) {
-          setDesigner(null);
-          setNotFound(true);
-          setLoading(false);
-        }
-        return;
-      }
-
-      try {
-        setLoading(true);
-        setNotFound(false);
-        const data = await designerService.getDesigner(designerId);
-        if (!isCurrent) return;
-        setDesigner(data);
-      } catch (err) {
-        if (!isCurrent) return;
-        console.error('Failed to load designer storefront', err);
-        setDesigner(null);
-        setNotFound(true);
-      } finally {
-        if (isCurrent) {
-          setLoading(false);
-        }
-      }
-    };
-
-    loadDesigner();
-    return () => {
-      isCurrent = false;
-    };
-  }, [designerId]);
-
-  const initialParams = useMemo(
-    () => (designer ? { vendor_id: designer.id } : undefined),
-    [designer],
-  );
-
-  const designerCategories = useMemo<Category[]>(() => {
-    if (!designer?.categories?.length) return [];
-    return designer.categories
-      .filter((category) => category.is_active && category.name)
-      .map((category) => ({
-        id: category.id,
-        name: category.name,
-        slug: category.slug,
-        display_order: category.display_order ?? 0,
-        is_active: category.is_active ?? true,
-        created_at: designer.created_at,
-        updated_at: designer.created_at,
-      }));
-  }, [designer]);
-
-  if (loading) {
-    return <Loading fullScreen message="Loading designer storefront..." />;
-  }
-
-  if (notFound || !designer) {
-    return <NotFound />;
-  }
-
-  const campaignImageUrl = getDesignerCampaignImageUrl(designer);
-  const brandDescription =
-    designer.business_description?.trim() ||
-    `Explore the curated collection from ${designer.business_name} on SHOPSOMA.`;
-
-  return (
-    <ProductList
-      initialParams={initialParams}
-      categoryNav={designerCategories}
-      categoryNavAsTabs
-      heroOverride={{
-        title: designer.business_name,
-        body: brandDescription,
-        imageUrl: campaignImageUrl,
-        imagePositionClassName: 'object-center sm:object-top',
-        ctaLabel: 'Shop Collection',
-      }}
-    />
-  );
+    let current = true;
+    setState({ id: designerId });
+    designerService.listDesigners().then(list => {
+      if(current) setState({ id: designerId, done: true, designer: readyDesigners(list).find(d => d.id === designerId) });
+    }).catch(() => { if(current) setState({ id: designerId, done: true, error: true }); });
+    return () => { current = false; };
+  }, [designerId,attempt]);
+  const initialParams = useMemo(() => ({ vendor_id: designerId }), [designerId]);
+  if(state.id !== designerId || !state.done) return <Layout><div role="status" className="designer-message">Loading designer…</div></Layout>;
+  if(state.error) return <Layout><DesignerMessage title="We couldn’t load this designer"><button onClick={() => setAttempt(n => n+1)}>Try again</button></DesignerMessage></Layout>;
+  if(!state.designer) return <Layout><DesignerMessage title="Designer unavailable"><p>This storefront is not available.</p><Link to="/designers">Browse designers</Link></DesignerMessage></Layout>;
+  const designer = state.designer;
+  return <ProductList key={designer.id} initialParams={initialParams} categoryNavAsTabs designerMode
+    storefrontHeader={<><DesignerHero key={designer.id} designer={designer}/><div className="designer-container designer-intro"><Link to="/designers">← All designers</Link>{designer.business_description && <p>{designer.business_description}</p>}</div></>}
+  />;
 }

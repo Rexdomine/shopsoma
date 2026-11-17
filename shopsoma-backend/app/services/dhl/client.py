@@ -13,6 +13,18 @@ from app.core.config import Settings, settings
 
 logger = logging.getLogger(__name__)
 
+# HTTPX's INFO request log includes the complete URL, including path and query
+# values that may contain private carrier references. Suppress only records made
+# inside this client's async context; unrelated concurrent HTTPX callers retain
+# their configured diagnostics.
+_httpx_logger = logging.getLogger("httpx")
+_dhl_httpx_log_context: ContextVar[bool] = getattr(
+    _httpx_logger,
+    "_shopsoma_dhl_log_context",
+    ContextVar("dhl_httpx_log", default=False),
+)
+setattr(_httpx_logger, "_shopsoma_dhl_log_context", _dhl_httpx_log_context)
+
 _orig_getaddrinfo = getattr(socket, "_shopsoma_orig_getaddrinfo", socket.getaddrinfo)
 setattr(socket, "_shopsoma_orig_getaddrinfo", _orig_getaddrinfo)
 
@@ -28,7 +40,10 @@ def _dhl_resilient_getaddrinfo(
     try:
         return _orig_getaddrinfo(host, port, family, type, proto, flags)
     except socket.gaierror:
-        if host in ("express.api.dhl.com", b"express.api.dhl.com"):
+        if _dhl_httpx_log_context.get() and host in (
+            "express.api.dhl.com",
+            b"express.api.dhl.com",
+        ):
             return _orig_getaddrinfo(
                 "156.137.1.116", port, socket.AF_INET, type, proto, flags
             )
@@ -36,18 +51,6 @@ def _dhl_resilient_getaddrinfo(
 
 
 socket.getaddrinfo = _dhl_resilient_getaddrinfo
-
-# HTTPX's INFO request log includes the complete URL, including path and query
-# values that may contain private carrier references. Suppress only records made
-# inside this client's async context; unrelated concurrent HTTPX callers retain
-# their configured diagnostics.
-_httpx_logger = logging.getLogger("httpx")
-_dhl_httpx_log_context: ContextVar[bool] = getattr(
-    _httpx_logger,
-    "_shopsoma_dhl_log_context",
-    ContextVar("dhl_httpx_log", default=False),
-)
-setattr(_httpx_logger, "_shopsoma_dhl_log_context", _dhl_httpx_log_context)
 
 
 class _DHLHTTPXLogFilter(logging.Filter):
@@ -162,7 +165,11 @@ class DHLClient:
 
         request_reference = response.headers.get("Message-Reference")
         if response.status_code >= 400:
-            logger.error("DHL error response: status=%s text=%s", response.status_code, response.text)
+            logger.error(
+                "DHL error response: status=%s reference=%s",
+                response.status_code,
+                request_reference or "none",
+            )
             raise self._map_http_error(response.status_code, request_reference)
 
         try:

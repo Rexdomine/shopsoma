@@ -20,12 +20,18 @@ def domestic_shipping_capabilities(
 ) -> DomesticShippingCapabilities:
     """Return effective gates, applying prerequisites without exposing configuration."""
     workflow_enabled = settings.DHL_DOMESTIC_WORKFLOW_ENABLED
+    environment_enabled = (
+        settings.DHL_ENVIRONMENT == "sandbox"
+        and bool(settings.dhl_domestic_sandbox_cohort_ids)
+    ) or (
+        settings.DHL_ENVIRONMENT == "production"
+        and bool(getattr(settings, "DHL_LIVE_ENABLED", False))
+    )
     provider_calls_enabled = (
         workflow_enabled
         and settings.DHL_DOMESTIC_PROVIDER_CALLS_ENABLED
-        and settings.DHL_ENVIRONMENT == "sandbox"
+        and environment_enabled
         and settings.dhl_configured
-        and bool(settings.dhl_domestic_sandbox_cohort_ids)
     )
     return DomesticShippingCapabilities(
         workflow_enabled=workflow_enabled,

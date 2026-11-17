@@ -951,13 +951,46 @@ class ProductResponse(ProductBase):
             # Replace empty variants list with generated ones
             self.variants = generated_variants
 
-        # For variable products, automatically derive total_stock from variations
-        if self.product_type == "variable" and not self.made_to_order and self.variations:
-            self.total_stock = sum(
-                (s.stock or 0) for v in self.variations for s in (v.size_stocks or [])
-            )
+        # Automatically derive total_stock from variations/variants when applicable
+        self.total_stock = resolve_product_total_stock(self)
 
         return self
+
+
+def resolve_product_total_stock(product: Any) -> int:
+    """Resolve effective total stock for a product, deriving from variations/variants when needed."""
+    raw_total_stock = getattr(product, "total_stock", 0)
+    if getattr(product, "made_to_order", False):
+        return raw_total_stock if raw_total_stock is not None else 0
+
+    product_type = getattr(product, "product_type", None)
+    product_type_val = (
+        product_type.value if hasattr(product_type, "value") else str(product_type or "")
+    ).lower()
+
+    variations = getattr(product, "variations", None) or []
+    has_size_stocks = any(bool(getattr(v, "size_stocks", None)) for v in variations)
+    var_stock = sum(
+        (getattr(s, "stock", 0) or 0)
+        for v in variations
+        for s in (getattr(v, "size_stocks", None) or [])
+    )
+
+    if product_type_val == "variable" and variations:
+        if has_size_stocks or var_stock > 0 or not (getattr(product, "variants", None) or []):
+            return var_stock
+
+    if (raw_total_stock or 0) == 0:
+        if has_size_stocks and var_stock > 0:
+            return var_stock
+        variants = getattr(product, "variants", None) or []
+        if variants:
+            variant_stock = sum(max(0, getattr(v, "stock", 0) or 0) for v in variants)
+            if variant_stock > 0:
+                return variant_stock
+
+    return raw_total_stock if raw_total_stock is not None else 0
+
 
 
 class ProductListResponse(BaseModel):

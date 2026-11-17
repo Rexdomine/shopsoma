@@ -105,6 +105,9 @@ class OutboundShipmentBooking(Base):
     collection_evidence_ref = Column(String(200))
     collection_evidence_hash = Column(String(64))
     handoff_recorded_at = Column(DateTime(timezone=True))
+    pickup_confirmation_number = Column(String(120))
+    pickup_scheduled_for = Column(DateTime(timezone=True))
+    pickup_requested_at = Column(DateTime(timezone=True))
     last_tracking_refresh_at = Column(DateTime(timezone=True))
     latest_exception_code = Column(String(100))
     completion_txid = Column(BigInteger)
@@ -138,7 +141,7 @@ class OutboundShipmentBooking(Base):
             ondelete="RESTRICT",
         ),
         CheckConstraint(
-            "provider = 'dhl' AND environment = 'sandbox'",
+            "provider = 'dhl' AND environment IN ('sandbox', 'production')",
             name="ck_outbound_shipment_bookings_lane",
         ),
         CheckConstraint(

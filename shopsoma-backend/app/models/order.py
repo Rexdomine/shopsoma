@@ -1,6 +1,7 @@
 """Order models"""
 
 from sqlalchemy import (
+    Boolean,
     CHAR,
     CheckConstraint,
     Column,
@@ -125,6 +126,9 @@ class Order(Base):
     shipping_cost = Column(Numeric(10, 2), default=0.00, nullable=False)
     tax_amount = Column(Numeric(10, 2), default=0.00, nullable=False)
     discount_amount = Column(Numeric(10, 2), default=0.00, nullable=False)
+    promo_code_id = Column(UUID(as_uuid=True), ForeignKey("promo_codes.id", ondelete="SET NULL"), nullable=True, index=True)
+    promo_code = Column(String(50), nullable=True)
+    promo_usage_counted = Column(Boolean, default=False, server_default=text("false"), nullable=False)
     total_amount = Column(Numeric(10, 2), nullable=False)
 
     # Status

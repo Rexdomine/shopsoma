@@ -252,6 +252,7 @@ async def test_bulk_upload_variable_products_success(client: AsyncClient, vendor
     )
     row = result.first()
     assert row is not None
+    assert row.total_stock == 4
 
     variation_result = await db_session.execute(
         Variation.__table__.select().where(Variation.product_id == row.id)
@@ -387,4 +388,92 @@ async def test_bulk_upload_variable_products_accepts_one_size(client: AsyncClien
     for s in stocks:
         assert s.size == SizeEnum.ONE_SIZE
         assert s.size.value == "One/Size"
+
+
+@pytest.mark.asyncio
+async def test_variable_product_with_zero_stored_total_stock_derives_stock_across_admin_and_public_endpoints(
+    client: AsyncClient, vendor_user, admin_user, db_session
+):
+    from app.models.product import (
+        ModerationStatus,
+        Product,
+        ProductStatus,
+        ProductType,
+        SizeEnum,
+        SizeStock,
+        Variation,
+    )
+
+    product = Product(
+        vendor_id=vendor_user["vendor"].id,
+        title="TEST Tailored Ivory Silk Dress",
+        description="Variable product with total_stock=0 in products table",
+        sku="IMG-3B2C154E-V-014",
+        base_price=245,
+        compare_at_price=285,
+        currency="USD",
+        total_stock=0,
+        product_type=ProductType.VARIABLE,
+        made_to_order=False,
+        status=ProductStatus.ACTIVE,
+        moderation_status=ModerationStatus.APPROVED,
+    )
+    db_session.add(product)
+    await db_session.flush()
+
+    variation = Variation(
+        product_id=product.id,
+        title="Ivory",
+        type="color",
+        color_hex="#FFFFF0",
+        inherits_price=True,
+        inherits_sale_price=True,
+        is_active=True,
+    )
+    db_session.add(variation)
+    await db_session.flush()
+
+    db_session.add_all(
+        [
+            SizeStock(variation_id=variation.id, size=SizeEnum.S, stock=3),
+            SizeStock(variation_id=variation.id, size=SizeEnum.M, stock=3),
+            SizeStock(variation_id=variation.id, size=SizeEnum.L, stock=5),
+        ]
+    )
+    await db_session.commit()
+
+    # 1. Admin list endpoint (/api/v1/admin/products)
+    admin_list_resp = await client.get(
+        "/api/v1/admin/products?search=TEST+Tailored+Ivory+Silk+Dress",
+        headers=admin_user["headers"],
+    )
+    assert admin_list_resp.status_code == 200
+    admin_items = admin_list_resp.json()["items"]
+    assert len(admin_items) == 1
+    assert admin_items[0]["id"] == str(product.id)
+    assert admin_items[0]["total_stock"] == 11
+    assert admin_items[0]["product_type"] == "variable"
+    assert len(admin_items[0]["variations"]) == 1
+
+    # 2. Admin detail endpoint (/api/v1/admin/products/{id})
+    admin_detail_resp = await client.get(
+        f"/api/v1/admin/products/{product.id}",
+        headers=admin_user["headers"],
+    )
+    assert admin_detail_resp.status_code == 200
+    assert admin_detail_resp.json()["total_stock"] == 11
+
+    # 3. Public detail endpoint (/api/v1/products/{id})
+    public_detail_resp = await client.get(f"/api/v1/products/{product.id}")
+    assert public_detail_resp.status_code == 200
+    assert public_detail_resp.json()["total_stock"] == 11
+
+    # 4. Public list endpoint with in_stock=true (/api/v1/products?in_stock=true)
+    public_list_resp = await client.get(
+        "/api/v1/products?in_stock=true&search=TEST+Tailored+Ivory+Silk+Dress"
+    )
+    assert public_list_resp.status_code == 200
+    public_items = public_list_resp.json()["products"]
+    assert any(item["id"] == str(product.id) and item["total_stock"] == 11 for item in public_items)
+
 

@@ -32,7 +32,8 @@ from app.models.dhl_shipment import (
     OutboundShipmentTrackingRefresh,
     OutboundShipmentTrackingSnapshot,
 )
-from app.models.order import FulfillmentStatus, Order
+from app.models.category import Category
+from app.models.order import FulfillmentStatus, Order, OrderItem
 from app.models.package_custody import (
     CustodyEvent,
     CustodyStream,
@@ -43,6 +44,7 @@ from app.models.package_custody import (
     OutboundShipmentIntent,
     OutboundShipmentIntentInvalidation,
 )
+from app.models.product import Product
 from app.models.user import User
 from app.services.admin_shadow_quote import (
     _blank_optional_text_to_none,
@@ -53,6 +55,13 @@ from app.services.dhl.client import (
     DHLClient,
     DHLConfigurationError,
 )
+from app.services.dhl.customs import (
+    ShipmentContentLine,
+    build_content_description,
+    build_export_content_fields,
+    content_line_from_order_item,
+    content_lines_from_order,
+)
 from app.services.dhl.rating import (
     DHLDomesticRateAdapter,
     resolve_nigeria_dhl_state_fallback,
@@ -62,7 +71,9 @@ from app.models.fulfillment_hub import FulfillmentHub
 PROVIDER = "dhl"
 ENVIRONMENT = "sandbox"
 ACCOUNT_ALIAS = "dhl-ng-sandbox"
+PROD_ACCOUNT_ALIAS = "dhl-ng-production"
 MYDHL_TEST_BASE_URL = "https://express.api.dhl.com/mydhlapi/test"
+MYDHL_PROD_BASE_URL = "https://express.api.dhl.com/mydhlapi"
 BOOKING_ADAPTER_VERSION = "mydhl-shipments-v1"
 BOOKING_SCHEMA_VERSION = "domestic-booking-v1"
 TRACKING_SCHEMA_VERSION = "domestic-tracking-v1"
@@ -274,6 +285,19 @@ class QuotedShipmentService:
     planned_ship_date: date
 
 
+@dataclass(frozen=True, slots=True)
+class BookingContents:
+    """Eagerly loaded package contents and receiver contact for a booking payload.
+
+    The booking payload builder is synchronous, so order relationships (items,
+    customer) must be loaded beforehand; async lazy loads would silently fail and
+    degrade the label/commercial invoice to a generic one-line description.
+    """
+
+    lines: tuple[ShipmentContentLine, ...] = ()
+    receiver_email: str | None = None
+
+
 class ShipmentAdapter(Protocol):
     def prepare_booking_payload(
         self,
@@ -282,6 +306,7 @@ class ShipmentAdapter(Protocol):
         hub: FulfillmentHub,
         package_version: HubPackageVersion,
         quoted_service: QuotedShipmentService,
+        contents: BookingContents | None = None,
     ) -> dict[str, object]: ...
 
     async def book(
@@ -357,6 +382,7 @@ class DHLShipmentAdapter:
         hub: FulfillmentHub,
         package_version: HubPackageVersion,
         quoted_service: QuotedShipmentService,
+        contents: BookingContents | None = None,
     ) -> dict[str, object]:
         quoted_hub_version = getattr(quoted_service, "hub_version", None)
         current_hub_version = getattr(hub, "version", None)
@@ -390,7 +416,48 @@ class DHLShipmentAdapter:
             postal_code=intent.destination_postal_code,
             country_code=intent.destination_country_code,
         )
-        return {
+        order_dict = getattr(order, "__dict__", None)
+        order_customer = (
+            order_dict.get("customer")
+            if isinstance(order_dict, dict) and "customer" in order_dict
+            else None
+        )
+        receiver_email = (
+            (contents.receiver_email if contents is not None else None)
+            or getattr(order_customer, "email", None)
+            or getattr(order, "customer_email", None)
+            or "orders@shopsoma.com"
+        )
+        content_lines = (
+            list(contents.lines)
+            if contents is not None and contents.lines
+            else content_lines_from_order(order)
+        )
+        is_export = str(intent.destination_country_code or "NG").strip().upper() != "NG"
+        image_options: list[dict[str, object]] = [
+            {
+                "typeCode": "label",
+                "templateName": "ECOM26_84_A4_001",
+            },
+            {
+                "typeCode": "waybillDoc",
+                "templateName": "ARCH_8X4_A4_002",
+                "isRequested": True,
+                "hideAccountNumber": False,
+                "numberOfCopies": 1,
+            },
+        ]
+        if is_export:
+            image_options.append(
+                {
+                    "typeCode": "invoice",
+                    "templateName": "COMMERCIAL_INVOICE_P_10",
+                    "isRequested": True,
+                    "invoiceType": "commercial",
+                    "languageCode": "eng",
+                }
+            )
+        payload: dict[str, object] = {
             "plannedShippingDateAndTime": _mydhl_planned_shipping_timestamp(planned_ship_date),
             "pickup": {"isRequested": False},
             "productCode": quoted_service.product_code,
@@ -405,7 +472,9 @@ class DHLShipmentAdapter:
                         "companyName": (getattr(hub, "name", None) or hub.contact_name or "ShopSoma Hub")[:100],
                         "fullName": hub.contact_name,
                         "phone": hub.contact_phone,
+                        "email": getattr(hub, "contact_email", None) or "logistics@shopsoma.com",
                     },
+                    "typeCode": "business",
                 },
                 "receiverDetails": {
                     "postalAddress": receiver,
@@ -413,14 +482,24 @@ class DHLShipmentAdapter:
                         "companyName": (intent.destination_name or "Customer")[:100],
                         "fullName": intent.destination_name,
                         "phone": intent.destination_phone,
+                        "email": receiver_email,
                     },
+                    "typeCode": "private",
                 },
             },
-            "outputImageProperties": {"printerDPI": 300, "encodingFormat": "pdf"},
+            "outputImageProperties": {
+                "printerDPI": 300,
+                "encodingFormat": "pdf",
+                "imageOptions": image_options,
+                "splitTransportAndWaybillDocLabels": True,
+                "allDocumentsInOneImage": True,
+                "splitDocumentsByPages": True,
+                "splitInvoiceAndReceipt": True,
+            },
             "content": {
                 "unitOfMeasurement": "metric",
                 "isCustomsDeclarable": False,
-                "description": "Fashion apparel and accessories",
+                "description": build_content_description(content_lines),
                 "packages": [{
                     "weight": float(package_version.weight_kg),
                     "dimensions": {
@@ -431,6 +510,18 @@ class DHLShipmentAdapter:
                 }]
             },
         }
+        if is_export:
+            content_dict = dict(cast(dict[str, object], payload["content"]))
+            content_dict.update(
+                build_export_content_fields(
+                    order=order,
+                    package_version=package_version,
+                    planned_ship_date=planned_ship_date,
+                    content_lines=content_lines,
+                )
+            )
+            payload["content"] = content_dict
+        return payload
 
     async def book(
         self,
@@ -955,6 +1046,12 @@ def _ensure_sandbox_booking_allowed(
     cohort_ids: frozenset[uuid.UUID],
     order_id: uuid.UUID | None = None,
 ) -> None:
+    if settings.DHL_ENVIRONMENT == "production":
+        if not getattr(settings, "DHL_LIVE_ENABLED", False):
+            raise ShipmentPhase4Error("production booking requires DHL_LIVE_ENABLED=True")
+        if settings.dhl_base_url != MYDHL_PROD_BASE_URL:
+            raise ShipmentPhase4Error("production adapter requires fixed MyDHL production base URL")
+        return
     if settings.DHL_ENVIRONMENT != "sandbox":
         raise ShipmentPhase4Error("sandbox adapter requires DHL_ENVIRONMENT=sandbox")
     if settings.dhl_base_url != MYDHL_TEST_BASE_URL:
@@ -991,18 +1088,27 @@ async def _package_cohort_ids(
     return frozenset(rows)
 
 
+def _booking_lane(settings: Settings | None) -> tuple[str, str]:
+    """Return the (environment, account_alias) pair used to persist and replay bookings."""
+    if settings is not None and getattr(settings, "DHL_ENVIRONMENT", "sandbox") == "production":
+        return "production", PROD_ACCOUNT_ALIAS
+    return ENVIRONMENT, ACCOUNT_ALIAS
+
+
 async def _matching_replay(
     db: AsyncSession,
     *,
     order_id: uuid.UUID,
     command: BookingCommand,
+    settings: Settings | None = None,
 ) -> OutboundShipmentBooking | None:
+    lane_environment, lane_alias = _booking_lane(settings)
     existing = (
         await db.execute(
             select(OutboundShipmentBooking).where(
                 OutboundShipmentBooking.provider == PROVIDER,
-                OutboundShipmentBooking.environment == ENVIRONMENT,
-                OutboundShipmentBooking.account_alias == ACCOUNT_ALIAS,
+                OutboundShipmentBooking.environment == lane_environment,
+                OutboundShipmentBooking.account_alias == lane_alias,
                 OutboundShipmentBooking.idempotency_key == command.idempotency_key,
             )
         )
@@ -1605,6 +1711,63 @@ async def _load_authoritative_subject(
     return order, package, seal, intent, package_version, frozenset(item.cohort_id for item in package_items)
 
 
+async def _load_booking_contents(
+    db: AsyncSession,
+    *,
+    order: Order,
+    package_id: uuid.UUID,
+    package_version: int,
+) -> BookingContents:
+    """Load the exact items packed in this package version plus the receiver email.
+
+    Quantities come from the immutable package composition so split shipments
+    only declare what is physically inside the parcel.
+    """
+    quantity_rows = (
+        await db.execute(
+            select(HubPackageItem.order_item_id, func.sum(HubPackageItem.quantity))
+            .where(
+                HubPackageItem.package_id == package_id,
+                HubPackageItem.package_version == package_version,
+            )
+            .group_by(HubPackageItem.order_item_id)
+        )
+    ).all()
+    packed_quantities = {row[0]: int(row[1] or 0) for row in quantity_rows}
+    item_rows = (
+        await db.execute(
+            select(OrderItem, Category.slug, Category.name)
+            .outerjoin(Product, Product.id == OrderItem.product_id)
+            .outerjoin(Category, Category.id == Product.category_id)
+            .where(OrderItem.order_id == order.id)
+            .order_by(OrderItem.created_at, OrderItem.id)
+        )
+    ).all()
+    lines: list[ShipmentContentLine] = []
+    for item, category_slug, category_name in item_rows:
+        if packed_quantities and packed_quantities.get(item.id, 0) <= 0:
+            continue
+        line = content_line_from_order_item(
+            item,
+            quantity=packed_quantities.get(item.id) if packed_quantities else None,
+        )
+        lines.append(
+            ShipmentContentLine(
+                title=line.title,
+                quantity=line.quantity,
+                unit_price=line.unit_price,
+                variant_label=line.variant_label,
+                hs_hints=(category_slug, category_name, *line.hs_hints),
+            )
+        )
+    receiver_email = (
+        await db.scalar(select(User.email).where(User.id == order.customer_id))
+        if getattr(order, "customer_id", None) is not None
+        else None
+    )
+    return BookingContents(lines=tuple(lines), receiver_email=receiver_email or None)
+
+
 async def _load_persisted_booking_intent(
     db: AsyncSession,
     *,
@@ -1869,7 +2032,7 @@ async def book_outbound_shipment(
         seal_id=command.seal_id,
         idempotency_key=_normalize_text(command.idempotency_key, field="idempotency_key"),
     )
-    replay = await _matching_replay(db, order_id=order_id, command=command)
+    replay = await _matching_replay(db, order_id=order_id, command=command, settings=settings)
     if replay is not None:
         now = await db.scalar(text("SELECT clock_timestamp()"))
         assert now is not None
@@ -1895,7 +2058,7 @@ async def book_outbound_shipment(
         )
         quoted_service = await _load_persisted_quoted_service(db, intent_id=intent.id)
         guard = await _load_or_create_guard(db, intent_id=intent.id)
-    replay = await _matching_replay(db, order_id=order_id, command=command)
+    replay = await _matching_replay(db, order_id=order_id, command=command, settings=settings)
     if replay is not None:
         return _booking_result(replay, replayed=True)
     if guard.booking_blocked_reason == "unknown_outcome":
@@ -1923,6 +2086,7 @@ async def book_outbound_shipment(
     now = await db.scalar(text("SELECT clock_timestamp()"))
     assert now is not None
     planned_ship_date = quoted_service.planned_ship_date
+    booking_env, booking_alias = _booking_lane(settings)
     booking = OutboundShipmentBooking(
         intent_id=intent.id,
         order_id=order.id,
@@ -1931,8 +2095,8 @@ async def book_outbound_shipment(
         seal_id=seal.id,
         origin_hub_id=intent.origin_hub_id,
         provider=PROVIDER,
-        environment=ENVIRONMENT,
-        account_alias=ACCOUNT_ALIAS,
+        environment=booking_env,
+        account_alias=booking_alias,
         initiating_actor_type="admin",
         initiating_actor_id=str(admin.id),
         source_command="admin_dhl_booking",
@@ -1982,12 +2146,19 @@ async def book_outbound_shipment(
         )
         planned_ship_date = quoted_service.planned_ship_date
         booking.planned_ship_date = planned_ship_date
+        booking_contents = await _load_booking_contents(
+            db,
+            order=order,
+            package_id=package.id,
+            package_version=package.current_version,
+        )
         prepared_payload = adapter.prepare_booking_payload(
             intent,
             order,
             hub,
             package_version,
             quoted_service,
+            contents=booking_contents,
         )
     except ShipmentPhase4Error as exc:
         order = await _load_order(db, order_id=order_id, lock_for_update=True)
@@ -2080,12 +2251,19 @@ async def book_outbound_shipment(
                 # than the durable booking audit can later reconstruct.
                 await db.commit()
                 continue
+            booking_contents = await _load_booking_contents(
+                db,
+                order=order,
+                package_id=package.id,
+                package_version=package.current_version,
+            )
             prepared_payload = adapter.prepare_booking_payload(
                 intent,
                 order,
                 hub,
                 package_version,
                 quoted_service,
+                contents=booking_contents,
             )
             break
         # Keep the refreshed package/seal/intent snapshot locked across the
@@ -3108,3 +3286,298 @@ def _normalize_sha256_hex(value: str | None, *, field: str) -> str:
     except ValueError as exc:
         raise ShipmentPhase4Error(f"invalid {field}") from exc
     return normalized
+
+
+@dataclass(frozen=True, slots=True)
+class PickupRequestCommand:
+    booking_id: uuid.UUID
+    planned_pickup_at: datetime | None = None
+    close_time: str = "18:00"
+    location: str = "reception"
+    special_instruction: str = "Collect ready parcel from ShopSoma Hub reception"
+
+
+@dataclass(frozen=True, slots=True)
+class PickupRequestResult:
+    booking_id: uuid.UUID
+    order_id: uuid.UUID
+    tracking_number: str
+    pickup_confirmation_number: str
+    pickup_scheduled_for: datetime
+    pickup_requested_at: datetime
+    replayed: bool = False
+
+
+def _next_lagos_pickup_datetime(now_utc: datetime) -> datetime:
+    lagos_now = now_utc.astimezone(DHL_TRACKING_LOCAL_TIMEZONE)
+    candidate_date = lagos_now.date()
+    if lagos_now.hour >= 15:
+        candidate_date = candidate_date + timedelta(days=1)
+    while candidate_date.weekday() >= 5:
+        candidate_date = candidate_date + timedelta(days=1)
+    return datetime(
+        candidate_date.year,
+        candidate_date.month,
+        candidate_date.day,
+        14,
+        0,
+        0,
+        tzinfo=DHL_TRACKING_LOCAL_TIMEZONE,
+    )
+
+
+def _mydhl_planned_pickup_timestamp(planned_pickup_at: datetime) -> str:
+    lagos_dt = planned_pickup_at.astimezone(DHL_TRACKING_LOCAL_TIMEZONE)
+    return f"{lagos_dt.strftime('%Y-%m-%dT%H:%M:%S')}GMT+01:00"
+
+
+def build_hub_pickup_payload(
+    *,
+    settings: Settings,
+    booking: OutboundShipmentBooking,
+    intent: OutboundShipmentIntent,
+    order: Order,
+    hub: FulfillmentHub,
+    package_version: HubPackageVersion,
+    planned_pickup_at: datetime,
+    close_time: str = "18:00",
+    location: str = "reception",
+    special_instruction: str = "Collect ready parcel from ShopSoma Hub reception",
+    contents: BookingContents | None = None,
+) -> dict[str, object]:
+    shipper = _provider_safe_booking_party(
+        line1=hub.address_line1,
+        line2=hub.address_line2,
+        city=hub.city,
+        state=hub.state,
+        postal_code=hub.postal_code,
+        country_code=hub.country_code,
+    )
+    receiver = _provider_safe_booking_party(
+        line1=intent.destination_address_line1,
+        line2=intent.destination_address_line2,
+        city=intent.destination_city,
+        state=intent.destination_state,
+        postal_code=intent.destination_postal_code,
+        country_code=intent.destination_country_code,
+    )
+    order_dict = getattr(order, "__dict__", None)
+    order_customer = (
+        order_dict.get("customer")
+        if isinstance(order_dict, dict) and "customer" in order_dict
+        else None
+    )
+    receiver_email = (
+        (contents.receiver_email if contents is not None else None)
+        or getattr(order_customer, "email", None)
+        or getattr(order, "customer_email", None)
+        or "orders@shopsoma.com"
+    )
+    is_export = str(intent.destination_country_code or "NG").strip().upper() != "NG"
+    product_code = "P" if is_export else "N"
+    account_number = settings.DHL_EXPORT_ACCOUNT_NUMBER.get_secret_value()
+    clean_instruction = (special_instruction or "Collect ready parcel from ShopSoma Hub").strip()[:75]
+    customs_fields: dict[str, object] = {}
+    if is_export:
+        # MyDHL /pickups requires declaredValue + declaredValueCurrency for customs-declarable shipments.
+        export_fields = build_export_content_fields(
+            order=order,
+            package_version=package_version,
+            planned_ship_date=planned_pickup_at.date(),
+            content_lines=contents.lines if contents is not None and contents.lines else None,
+        )
+        customs_fields = {
+            "declaredValue": export_fields["declaredValue"],
+            "declaredValueCurrency": export_fields["declaredValueCurrency"],
+        }
+    return {
+        "plannedPickupDateAndTime": _mydhl_planned_pickup_timestamp(planned_pickup_at),
+        "closeTime": (close_time or "18:00").strip()[:5],
+        "location": (location or "reception").strip()[:80],
+        "locationType": "business",
+        "accounts": [
+            {
+                "typeCode": "shipper",
+                "number": account_number,
+            }
+        ],
+        "specialInstructions": [
+            {
+                "value": clean_instruction,
+                "typeCode": "TBD",
+            }
+        ],
+        "remark": clean_instruction,
+        "customerDetails": {
+            "shipperDetails": {
+                "postalAddress": shipper,
+                "contactInformation": {
+                    "email": getattr(hub, "contact_email", None) or "logistics@shopsoma.com",
+                    "phone": hub.contact_phone,
+                    "companyName": (getattr(hub, "name", None) or hub.contact_name or "ShopSoma Hub")[:100],
+                    "fullName": hub.contact_name,
+                },
+            },
+            "receiverDetails": {
+                "postalAddress": receiver,
+                "contactInformation": {
+                    "email": receiver_email,
+                    "phone": intent.destination_phone,
+                    "companyName": (intent.destination_name or "Customer")[:100],
+                    "fullName": intent.destination_name,
+                },
+            },
+        },
+        "shipmentDetails": [
+            {
+                "productCode": product_code,
+                "localProductCode": product_code,
+                "accounts": [
+                    {
+                        "typeCode": "shipper",
+                        "number": account_number,
+                    }
+                ],
+                "isCustomsDeclarable": is_export,
+                **customs_fields,
+                "unitOfMeasurement": "metric",
+                "shipmentTrackingNumber": booking.tracking_number,
+                "packages": [
+                    {
+                        "weight": float(package_version.weight_kg),
+                        "dimensions": {
+                            "length": float(package_version.length_cm),
+                            "width": float(package_version.width_cm),
+                            "height": float(package_version.height_cm),
+                        },
+                    }
+                ],
+            }
+        ],
+    }
+
+
+async def request_hub_pickup(
+    db: AsyncSession,
+    *,
+    order_id: uuid.UUID,
+    admin: User,
+    settings: Settings,
+    command: PickupRequestCommand,
+) -> PickupRequestResult:
+    order = await _load_order(db, order_id=order_id, lock_for_update=True)
+    _ensure_order_not_cancelled(order, action="request pickup")
+    booking = await _load_booking_for_order(
+        db,
+        order_id=order_id,
+        booking_id=command.booking_id,
+        lock_for_update=True,
+    )
+    if booking.classification != "success" or not booking.tracking_number:
+        raise ShipmentPhase4Error("pickup can only be requested for a successfully booked DHL shipment")
+    if booking.pickup_confirmation_number:
+        return PickupRequestResult(
+            booking_id=booking.id,
+            order_id=booking.order_id,
+            tracking_number=booking.tracking_number,
+            pickup_confirmation_number=booking.pickup_confirmation_number,
+            pickup_scheduled_for=booking.pickup_scheduled_for or booking.result_recorded_at or datetime.now(UTC),
+            pickup_requested_at=booking.pickup_requested_at or booking.result_recorded_at or datetime.now(UTC),
+            replayed=True,
+        )
+    if not _setting_bool(settings, "DHL_DOMESTIC_WORKFLOW_ENABLED", "dhl_domestic_workflow_enabled"):
+        raise ShipmentPhase4UnavailableError("dhl domestic workflow disabled")
+    if not _setting_bool(settings, "DHL_DOMESTIC_PROVIDER_CALLS_ENABLED", "dhl_domestic_provider_calls_enabled"):
+        raise ShipmentPhase4UnavailableError("dhl domestic provider calls disabled")
+    cohort_ids = await _package_cohort_ids(
+        db,
+        package_id=booking.package_id,
+        package_version=booking.package_version,
+    )
+    _ensure_sandbox_booking_allowed(settings, cohort_ids=cohort_ids, order_id=order.id)
+
+    intent = await db.get(OutboundShipmentIntent, booking.intent_id)
+    if intent is None:
+        raise ShipmentPhase4Error("outbound shipment intent not found for booking")
+    hub = await db.get(FulfillmentHub, booking.origin_hub_id)
+    if hub is None:
+        raise ShipmentPhase4Error("origin hub not found for booking")
+    package_version = (
+        await db.execute(
+            select(HubPackageVersion).where(
+                HubPackageVersion.package_id == booking.package_id,
+                HubPackageVersion.version == booking.package_version,
+            )
+        )
+    ).scalar_one_or_none()
+    if package_version is None:
+        raise ShipmentPhase4Error("package version not found for booking")
+
+    now = await db.scalar(text("SELECT clock_timestamp()")) or datetime.now(UTC)
+    planned_pickup_at = command.planned_pickup_at or _next_lagos_pickup_datetime(now)
+    pickup_contents = await _load_booking_contents(
+        db,
+        order=order,
+        package_id=booking.package_id,
+        package_version=booking.package_version,
+    )
+    payload = build_hub_pickup_payload(
+        settings=settings,
+        booking=booking,
+        intent=intent,
+        order=order,
+        hub=hub,
+        package_version=package_version,
+        planned_pickup_at=planned_pickup_at,
+        close_time=command.close_time,
+        location=command.location,
+        special_instruction=command.special_instruction,
+        contents=pickup_contents,
+    )
+    client = DHLClient(config=settings)
+    try:
+        response = await client.request_json("POST", "/pickups", json=payload)
+    except DHLAPIError as exc:
+        fallback_payload = (
+            _fallback_nigeria_dhl_booking_payload(payload)
+            if exc.status_code in (400, 422)
+            else None
+        )
+        if fallback_payload is None:
+            if exc.retryable:
+                raise ShipmentPhase4UnavailableError(str(exc)) from exc
+            raise ShipmentPhase4Error(str(exc)) from exc
+        try:
+            response = await client.request_json("POST", "/pickups", json=fallback_payload)
+        except DHLAPIError as fallback_exc:
+            if fallback_exc.retryable:
+                raise ShipmentPhase4UnavailableError(str(fallback_exc)) from fallback_exc
+            raise ShipmentPhase4Error(str(fallback_exc)) from fallback_exc
+    except TimeoutError as exc:
+        raise ShipmentPhase4UnavailableError(str(exc)) from exc
+
+    confirmation_numbers = response.get("dispatchConfirmationNumbers")
+    confirmation_number: str | None = None
+    if isinstance(confirmation_numbers, list) and confirmation_numbers:
+        confirmation_number = str(confirmation_numbers[0]).strip()
+    elif response.get("dispatchConfirmationNumber"):
+        confirmation_number = str(response.get("dispatchConfirmationNumber")).strip()
+    if not confirmation_number:
+        raise ShipmentPhase4Error("pickup response missing dispatchConfirmationNumbers")
+
+    completed_at = await db.scalar(text("SELECT clock_timestamp()")) or datetime.now(UTC)
+    booking.pickup_confirmation_number = confirmation_number[:120]
+    booking.pickup_scheduled_for = planned_pickup_at
+    booking.pickup_requested_at = completed_at
+    if booking.outbound_state == "label_ready":
+        booking.outbound_state = "awaiting_collection"
+    await db.flush()
+    return PickupRequestResult(
+        booking_id=booking.id,
+        order_id=booking.order_id,
+        tracking_number=booking.tracking_number,
+        pickup_confirmation_number=booking.pickup_confirmation_number,
+        pickup_scheduled_for=planned_pickup_at,
+        pickup_requested_at=completed_at,
+        replayed=False,
+    )

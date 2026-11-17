@@ -54,6 +54,8 @@ from app.services.fulfillment.contracts import (
     PackageRef,
     ParcelMeasurement,
     SealRef,
+    build_shipping_address,
+    resolve_country_code,
 )
 from app.services.shipping.contracts import DomesticRateRequest
 from app.services.shipping.capabilities import domestic_shipping_capabilities
@@ -77,16 +79,42 @@ def _planned_ship_date() -> date:
     return ship_date
 
 
+def _order_destination_country_code(order: Order) -> str:
+    address = getattr(order, "shipping_address", None)
+    raw_country = getattr(address, "country", None) if address is not None else None
+    return resolve_country_code(raw_country) or "NG"
+
+
+def _expected_dhl_product_code(order: Order) -> str:
+    return "N" if _order_destination_country_code(order) == "NG" else "P"
+
+
 async def _rate_pre_payment_quote_subject(
     db, *, order: Order, planned_ship_date=None
 ):
     """Rate a non-custodial quote subject before payment/fulfillment handoff."""
     configured_cohorts = settings.dhl_domestic_sandbox_cohort_ids
-    if not configured_cohorts:
+    is_live_prod = settings.DHL_ENVIRONMENT == "production" and bool(
+        getattr(settings, "DHL_LIVE_ENABLED", False)
+    )
+    if not configured_cohorts and not is_live_prod:
         raise HTTPException(status_code=503, detail="configured DHL sandbox cohort required")
     address = order.shipping_address
-    if address is None or not address.postal_code:
+    dest_country_code = _order_destination_country_code(order)
+    supported_countries = getattr(
+        settings, "dhl_supported_country_codes", frozenset({"NG"})
+    )
+    if dest_country_code not in supported_countries:
+        raise HTTPException(
+            status_code=422, detail="destination country is not supported for DHL shipping"
+        )
+    if address is None or (dest_country_code == "NG" and not address.postal_code):
         raise HTTPException(status_code=422, detail="postal code required for DHL rating")
+    resolved_postal_code = (
+        address.postal_code.strip() or None
+        if address.postal_code
+        else ("00000" if dest_country_code != "NG" else None)
+    )
     hubs = (
         await db.execute(
             select(FulfillmentHub).where(FulfillmentHub.is_active.is_(True)).order_by(FulfillmentHub.id)
@@ -183,15 +211,15 @@ async def _rate_pre_payment_quote_subject(
         seal=SealRef(value=f"checkout-quote-{seal_id}"),
     )
     try:
-        destination = DomesticAddress(
+        destination = build_shipping_address(
             contact_name=address.full_name,
             phone=address.phone_number,
             line1=address.address_line1,
             line2=address.address_line2.strip() or None if address.address_line2 else None,
             city=address.city,
             state=address.state,
-            postal_code=address.postal_code.strip() or None if address.postal_code else None,
-            country_code="NG",
+            postal_code=resolved_postal_code,
+            country_code=dest_country_code,
         )
     except (TypeError, ValueError):
         raise HTTPException(status_code=422, detail="shipping address is invalid") from None
@@ -311,7 +339,7 @@ async def _dhl_checkout_options(db, *, order: Order, planned_ship_date=None):
         ).scalars().all()
         if not all((seal, intent, hub, version, items)):
             raise HTTPException(status_code=503, detail="DHL shipment subject is incomplete")
-        destination = DomesticAddress(
+        destination = build_shipping_address(
             contact_name=intent.destination_name,
             phone=intent.destination_phone,
             line1=intent.destination_address_line1,
@@ -387,13 +415,17 @@ async def _dhl_checkout_options(db, *, order: Order, planned_ship_date=None):
         )
         configured_cohorts = settings.dhl_domestic_sandbox_cohort_ids
         package_cohort_ids = {item.cohort_id for item in items}
-        if not configured_cohorts or not package_cohort_ids <= (
-            configured_cohorts
-            | derive_sandbox_cohort_ids(
-                configured_cohorts, order.id, order_cohort_count
-            )
-        ):
-            raise HTTPException(status_code=503, detail="checkout cohort is outside the configured DHL sandbox allowlist")
+        is_live_prod = settings.DHL_ENVIRONMENT == "production" and bool(
+            getattr(settings, "DHL_LIVE_ENABLED", False)
+        )
+        if not is_live_prod or configured_cohorts:
+            if not configured_cohorts or not package_cohort_ids <= (
+                configured_cohorts
+                | derive_sandbox_cohort_ids(
+                    configured_cohorts, order.id, order_cohort_count
+                )
+            ):
+                raise HTTPException(status_code=503, detail="checkout cohort is outside the configured DHL sandbox allowlist")
         checkout_settings = settings
         if not settings.checkout_capability_configured:
             raise HTTPException(status_code=503, detail="checkout rate identity is not configured")
@@ -1013,7 +1045,10 @@ async def create_estimate(
     # existing gated DHL behavior. Recovery of issued estimates is unchanged.
     capabilities = domestic_shipping_capabilities(settings)
     shipping_addr = getattr(order, "shipping_address", None)
-    has_dhl_postal = bool(shipping_addr and getattr(shipping_addr, "postal_code", None))
+    dest_country_code = _order_destination_country_code(order)
+    has_dhl_postal = bool(
+        shipping_addr and (getattr(shipping_addr, "postal_code", None) or dest_country_code != "NG")
+    )
     manual_provider_enabled = (
         existing.source_kind == "static_domestic_rate" if existing
         else ("manual" in enabled_providers and provider_config.readiness["manual"])
@@ -1024,7 +1059,11 @@ async def create_estimate(
     )
     shipbubble_provider_enabled = (
         existing.source_kind == "shipbubble_live" if existing
-        else ("shipbubble" in enabled_providers and provider_config.readiness["shipbubble"])
+        else (
+            "shipbubble" in enabled_providers
+            and provider_config.readiness["shipbubble"]
+            and dest_country_code == "NG"
+        )
     )
     is_pure_manual = manual_provider_enabled and not dhl_provider_enabled and not shipbubble_provider_enabled
     planned_ship_date = _planned_ship_date() if dhl_provider_enabled else None
@@ -1218,11 +1257,12 @@ async def create_estimate(
 
         if dhl_provider_enabled:
             try:
+                expected_dhl_product = _expected_dhl_product_code(order)
                 raw_dhl = await _dhl_checkout_options(
                     db, order=order, planned_ship_date=planned_ship_date
                 )
                 dhl_offers = tuple(
-                    offer for offer in raw_dhl if offer.provider_product_code == "N"
+                    offer for offer in raw_dhl if offer.provider_product_code == expected_dhl_product
                 )
             except HTTPException as exc:
                 logger.warning("[Combined Shipping] DHL rate check skipped/failed: %s", exc.detail)
@@ -1421,12 +1461,13 @@ async def create_estimate(
             if existing.request_fingerprint != fingerprint:
                 raise HTTPException(status_code=409, detail="idempotency conflict")
             return existing
+        expected_dhl_product = _expected_dhl_product_code(order)
         dhl_offers = tuple(
             offer
             for offer in await _dhl_checkout_options(
                 db, order=order, planned_ship_date=planned_ship_date
             )
-            if offer.provider_product_code == "N"
+            if offer.provider_product_code == expected_dhl_product
         )
         if not dhl_offers:
             raise HTTPException(status_code=503, detail="DHL has no eligible checkout service")

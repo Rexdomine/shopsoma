@@ -84,6 +84,7 @@ const AdminSettings = lazy(() => import('../pages/admin/AdminSettings'));
 const AdminOrders = lazy(() => import('../pages/admin/AdminOrders'));
 const AdminOrderDetail = lazy(() => import('../pages/admin/AdminOrderDetail'));
 const AdminPayouts = lazy(() => import('../pages/admin/AdminPayouts'));
+const AdminMarketing = lazy(() => import('../pages/admin/AdminMarketing'));
 const Debug = lazy(() => import('../pages/Debug'));
 const NotFound = lazy(() => import('../pages/errors/NotFound'));
 const ServerError = lazy(() => import('../pages/errors/ServerError'));
@@ -958,6 +959,18 @@ const router = createBrowserRouter([
         <Suspense fallback={<Loading fullScreen message="Loading payouts..." />}>
           <ProtectedRoute roles={['admin']}>
             <AdminPayouts />
+          </ProtectedRoute>
+        </Suspense>
+      </ErrorBoundary>
+    ),
+  },
+  {
+    path: ROUTES.ADMIN_MARKETING,
+    element: (
+      <ErrorBoundary>
+        <Suspense fallback={<Loading fullScreen message="Loading marketing..." />}>
+          <ProtectedRoute roles={['admin']}>
+            <AdminMarketing />
           </ProtectedRoute>
         </Suspense>
       </ErrorBoundary>

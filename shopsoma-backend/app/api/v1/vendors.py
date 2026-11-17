@@ -42,6 +42,7 @@ from app.services.commission import get_default_commission_rate
 from app.services.vendor_onboarding import reconcile_vendor_onboarding
 from app.services.image_service import image_service
 from app.services.product_image_storage import lock_and_validate_featured_storefront_key
+from app.services.orders.fulfillment_sync import resolve_effective_item_fulfillment_status
 from app.services.orders.made_to_order_readiness import (
     ReadinessError,
     is_made_to_order_item,
@@ -580,7 +581,8 @@ async def list_vendor_orders(
 
     # Execute with relationships loaded
     query = query.options(
-        selectinload(Order.items),
+        selectinload(Order.items).selectinload(OrderItem.pickup),
+        selectinload(Order.items).selectinload(OrderItem.product),
         selectinload(Order.customer),
         selectinload(Order.shipping_address)
     )
@@ -608,7 +610,7 @@ async def list_vendor_orders(
                 "commission_rate": float(item.commission_rate),
                 "commission_amount": float(item.commission_amount),
                 "vendor_payout": float(item.vendor_payout),
-                "fulfillment_status": item.fulfillment_status.value,
+                "fulfillment_status": resolve_effective_item_fulfillment_status(item, order, item.pickup).value,
                 "created_at": item.created_at.isoformat(),
             })
 
@@ -705,7 +707,7 @@ async def get_vendor_order(
             "commission_rate": float(item.commission_rate),
             "commission_amount": float(item.commission_amount),
             "vendor_payout": float(item.vendor_payout),
-            "fulfillment_status": item.fulfillment_status.value,
+            "fulfillment_status": resolve_effective_item_fulfillment_status(item, order, item.pickup).value,
             "created_at": item.created_at.isoformat() if item.created_at else None,
             "pickup": pickup_data,
             "product_image_url": product_image_url,

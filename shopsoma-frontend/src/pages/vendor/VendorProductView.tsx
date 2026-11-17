@@ -176,7 +176,23 @@ export default function VendorProductView() {
     return !duplicate;
   });
 
-  const inventoryCount = product.total_stock ?? product.inventory_quantity ?? 0;
+  let inventoryCount = product.total_stock ?? product.inventory_quantity ?? 0;
+  if (!product.made_to_order) {
+    if (product.variations && product.variations.length > 0 && (product.product_type === 'variable' || inventoryCount === 0)) {
+      const varStock = product.variations.reduce(
+        (sum, v) => sum + (v.size_stocks || []).reduce((sSum, s) => sSum + (s.stock || 0), 0),
+        0
+      );
+      if (varStock > 0 || inventoryCount === 0) {
+        inventoryCount = varStock;
+      }
+    } else if (inventoryCount === 0 && product.variants && product.variants.length > 0) {
+      const variantStock = product.variants.reduce((sum, v) => sum + (v.stock || 0), 0);
+      if (variantStock > 0) {
+        inventoryCount = variantStock;
+      }
+    }
+  }
   const fulfillmentLabel = product.made_to_order
     ? product.made_to_order_timeline
       ? `Made to order • ${product.made_to_order_timeline}`

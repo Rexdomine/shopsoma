@@ -51,6 +51,48 @@ interface NewAddress {
   is_default: boolean;
 }
 
+const SUPPORTED_CHECKOUT_COUNTRIES = [
+  { name: 'Nigeria', iso2: 'NG' },
+  { name: 'Ghana', iso2: 'GH' },
+  { name: 'United States', iso2: 'US' },
+  { name: 'United Kingdom', iso2: 'GB' },
+  { name: 'Canada', iso2: 'CA' },
+  { name: 'South Africa', iso2: 'ZA' },
+  { name: 'Kenya', iso2: 'KE' },
+  { name: 'United Arab Emirates', iso2: 'AE' },
+  { name: 'France', iso2: 'FR' },
+  { name: 'Germany', iso2: 'DE' },
+] as const;
+
+const isNigerianCountry = (raw?: string): boolean => {
+  const lower = (raw || '').trim().toLowerCase();
+  return !lower || lower === 'nigeria' || lower === 'ng' || lower === 'nga';
+};
+
+const isSupportedDhlDestinationCountry = (raw?: string): boolean => {
+  const lower = (raw || '').trim().toLowerCase();
+  if (!lower) return false;
+  if (isNigerianCountry(lower)) return true;
+  return SUPPORTED_CHECKOUT_COUNTRIES.some(
+    c => c.name.toLowerCase() === lower || c.iso2.toLowerCase() === lower
+  );
+};
+
+const resolveCountryIso2 = (raw?: string): string => {
+  const lower = (raw || '').trim().toLowerCase();
+  const match = SUPPORTED_CHECKOUT_COUNTRIES.find(
+    c => c.name.toLowerCase() === lower || c.iso2.toLowerCase() === lower
+  );
+  return match?.iso2 || 'NG';
+};
+
+// International destinations where DHL Express cannot rate/book without a real
+// postal code (an empty value falls back to "00000" and DHL returns no service).
+const INTERNATIONAL_POSTAL_CODE_COUNTRIES = new Set(['US', 'GB', 'CA', 'ZA', 'FR', 'DE']);
+
+const isInternationalPostalCodeCountry = (raw?: string): boolean =>
+  !isNigerianCountry(raw) && INTERNATIONAL_POSTAL_CODE_COUNTRIES.has(resolveCountryIso2(raw));
+
 const ALL_PAYMENT_OPTIONS: { id: PaymentGateway; name: string; icon: string; supportedCurrencies: Currency[] }[] = [
   { id: 'paystack', name: 'Paystack', icon: '/images/paystack.svg', supportedCurrencies: ['NGN'] },
   { id: 'stripe', name: 'Stripe', icon: '/images/stripe.svg', supportedCurrencies: ['NGN', 'USD'] },
@@ -158,9 +200,15 @@ export default function Checkout() {
     };
   }, []);
 
-  const executeAddressSearch = async (query: string, requestId: number) => {
+  const executeAddressSearch = async (query: string, requestId: number, countryOverride?: string) => {
     try {
-      const suggestions = await fetchAddressSuggestions(query, { country: 'ng' });
+      const targetCountry = countryOverride ?? newAddress.country;
+      const countryIso = resolveCountryIso2(targetCountry).toLowerCase();
+      const supportedRegionCodes = SUPPORTED_CHECKOUT_COUNTRIES.map(c => c.iso2.toLowerCase());
+      const suggestions = await fetchAddressSuggestions(query, {
+        country: countryIso,
+        countries: isNigerianCountry(targetCountry) ? supportedRegionCodes : undefined,
+      });
       if (autocompleteRequestSeq.current !== requestId) return;
       setAddressSuggestions(suggestions);
       setHasSearchedSuggestions(true);
@@ -178,7 +226,7 @@ export default function Checkout() {
     }
   };
 
-  const triggerAddressAutocomplete = (rawInput: string, immediate = false) => {
+  const triggerAddressAutocomplete = (rawInput: string, immediate = false, countryOverride?: string) => {
     if (autocompleteDebounceRef.current) {
       clearTimeout(autocompleteDebounceRef.current);
       autocompleteDebounceRef.current = null;
@@ -201,10 +249,10 @@ export default function Checkout() {
 
     const delayMs = immediate || import.meta.env.MODE === 'test' ? 0 : 180;
     if (delayMs === 0) {
-      void executeAddressSearch(query, requestId);
+      void executeAddressSearch(query, requestId, countryOverride);
     } else {
       autocompleteDebounceRef.current = setTimeout(() => {
-        void executeAddressSearch(query, requestId);
+        void executeAddressSearch(query, requestId, countryOverride);
       }, delayMs);
     }
   };
@@ -222,10 +270,13 @@ export default function Checkout() {
     setIsResolvingSuggestion(true);
 
     try {
-      const normalized = await resolveAddressSuggestion(suggestion);
+      const normalized = await resolveAddressSuggestion(suggestion, { country: newAddress.country });
       if (autocompleteRequestSeq.current !== requestId) return;
       setNewAddress(prev => {
         const nextHouseNumber = prev.house_number?.trim() || prev.address_line2?.trim() || normalized.addressLine2 || '';
+        const resolvedCountry = normalizeCountryName(normalized.country || prev.country || 'Nigeria');
+        const sameCountry =
+          normalizeCountryName(prev.country).toLowerCase() === resolvedCountry.toLowerCase();
         return {
           ...prev,
           address_line1: normalized.addressLine1,
@@ -233,8 +284,8 @@ export default function Checkout() {
           house_number: nextHouseNumber,
           city: normalized.city,
           state: normalized.state,
-          postal_code: normalized.postalCode || prev.postal_code || '',
-          country: normalized.country || 'Nigeria',
+          postal_code: normalized.postalCode || (sameCountry ? prev.postal_code || '' : ''),
+          country: resolvedCountry,
         };
       });
       setVerifiedAddressSelection(normalized);
@@ -295,15 +346,26 @@ export default function Checkout() {
 
   const selectedAddress = addresses.find(address => address.id === selectedAddressId);
   const destinationCountry = selectedAddress?.country.trim().toLowerCase();
-  const secureShipping = allDomesticEstimates && (destinationCountry === 'nigeria' || destinationCountry === 'ng');
+  const secureShipping = allDomesticEstimates && isSupportedDhlDestinationCountry(destinationCountry);
   const draftCountry = newAddress.country.trim().toLowerCase();
+  const isDraftNigeria = isNigerianCountry(draftCountry);
   const dhlDomesticShipping = shippingProvider === 'dhl' && secureShipping;
-  const postalCodeRequired = shippingProvider === 'dhl' && allDomesticEstimates && (draftCountry === 'nigeria' || draftCountry === 'ng');
+  const postalCodeRequired = allDomesticEstimates && (
+    (shippingProvider === 'dhl' && isDraftNigeria) || isInternationalPostalCodeCountry(draftCountry)
+  );
   const isValidDhlPostalCode = (value?: string) => {
     const postalCode = value?.trim() || '';
     return postalCode.length > 0 && postalCode.length <= 12;
   };
-  const selectedAddressNeedsPostalCode = dhlDomesticShipping && !isValidDhlPostalCode(selectedAddress?.postal_code);
+  const selectedAddressNeedsPostalCode = (dhlDomesticShipping && (
+    isNigerianCountry(destinationCountry)
+      ? !isValidDhlPostalCode(selectedAddress?.postal_code)
+      : Boolean(selectedAddress?.postal_code && selectedAddress.postal_code.trim().length > 12)
+  )) || (
+    secureShipping
+    && isInternationalPostalCodeCountry(destinationCountry)
+    && !isValidDhlPostalCode(selectedAddress?.postal_code)
+  );
   const selectedAddressPostalCodeGuidance = selectedAddress?.postal_code?.trim()
     ? 'Update the selected delivery address with a postal code of 12 characters or fewer before continuing with DHL delivery.'
     : 'Add a postal code to the selected delivery address before continuing with DHL delivery.';
@@ -322,6 +384,7 @@ export default function Checkout() {
     discount_type: 'percentage' | 'fixed_amount';
     discount_value: number;
     discount_amount: number;
+    currency?: 'NGN' | 'USD';
   } | null>(null);
 
   // Order review state
@@ -470,8 +533,10 @@ export default function Checkout() {
 
   const handleCreateAddress = async () => {
     if (isPaymentLocked || !isAddressVerified || isResolvingSuggestion || isCheckoutRequestPending || isSwitchingCurrency) return;
-    const normalizedState = normalizeNigerianState(newAddress.state) || newAddress.state.trim();
     const normalizedCountry = normalizeCountryName(newAddress.country);
+    const normalizedState = isNigerianCountry(normalizedCountry)
+      ? normalizeNigerianState(newAddress.state) || newAddress.state.trim()
+      : newAddress.state.trim();
     const normalizedPostalCode = (newAddress.postal_code || '').trim().slice(0, 12);
     const normalizedHouseNumber = (newAddress.house_number ?? newAddress.address_line2 ?? '').trim();
 
@@ -654,8 +719,39 @@ export default function Checkout() {
     }
   };
 
+  const isPromoLocked = Boolean(currentPaymentGateway || showStripePaymentModal);
+
+  const resetPrePaymentOrderForPromoChange = async () => {
+    if (!enforcedOrder) {
+      return;
+    }
+    try {
+      await checkoutService.cancelOrder(
+        enforcedOrder.id,
+        'Customer updated promo code before payment',
+        checkoutCapability,
+      );
+    } catch (error: any) {
+      const terminalAuthorization = error?.response?.status === 404 || error?.response?.status === 410;
+      if (!terminalAuthorization) {
+        throw error;
+      }
+    }
+    discardExpiredCheckout();
+    setOrderReview(null);
+    setCheckoutQuote(null);
+    setPriceChangeNotice(null);
+    setStep(selectedAddressId ? 'shipping' : 'address');
+  };
+
   const handleApplyPromo = async () => {
-    if (!promo.trim()) {
+    if (isPromoLocked) {
+      setPromoError('Promo code cannot be changed after payment has been initialized.');
+      return;
+    }
+
+    const cleanedCode = promo.trim().toUpperCase();
+    if (!cleanedCode) {
       setPromoError('Please enter a promo code');
       return;
     }
@@ -664,19 +760,37 @@ export default function Checkout() {
     setPromoError('');
 
     try {
+      const subtotalForValidation =
+        currency === 'USD'
+          ? convertCurrencyWithRates(cartSubtotalInNgn, 'NGN', 'USD', exchangeRates)
+          : cartSubtotalInNgn;
+
       const result = await checkoutService.validatePromoCode({
-        code: promo,
-        order_subtotal: cartSubtotalInNgn,
+        code: cleanedCode,
+        order_subtotal: subtotalForValidation,
+        currency,
+        customer_email: email.trim() || undefined,
       });
 
-      if (result.valid && result.discount_amount) {
-        setAppliedPromo({
+      if (result.valid && result.discount_amount != null) {
+        const nextApplied = {
           code: result.code!,
           discount_type: result.discount_type!,
           discount_value: result.discount_value!,
           discount_amount: result.discount_amount,
-        });
+          currency: result.currency || currency,
+        };
+        if (enforcedOrder) {
+          await resetPrePaymentOrderForPromoChange();
+        } else if (!orderReview || secureShipping) {
+          setCheckoutQuote(null);
+        }
+        setPromo(nextApplied.code);
+        setAppliedPromo(nextApplied);
         setPromoError('');
+        if (!enforcedOrder && orderReview && !secureShipping) {
+          await handleReviewOrder(nextApplied.code);
+        }
       } else {
         setAppliedPromo(null);
         setPromoError(result.message || 'Invalid promo code');
@@ -684,7 +798,34 @@ export default function Checkout() {
     } catch (error: any) {
       console.error('Error validating promo code:', error);
       setAppliedPromo(null);
-      setPromoError(error.response?.data?.detail || 'Failed to validate promo code');
+      setPromoError(error.response?.data?.detail || error.message || 'Failed to validate promo code');
+    } finally {
+      setIsApplyingPromo(false);
+    }
+  };
+
+  const handleRemovePromo = async () => {
+    if (isPromoLocked) {
+      setPromoError('Promo code cannot be removed after payment has been initialized.');
+      return;
+    }
+
+    setIsApplyingPromo(true);
+    setPromoError('');
+    try {
+      if (enforcedOrder) {
+        await resetPrePaymentOrderForPromoChange();
+      } else if (!orderReview || secureShipping) {
+        setCheckoutQuote(null);
+      }
+      setAppliedPromo(null);
+      setPromo('');
+      if (!enforcedOrder && orderReview && !secureShipping) {
+        await handleReviewOrder(null);
+      }
+    } catch (error: any) {
+      console.error('Error removing promo code:', error);
+      setPromoError(error.response?.data?.detail || error.message || 'Failed to remove promo code');
     } finally {
       setIsApplyingPromo(false);
     }
@@ -797,7 +938,7 @@ export default function Checkout() {
     setPriceChangeNotice(null);
   };
 
-  const handleReviewOrder = async (): Promise<OrderReview | null> => {
+  const handleReviewOrder = async (promoOverride?: string | null): Promise<OrderReview | null> => {
     if (!selectedAddressId) return null;
 
     try {
@@ -810,13 +951,20 @@ export default function Checkout() {
 
       // Get selected address
       const selectedAddress = addresses.find(addr => addr.id === selectedAddressId);
+      const effectivePromoCode =
+        typeof promoOverride === 'string'
+          ? promoOverride
+          : promoOverride === null
+            ? undefined
+            : appliedPromo?.code;
 
       // Prepare request based on guest vs authenticated user
       const reviewRequest: any = {
         items,
         currency,
+        customer_email: email.trim() || undefined,
         shipping_rate_id: secureShipping ? undefined : selectedShippingRateId || undefined,
-        promo_code: appliedPromo?.code,
+        promo_code: effectivePromoCode,
         ...(checkoutQuote?.quote_token ? { quote_token: checkoutQuote.quote_token } : {}),
       };
 
@@ -1580,23 +1728,36 @@ export default function Checkout() {
     return /^(0|234)[789]\d{9}$/.test(digits);
   };
 
+  const isValidCheckoutPhone = (value: string): boolean => {
+    if (isDraftNigeria) return isValidNigerianPhone(value);
+    const digits = value.replace(/\D/g, '');
+    return digits.length >= 7 && digits.length <= 15;
+  };
+
   const hasEmail = email.trim().length > 3 && isValidEmail(email);
-  const isAddressVerified = Boolean(
-    verifiedAddressSelection &&
-    newAddress.address_line1.trim() === verifiedAddressSelection.addressLine1.trim() &&
-    newAddress.city.trim().toLowerCase() === verifiedAddressSelection.city.trim().toLowerCase() &&
-    newAddress.state.trim() === verifiedAddressSelection.state.trim()
-  );
+  const isAddressVerified = isDraftNigeria
+    ? Boolean(
+        verifiedAddressSelection &&
+        newAddress.address_line1.trim() === verifiedAddressSelection.addressLine1.trim() &&
+        newAddress.city.trim().toLowerCase() === verifiedAddressSelection.city.trim().toLowerCase() &&
+        newAddress.state.trim() === verifiedAddressSelection.state.trim()
+      )
+    : Boolean(
+        newAddress.address_line1.trim() &&
+        newAddress.city.trim() &&
+        newAddress.state.trim()
+      );
   const isAddressComplete = Boolean(
     newAddress.full_name.trim() &&
     newAddress.phone_number.trim() &&
-    isValidNigerianPhone(newAddress.phone_number) &&
+    isValidCheckoutPhone(newAddress.phone_number) &&
     newAddress.address_line1.trim() &&
     isAddressVerified &&
     !isResolvingSuggestion &&
     newAddress.city.trim() &&
     newAddress.state.trim() &&
     (!postalCodeRequired || isValidDhlPostalCode(newAddress.postal_code)) &&
+    (!newAddress.postal_code?.trim() || newAddress.postal_code.trim().length <= 12) &&
     newAddress.country.trim()
   );
   const missingAddressFields = [
@@ -1609,8 +1770,10 @@ export default function Checkout() {
   ].filter(Boolean);
   const phoneSaveGuidance = !newAddress.phone_number.trim()
     ? 'Enter a phone number so delivery partners can reach you.'
-    : !isValidNigerianPhone(newAddress.phone_number)
-      ? 'Complete the phone number in Nigerian format, e.g. 08012345678.'
+    : !isValidCheckoutPhone(newAddress.phone_number)
+      ? isDraftNigeria
+        ? 'Complete the phone number in Nigerian format, e.g. 08012345678.'
+        : 'Enter a valid international phone number (7–15 digits, e.g. +14155550100).'
       : '';
   const postalCodeSaveGuidance = postalCodeRequired && !isValidDhlPostalCode(newAddress.postal_code)
     ? newAddress.postal_code?.trim()
@@ -1639,7 +1802,12 @@ export default function Checkout() {
     ? convertCurrencyWithRates(Number(selectedShippingRate.base_rate), 'NGN', currency, exchangeRates)
     : 0;
   const promoDiscountInSelectedCurrency = appliedPromo
-    ? convertCurrencyWithRates(Number(appliedPromo.discount_amount || 0), 'NGN', currency, exchangeRates)
+    ? convertCurrencyWithRates(
+        Number(appliedPromo.discount_amount || 0),
+        appliedPromo.currency || 'NGN',
+        currency,
+        exchangeRates,
+      )
     : 0;
   const reviewSummaryCurrency = orderReview?.summary.currency ?? checkoutQuote?.currency ?? 'NGN';
   const committedLegacyOrder = enforcedOrder?.workflow_cohort !== 'domestic_checkout_v1'
@@ -1931,8 +2099,10 @@ export default function Checkout() {
                                 aria-label="Edit delivery address"
                                 disabled={isPaymentLocked || isCheckoutRequestPending || isSwitchingCurrency}
                                 onClick={() => {
-                                  const normalizedAddrState = normalizeNigerianState(addr.state) || addr.state;
                                   const normalizedAddrCountry = normalizeCountryName(addr.country);
+                                  const normalizedAddrState = isNigerianCountry(normalizedAddrCountry)
+                                    ? normalizeNigerianState(addr.state) || addr.state
+                                    : addr.state;
                                   const existingHouseNumber = addr.house_number ?? addr.address_line2 ?? '';
                                   resetAutocompleteState();
                                   setNewAddress({
@@ -1986,30 +2156,80 @@ export default function Checkout() {
                                 />
                               </div>
                               <div>
+                                <label className="text-xs text-gray-500">Country</label>
+                                <select
+                                  aria-label="Country"
+                                  value={newAddress.country || 'Nigeria'}
+                                  onChange={(e) => {
+                                    const nextCountry = e.target.value;
+                                    const currentNormalizedCountry = normalizeCountryName(newAddress.country).toLowerCase();
+                                    const nextNormalizedCountry = normalizeCountryName(nextCountry).toLowerCase();
+                                    const countryChanged = currentNormalizedCountry !== nextNormalizedCountry;
+                                    const editingAddr = editingAddressId ? addresses.find(a => a.id === editingAddressId) : null;
+                                    const hadPreviousCountryAddress = Boolean(
+                                      countryChanged && (
+                                        (editingAddr &&
+                                          newAddress.address_line1.trim() === editingAddr.address_line1.trim() &&
+                                          normalizeCountryName(editingAddr.country).toLowerCase() !== nextNormalizedCountry) ||
+                                        (verifiedAddressSelection &&
+                                          normalizeCountryName(verifiedAddressSelection.country).toLowerCase() !== nextNormalizedCountry)
+                                      )
+                                    );
+                                    const currentStreetInput = newAddress.address_line1;
+                                    resetAutocompleteState();
+                                    setNewAddress(prev => ({
+                                      ...prev,
+                                      country: nextCountry,
+                                      address_line1: hadPreviousCountryAddress ? '' : prev.address_line1,
+                                      city: hadPreviousCountryAddress ? '' : prev.city,
+                                      state: countryChanged ? '' : prev.state,
+                                      postal_code: hadPreviousCountryAddress ? '' : prev.postal_code,
+                                    }));
+                                    if (countryChanged && !hadPreviousCountryAddress && currentStreetInput.trim().length >= 2) {
+                                      triggerAddressAutocomplete(currentStreetInput, true, nextCountry);
+                                    }
+                                  }}
+                                  className="w-full border-b border-gray-300 bg-white focus:border-primary focus:outline-none py-2 text-sm"
+                                  required
+                                >
+                                  {SUPPORTED_CHECKOUT_COUNTRIES.map((c) => (
+                                    <option key={c.iso2} value={c.name}>{c.name}</option>
+                                  ))}
+                                </select>
+                              </div>
+                              <div>
                                 <label className="text-xs text-gray-500">Phone number <span className="text-red-500">*</span></label>
                                 <div className="flex items-center gap-2 border-b border-gray-300 focus-within:border-primary py-2">
-                                  <span className="inline-flex items-center gap-2 text-xs font-ui text-gray-500">
-                                    <span className="inline-flex h-4 w-6 overflow-hidden rounded-sm border border-gray-200">
-                                      <span className="h-full w-2 bg-[#137a3a]" />
-                                      <span className="h-full w-2 bg-white" />
-                                      <span className="h-full w-2 bg-[#137a3a]" />
+                                  {isDraftNigeria && (
+                                    <span className="inline-flex items-center gap-2 text-xs font-ui text-gray-500">
+                                      <span className="inline-flex h-4 w-6 overflow-hidden rounded-sm border border-gray-200">
+                                        <span className="h-full w-2 bg-[#137a3a]" />
+                                        <span className="h-full w-2 bg-white" />
+                                        <span className="h-full w-2 bg-[#137a3a]" />
+                                      </span>
+                                      +234
                                     </span>
-                                    +234
-                                  </span>
+                                  )}
                                   <input
                                     type="tel"
                                     value={newAddress.phone_number}
                                     onChange={(e) => setNewAddress({ ...newAddress, phone_number: e.target.value })}
                                     className="w-full bg-transparent focus:outline-none text-sm"
                                     inputMode="tel"
-                                    pattern="^(0|234)[789]\\d{9}$"
-                                    title="Enter a valid Nigerian phone number (e.g. 08012345678 or 2348012345678)"
-                                    placeholder="08012345678"
+                                    pattern={isDraftNigeria ? '^(0|234)[789]\\d{9}$' : '^\\+?[0-9\\s\\-()]{7,20}$'}
+                                    title={
+                                      isDraftNigeria
+                                        ? 'Enter a valid Nigerian phone number (e.g. 08012345678 or 2348012345678)'
+                                        : 'Enter a valid international phone number (e.g. +14155550100)'
+                                    }
+                                    placeholder={isDraftNigeria ? '08012345678' : '+14155550100'}
                                     required
                                   />
                                 </div>
                                 <p className={`mt-1 text-xs ${phoneSaveGuidance ? 'text-amber-700' : 'text-gray-500'}`}>
-                                  {phoneSaveGuidance || 'Required for delivery updates. Use 08012345678 or 2348012345678.'}
+                                  {phoneSaveGuidance || (isDraftNigeria
+                                    ? 'Required for delivery updates. Use 08012345678 or 2348012345678.'
+                                    : 'Required for DHL international delivery updates (include country code, e.g. +14155550100).')}
                                 </p>
                               </div>
                               <div className="relative">
@@ -2054,9 +2274,15 @@ export default function Checkout() {
                                       const nextValue = e.target.value;
                                       setNewAddress(prev => ({ ...prev, address_line1: nextValue }));
                                       const editingAddr = editingAddressId ? addresses.find(a => a.id === editingAddressId) : null;
-                                      if (editingAddr && nextValue.trim() === editingAddr.address_line1.trim()) {
-                                        const normalizedEditState = normalizeNigerianState(newAddress.state) || newAddress.state;
-                                        const normalizedEditCountry = normalizeCountryName(newAddress.country);
+                                      const normalizedEditCountry = normalizeCountryName(newAddress.country);
+                                      if (
+                                        editingAddr &&
+                                        nextValue.trim() === editingAddr.address_line1.trim() &&
+                                        normalizeCountryName(editingAddr.country).toLowerCase() === normalizedEditCountry.toLowerCase()
+                                      ) {
+                                        const normalizedEditState = isNigerianCountry(normalizedEditCountry)
+                                          ? normalizeNigerianState(newAddress.state) || newAddress.state
+                                          : newAddress.state;
                                         setVerifiedAddressSelection({
                                           placeId: `saved-${editingAddr.id}`,
                                           formattedAddress: [editingAddr.address_line1, newAddress.city, normalizedEditState, normalizedEditCountry].filter(Boolean).join(', '),
@@ -2205,6 +2431,12 @@ export default function Checkout() {
                                         Verified with Google Maps: {verifiedAddressSelection.formattedAddress}
                                       </p>
                                     )
+                                  ) : !isDraftNigeria && newAddress.address_line1.trim() ? (
+                                    <p className="mt-1 text-xs text-gray-500">
+                                      {isAddressVerified
+                                        ? 'International delivery address ready.'
+                                        : 'Select a Google Maps suggestion above or complete your city and state/province below.'}
+                                    </p>
                                   ) : newAddress.address_line1.trim() ? (
                                     <p className="mt-1 text-xs text-amber-700">
                                       Select a Google Maps suggestion above to verify your delivery location.
@@ -2260,25 +2492,46 @@ export default function Checkout() {
                                 </div>
                                 <div>
                                   <label className="text-xs text-gray-500">State</label>
-                                  <select
-                                    aria-label="State"
-                                    value={newAddress.state}
-                                    onChange={(e) => {
-                                      const nextState = e.target.value;
-                                      setNewAddress({ ...newAddress, state: nextState });
-                                      if (verifiedAddressSelection) {
-                                        setVerifiedAddressSelection({
-                                          ...verifiedAddressSelection,
-                                          state: nextState,
-                                        });
-                                      }
-                                    }}
-                                    className="w-full border-b border-gray-300 bg-white focus:border-primary focus:outline-none py-2 text-sm"
-                                    required
-                                  >
-                                    <option value="" disabled>Select state</option>
-                                    {NIGERIA_STATES.map((state) => <option key={state} value={state}>{state}</option>)}
-                                  </select>
+                                  {isDraftNigeria ? (
+                                    <select
+                                      aria-label="State"
+                                      value={newAddress.state}
+                                      onChange={(e) => {
+                                        const nextState = e.target.value;
+                                        setNewAddress({ ...newAddress, state: nextState });
+                                        if (verifiedAddressSelection) {
+                                          setVerifiedAddressSelection({
+                                            ...verifiedAddressSelection,
+                                            state: nextState,
+                                          });
+                                        }
+                                      }}
+                                      className="w-full border-b border-gray-300 bg-white focus:border-primary focus:outline-none py-2 text-sm"
+                                      required
+                                    >
+                                      <option value="" disabled>Select state</option>
+                                      {NIGERIA_STATES.map((state) => <option key={state} value={state}>{state}</option>)}
+                                    </select>
+                                  ) : (
+                                    <input
+                                      type="text"
+                                      aria-label="State"
+                                      value={newAddress.state}
+                                      onChange={(e) => {
+                                        const nextState = e.target.value;
+                                        setNewAddress({ ...newAddress, state: nextState });
+                                        if (verifiedAddressSelection) {
+                                          setVerifiedAddressSelection({
+                                            ...verifiedAddressSelection,
+                                            state: nextState,
+                                          });
+                                        }
+                                      }}
+                                      placeholder="State / Province / Region"
+                                      className="w-full border-b border-gray-300 focus:border-primary focus:outline-none py-2 text-sm"
+                                      required
+                                    />
+                                  )}
                                 </div>
                               </div>
                               <div>
@@ -2290,12 +2543,12 @@ export default function Checkout() {
                                   type="text"
                                   aria-label="Postal code"
                                   autoComplete="postal-code"
-                                  inputMode="numeric"
+                                  inputMode={isDraftNigeria ? 'numeric' : 'text'}
                                   maxLength={12}
                                   value={newAddress.postal_code || ''}
                                   onChange={(e) => setNewAddress({ ...newAddress, postal_code: e.target.value })}
                                   className="w-full border-b border-gray-300 focus:border-primary focus:outline-none py-2 text-sm"
-                                  placeholder="100001"
+                                  placeholder={isDraftNigeria ? '100001' : 'Postal / ZIP code'}
                                   required={postalCodeRequired}
                                 />
                                 {postalCodeRequired && (
@@ -2834,19 +3087,30 @@ export default function Checkout() {
                   <input
                     type="text"
                     value={promo}
-                    disabled={!!enforcedOrder}
+                    disabled={isPromoLocked}
                     onChange={(e) => setPromo(e.target.value)}
                     placeholder="Promo code"
-                    className="flex-1 border border-gray-300 rounded-sm px-3 py-2 text-sm focus:outline-none focus:border-primary"
+                    className="flex-1 border border-gray-300 rounded-sm px-3 py-2 text-sm focus:outline-none focus:border-primary disabled:bg-gray-100"
                   />
-                  <button
-                    type="button"
-                    onClick={handleApplyPromo}
-                    disabled={isApplyingPromo || !!enforcedOrder}
-                    className="px-4 py-2 rounded-sm bg-primary text-white text-sm font-semibold disabled:opacity-50"
-                  >
-                    {isApplyingPromo ? '...' : 'Apply'}
-                  </button>
+                  {appliedPromo ? (
+                    <button
+                      type="button"
+                      onClick={handleRemovePromo}
+                      disabled={isApplyingPromo || isPromoLocked}
+                      className="px-4 py-2 rounded-sm border border-gray-300 text-gray-700 text-sm font-semibold hover:bg-gray-50 disabled:opacity-50"
+                    >
+                      {isApplyingPromo ? '...' : 'Remove'}
+                    </button>
+                  ) : (
+                    <button
+                      type="button"
+                      onClick={handleApplyPromo}
+                      disabled={isApplyingPromo || isPromoLocked}
+                      className="px-4 py-2 rounded-sm bg-primary text-white text-sm font-semibold disabled:opacity-50"
+                    >
+                      {isApplyingPromo ? '...' : 'Apply'}
+                    </button>
+                  )}
                 </div>
                 {promoError && (
                   <p className="text-xs text-red-500">{promoError}</p>
@@ -2855,7 +3119,7 @@ export default function Checkout() {
                   <p className="text-xs text-green-600">
                     Promo applied! {appliedPromo.discount_type === 'percentage'
                       ? `${appliedPromo.discount_value}% off`
-                      : `${formatPrice(appliedPromo.discount_value)} off`}
+                      : `${formatPrice(convertCurrencyWithRates(appliedPromo.discount_value, 'NGN', currency, exchangeRates))} off`}
                   </p>
                 )}
               </div>

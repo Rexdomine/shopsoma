@@ -3,6 +3,7 @@ import {
   Package,
   Settings,
   ShoppingCart,
+  Tag,
   UserRound,
   Users,
   Wallet,
@@ -53,6 +54,12 @@ const overviewLinks = [
     description: 'Review vendor payout activity and records.',
     route: ROUTES.ADMIN_PAYOUTS,
     icon: Wallet,
+  },
+  {
+    label: 'Marketing & Discounts',
+    description: 'Create and manage customer checkout promo codes.',
+    route: ROUTES.ADMIN_MARKETING,
+    icon: Tag,
   },
 
   {

@@ -161,6 +161,7 @@ async def test_designer_storefront_detail_and_published_only_hydration(
         business_name="Amaka Couture",
         business_description="Bespoke evening wear crafted in Lagos.",
         logo_url="https://cdn.shopsoma.com/amaka-logo.png",
+        is_featured_storefront=True,
         kyc_status=KYCStatus.APPROVED,
         approved=True,
         is_onboarding=False,
@@ -230,6 +231,7 @@ async def test_designer_storefront_detail_and_published_only_hydration(
     assert payload["id"] == str(vendor_a.id)
     assert payload["business_name"] == "Amaka Couture"
     assert payload["business_description"] == "Bespoke evening wear crafted in Lagos."
+    assert payload["is_featured_storefront"] is True
     assert payload["campaign_image_url"] == "https://cdn.shopsoma.com/published-gown.jpg"
     assert payload["image_url"] == "https://cdn.shopsoma.com/published-gown.jpg"
     assert payload["published_products_count"] == 1

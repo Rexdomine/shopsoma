@@ -121,14 +121,110 @@ export function normalizeNigerianState(rawState?: string, fallbackText?: string)
   return '';
 }
 
-export function normalizeCountryName(rawCountry?: string): string {
-  const cleaned = (rawCountry || '').trim();
-  if (!cleaned) return 'Nigeria';
-  const lower = cleaned.toLowerCase();
-  if (lower === 'ng' || lower === 'nga' || lower === 'nigeria' || lower === 'federal republic of nigeria') {
-    return 'Nigeria';
+const COUNTRY_ALIASES: Record<string, { name: string; iso2: string }> = {
+  ng: { name: 'Nigeria', iso2: 'ng' },
+  nga: { name: 'Nigeria', iso2: 'ng' },
+  nigeria: { name: 'Nigeria', iso2: 'ng' },
+  'federal republic of nigeria': { name: 'Nigeria', iso2: 'ng' },
+  gh: { name: 'Ghana', iso2: 'gh' },
+  gha: { name: 'Ghana', iso2: 'gh' },
+  ghana: { name: 'Ghana', iso2: 'gh' },
+  'republic of ghana': { name: 'Ghana', iso2: 'gh' },
+  us: { name: 'United States', iso2: 'us' },
+  usa: { name: 'United States', iso2: 'us' },
+  'u s': { name: 'United States', iso2: 'us' },
+  'u s a': { name: 'United States', iso2: 'us' },
+  'united states': { name: 'United States', iso2: 'us' },
+  'united states of america': { name: 'United States', iso2: 'us' },
+  gb: { name: 'United Kingdom', iso2: 'gb' },
+  gbr: { name: 'United Kingdom', iso2: 'gb' },
+  uk: { name: 'United Kingdom', iso2: 'gb' },
+  'u k': { name: 'United Kingdom', iso2: 'gb' },
+  'united kingdom': { name: 'United Kingdom', iso2: 'gb' },
+  'united kingdom of great britain and northern ireland': { name: 'United Kingdom', iso2: 'gb' },
+  'great britain': { name: 'United Kingdom', iso2: 'gb' },
+  england: { name: 'United Kingdom', iso2: 'gb' },
+  scotland: { name: 'United Kingdom', iso2: 'gb' },
+  wales: { name: 'United Kingdom', iso2: 'gb' },
+  'northern ireland': { name: 'United Kingdom', iso2: 'gb' },
+  ca: { name: 'Canada', iso2: 'ca' },
+  can: { name: 'Canada', iso2: 'ca' },
+  canada: { name: 'Canada', iso2: 'ca' },
+  za: { name: 'South Africa', iso2: 'za' },
+  zaf: { name: 'South Africa', iso2: 'za' },
+  'south africa': { name: 'South Africa', iso2: 'za' },
+  'republic of south africa': { name: 'South Africa', iso2: 'za' },
+  ke: { name: 'Kenya', iso2: 'ke' },
+  ken: { name: 'Kenya', iso2: 'ke' },
+  kenya: { name: 'Kenya', iso2: 'ke' },
+  'republic of kenya': { name: 'Kenya', iso2: 'ke' },
+  ae: { name: 'United Arab Emirates', iso2: 'ae' },
+  are: { name: 'United Arab Emirates', iso2: 'ae' },
+  uae: { name: 'United Arab Emirates', iso2: 'ae' },
+  'u a e': { name: 'United Arab Emirates', iso2: 'ae' },
+  'united arab emirates': { name: 'United Arab Emirates', iso2: 'ae' },
+  fr: { name: 'France', iso2: 'fr' },
+  fra: { name: 'France', iso2: 'fr' },
+  france: { name: 'France', iso2: 'fr' },
+  'french republic': { name: 'France', iso2: 'fr' },
+  de: { name: 'Germany', iso2: 'de' },
+  deu: { name: 'Germany', iso2: 'de' },
+  germany: { name: 'Germany', iso2: 'de' },
+  'federal republic of germany': { name: 'Germany', iso2: 'de' },
+};
+
+function cleanCountryToken(value: string): string {
+  return value
+    .toLowerCase()
+    .replace(/[._()-]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+export function detectCountryCodeFromQuery(query: string): string | null {
+  const segments = query
+    .split(',')
+    .map(segment => cleanCountryToken(segment))
+    .filter(Boolean);
+  for (let i = segments.length - 1; i >= 0; i -= 1) {
+    const match = COUNTRY_ALIASES[segments[i]];
+    if (match) {
+      return match.iso2;
+    }
   }
-  return cleaned;
+  const cleanedFull = cleanCountryToken(query);
+  for (const [alias, entry] of Object.entries(COUNTRY_ALIASES)) {
+    if (alias.length < 3 && alias !== 'uk' && alias !== 'us') continue;
+    const regex = new RegExp(`(?:^|\\s)${alias.replace(/\s+/g, '\\s+')}$`, 'i');
+    if (regex.test(cleanedFull)) {
+      return entry.iso2;
+    }
+  }
+  return null;
+}
+
+export function normalizeCountryName(rawCountry?: string, fallbackText?: string): string {
+  const cleaned = (rawCountry || '').trim();
+  if (cleaned) {
+    const token = cleanCountryToken(cleaned);
+    if (COUNTRY_ALIASES[token]) {
+      return COUNTRY_ALIASES[token].name;
+    }
+    return cleaned;
+  }
+  if (fallbackText && fallbackText.trim()) {
+    const segments = fallbackText
+      .split(',')
+      .map(segment => segment.trim())
+      .filter(Boolean);
+    for (let i = segments.length - 1; i >= 0; i -= 1) {
+      const token = cleanCountryToken(segments[i]);
+      if (COUNTRY_ALIASES[token]) {
+        return COUNTRY_ALIASES[token].name;
+      }
+    }
+  }
+  return 'Nigeria';
 }
 
 export function normalizePostalCode(rawPostalCode?: string, fallbackAddress?: string): string {
@@ -178,7 +274,8 @@ function cleanAdminAreaCity(value: string): string {
 
 export function normalizePlaceToAddress(
   place: any,
-  suggestion?: AddressSuggestion
+  suggestion?: AddressSuggestion,
+  options?: { country?: string }
 ): NormalizedGoogleAddress {
   const components = parseAddressComponents(place?.address_components ?? place?.addressComponents);
   const formattedAddress = String(
@@ -233,36 +330,69 @@ export function normalizePlaceToAddress(
     addressLine1 = firstFormattedSegment;
   }
 
-  const state = normalizeNigerianState(
-    adminArea1Component?.longName || adminArea1Component?.shortName,
-    formattedAddress || suggestion?.secondaryText
+  const country = normalizeCountryName(
+    countryComponent?.longName || countryComponent?.shortName,
+    formattedAddress || suggestion?.secondaryText || options?.country
   );
+  const isNigeria = country.toLowerCase() === 'nigeria';
+
+  let state = isNigeria
+    ? normalizeNigerianState(
+        adminArea1Component?.longName || adminArea1Component?.shortName,
+        formattedAddress || suggestion?.secondaryText
+      )
+    : (
+        adminArea1Component?.longName ||
+        adminArea1Component?.shortName ||
+        adminArea2 ||
+        locality ||
+        sublocality ||
+        ''
+      ).trim();
 
   let city = locality || sublocality || adminArea2 || neighborhood;
-  if (!city && (suggestion?.secondaryText || formattedAddress)) {
+  if ((!city || (!isNigeria && !state)) && (suggestion?.secondaryText || formattedAddress)) {
     const fallbackSource = suggestion?.secondaryText || formattedAddress;
     const segments = fallbackSource
       .split(',')
       .map(segment => segment.replace(/\b\d{5,6}\b/g, '').trim())
       .filter(Boolean);
 
-    const candidateCity = segments.find(segment => {
-      const lower = segment.toLowerCase();
-      if (lower === 'nigeria' || lower === 'ng') return false;
-      if (addressLine1 && lower === addressLine1.toLowerCase()) return false;
-      if (state && cleanStateToken(segment) === cleanStateToken(state)) return false;
+    const nonCountrySegments = segments.filter(segment => {
+      const token = cleanCountryToken(segment);
+      if (!token) return false;
+      if (COUNTRY_ALIASES[token]) return false;
+      if (token === cleanCountryToken(country)) return false;
+      if (addressLine1 && token === cleanCountryToken(addressLine1)) return false;
       return true;
     });
-    if (candidateCity) {
-      city = candidateCity;
+
+    if (!city) {
+      const candidateCity = nonCountrySegments.find(segment => {
+        if (state && cleanStateToken(segment) === cleanStateToken(state)) return false;
+        return true;
+      });
+      if (candidateCity) {
+        city = candidateCity;
+      }
+    }
+
+    if (!isNigeria && !state) {
+      const candidateState = [...nonCountrySegments].reverse().find(segment => {
+        if (city && cleanStateToken(segment) === cleanStateToken(city)) return false;
+        return true;
+      });
+      state = candidateState || city || '';
     }
   }
   if (!city && state) {
-    city = state === 'Federal Capital Territory' ? 'Abuja' : state;
+    city = isNigeria && state === 'Federal Capital Territory' ? 'Abuja' : state;
+  }
+  if (!isNigeria && !state && city) {
+    state = city;
   }
 
   const postalCode = normalizePostalCode(postalCodeComponent?.longName, formattedAddress);
-  const country = normalizeCountryName(countryComponent?.longName || countryComponent?.shortName);
 
   const rawLat =
     place?.geometry?.location?.lat ??
@@ -430,7 +560,7 @@ function mapPredictionToSuggestion(prediction: any): AddressSuggestion {
 
 async function fetchPlacesNewApiSuggestions(
   query: string,
-  countryCode: string,
+  regionCodes: string[],
   apiKey: string
 ): Promise<AddressSuggestion[]> {
   let response: Response;
@@ -443,7 +573,7 @@ async function fetchPlacesNewApiSuggestions(
       },
       body: JSON.stringify({
         input: query,
-        includedRegionCodes: [countryCode],
+        includedRegionCodes: regionCodes,
       }),
     });
   } catch {
@@ -498,30 +628,46 @@ async function fetchPlacesNewApiDetails(placeId: string, apiKey: string): Promis
 
 export async function fetchAddressSuggestions(
   input: string,
-  options?: { country?: string }
+  options?: { country?: string; countries?: string[] }
 ): Promise<AddressSuggestion[]> {
   const query = input.trim();
   if (query.length < 2) {
     return [];
   }
 
-  const countryCode = (options?.country || 'ng').toLowerCase();
+  const requestedCountryCode = (options?.country || 'ng').toLowerCase();
+  const detectedCountryCode = detectCountryCodeFromQuery(query);
+  const countryCode =
+    requestedCountryCode === 'ng' && detectedCountryCode
+      ? detectedCountryCode
+      : requestedCountryCode;
+  const regionCodes =
+    options?.countries && options.countries.length > 0
+      ? detectedCountryCode
+        ? [detectedCountryCode]
+        : Array.from(new Set(options.countries.map(c => c.toLowerCase())))
+      : [countryCode];
+
   const apiKey = getConfiguredGoogleMapsApiKey();
   const places = await ensureGoogleMapsPlacesLoaded();
 
   if (typeof places.AutocompleteSuggestion?.fetchAutocompleteSuggestions === 'function') {
     try {
-      const response = await places.AutocompleteSuggestion.fetchAutocompleteSuggestions({
+      const requestPayload: Record<string, any> = {
         input: query,
-        includedRegionCodes: [countryCode],
-      });
+        includedRegionCodes: regionCodes,
+      };
+      if (regionCodes.length > 1) {
+        requestPayload.region = countryCode;
+      }
+      const response = await places.AutocompleteSuggestion.fetchAutocompleteSuggestions(requestPayload);
       const suggestions = Array.isArray(response?.suggestions) ? response.suggestions : [];
       return suggestions
         .map(mapPredictionToSuggestion)
         .filter((item: AddressSuggestion) => Boolean(item.placeId && item.mainText));
     } catch {
       if (apiKey) {
-        return fetchPlacesNewApiSuggestions(query, countryCode, apiKey);
+        return fetchPlacesNewApiSuggestions(query, regionCodes, apiKey);
       }
       throw new GoogleMapsAutocompleteError(
         'Unable to load Google Maps address suggestions right now. Please retry.',
@@ -548,7 +694,7 @@ export async function fetchAddressSuggestions(
           }
           if (status !== okStatus || !Array.isArray(predictions)) {
             if (status === 'REQUEST_DENIED' && apiKey) {
-              fetchPlacesNewApiSuggestions(query, countryCode, apiKey).then(resolve, reject);
+              fetchPlacesNewApiSuggestions(query, regionCodes, apiKey).then(resolve, reject);
               return;
             }
             reject(
@@ -571,7 +717,7 @@ export async function fetchAddressSuggestions(
   }
 
   if (apiKey) {
-    return fetchPlacesNewApiSuggestions(query, countryCode, apiKey);
+    return fetchPlacesNewApiSuggestions(query, regionCodes, apiKey);
   }
 
   throw new GoogleMapsAutocompleteError(
@@ -581,7 +727,8 @@ export async function fetchAddressSuggestions(
 }
 
 export async function resolveAddressSuggestion(
-  suggestion: AddressSuggestion
+  suggestion: AddressSuggestion,
+  options?: { country?: string }
 ): Promise<NormalizedGoogleAddress> {
   const apiKey = getConfiguredGoogleMapsApiKey();
   const places = await ensureGoogleMapsPlacesLoaded();
@@ -642,11 +789,14 @@ export async function resolveAddressSuggestion(
     };
   }
 
-  const normalized = normalizePlaceToAddress(rawPlace, suggestion);
+  const normalized = normalizePlaceToAddress(rawPlace, suggestion, options);
 
   if (!normalized.addressLine1 || !normalized.city || !normalized.state) {
+    const isNigeria = normalized.country.toLowerCase() === 'nigeria';
     throw new GoogleMapsAutocompleteError(
-      'Selected Google Maps suggestion is missing required street, city, or Nigerian state details. Please choose a more specific street address.',
+      isNigeria
+        ? 'Selected Google Maps suggestion is missing required street, city, or Nigerian state details. Please choose a more specific street address.'
+        : 'Selected Google Maps suggestion is missing required street, city, or state/province details. Please choose a more specific street address.',
       'invalid_address_details'
     );
   }

@@ -477,6 +477,31 @@ describe('Checkout M5 sequencing and recovery', () => {
     expect(mocks.createOrder).not.toHaveBeenCalled();
   });
 
+  it('requires a postal code on a saved international address whose DHL lane needs one', async () => {
+    const ukAddressWithoutPostalCode = {
+      ...address, city: 'London', state: 'London', postal_code: '', country: 'United Kingdom', phone_number: '+447700900123',
+    };
+    mocks.getAddresses.mockResolvedValueOnce({ addresses: [ukAddressWithoutPostalCode] });
+    mocks.getShippingProviderSettings.mockResolvedValueOnce({ provider: 'combined', checkout_estimates_required: true });
+    render(<MemoryRouter initialEntries={['/checkout']}><CheckoutTestRoutes /></MemoryRouter>);
+
+    await screen.findByText(/Add a postal code to the selected delivery address/i);
+    expect(screen.getByRole('button', { name: 'Continue' })).toBeDisabled();
+    expect(mocks.createOrder).not.toHaveBeenCalled();
+  });
+
+  it('keeps postal code optional for international destinations without postal codes', async () => {
+    const ghanaAddress = {
+      ...address, city: 'Accra', state: 'Greater Accra', postal_code: '', country: 'Ghana', phone_number: '+233244123456',
+    };
+    mocks.getAddresses.mockResolvedValueOnce({ addresses: [ghanaAddress] });
+    mocks.getShippingProviderSettings.mockResolvedValueOnce({ provider: 'combined', checkout_estimates_required: true });
+    render(<MemoryRouter initialEntries={['/checkout']}><CheckoutTestRoutes /></MemoryRouter>);
+
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Continue' })).toBeEnabled());
+    expect(screen.queryByText(/Add a postal code to the selected delivery address/i)).not.toBeInTheDocument();
+  });
+
   it('waits for shipping configuration before allowing a checkout address to be saved', async () => {
     mocks.auth.isAuthenticated = false;
     let resolveSettings!: (value: { provider: string; checkout_estimates_required: boolean }) => void;
@@ -2368,5 +2393,154 @@ describe('Checkout M5 sequencing and recovery', () => {
     ));
     expect(screen.queryByText(/Delivery options changed/i)).not.toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Continue to payment' })).toBeEnabled();
+  });
+
+  it('allows switching country when editing an address and selecting an international Google Maps address suggestion', async () => {
+    const ukUpdatedAddress = {
+      ...address,
+      phone_number: '+442079460991',
+      address_line1: '10 Downing Street',
+      city: 'London',
+      state: 'England',
+      postal_code: 'SW1A 2AA',
+      country: 'United Kingdom',
+    };
+    mocks.updateAddress.mockResolvedValueOnce(ukUpdatedAddress);
+
+    window.google = {
+      maps: {
+        places: {
+          PlacesServiceStatus: { OK: 'OK', ZERO_RESULTS: 'ZERO_RESULTS' },
+          AutocompleteService: function () {
+            return {
+              getPlacePredictions: (req: { input: string; componentRestrictions?: { country?: string } }, cb: (predictions: any[], status: string) => void) => {
+                if (req.componentRestrictions?.country === 'gb') {
+                  cb(
+                    [
+                      {
+                        place_id: 'place-uk-10',
+                        description: '10 Downing Street, London, UK',
+                        structured_formatting: {
+                          main_text: '10 Downing Street',
+                          secondary_text: 'London, UK',
+                        },
+                      },
+                    ],
+                    'OK'
+                  );
+                } else {
+                  cb([], 'ZERO_RESULTS');
+                }
+              },
+            };
+          },
+          PlacesService: function () {
+            return {
+              getDetails: (_req: { placeId: string }, cb: (place: any, status: string) => void) => {
+                cb(
+                  {
+                    place_id: 'place-uk-10',
+                    formatted_address: '10 Downing St, London SW1A 2AA, UK',
+                    address_components: [
+                      { long_name: '10', short_name: '10', types: ['street_number'] },
+                      { long_name: 'Downing Street', short_name: 'Downing St', types: ['route'] },
+                      { long_name: 'London', short_name: 'London', types: ['postal_town'] },
+                      { long_name: 'England', short_name: 'England', types: ['administrative_area_level_1'] },
+                      { long_name: 'SW1A 2AA', short_name: 'SW1A 2AA', types: ['postal_code'] },
+                      { long_name: 'United Kingdom', short_name: 'GB', types: ['country'] },
+                    ],
+                  },
+                  'OK'
+                );
+              },
+            };
+          },
+        },
+      },
+    } as any;
+
+    render(<MemoryRouter initialEntries={['/checkout']}><CheckoutTestRoutes /></MemoryRouter>);
+    await waitFor(() => expect(mocks.getAddresses).toHaveBeenCalled());
+
+    fireEvent.click(screen.getByRole('button', { name: 'Edit delivery address' }));
+    expect(screen.getByLabelText('Street Address')).toHaveValue('1 Test Street');
+
+    // Switching country clears the previous Nigerian address fields
+    fireEvent.change(screen.getByLabelText('Country'), { target: { value: 'United Kingdom' } });
+    expect(screen.getByLabelText('Street Address')).toHaveValue('');
+    expect(screen.getByLabelText('City')).toHaveValue('');
+    expect(screen.getByLabelText('State')).toHaveValue('');
+
+    fireEvent.change(screen.getByPlaceholderText('+14155550100'), { target: { value: '+442079460991' } });
+    fireEvent.change(screen.getByLabelText('Street Address'), { target: { value: '10 Downing Street' } });
+    fireEvent.click(await screen.findByRole('button', { name: /10 Downing Street/i }));
+
+    await waitFor(() => expect(screen.getByText(/Verified with Google Maps: 10 Downing St, London SW1A 2AA, UK/i)).toBeInTheDocument());
+    expect(screen.getByLabelText('Country')).toHaveValue('United Kingdom');
+    expect(screen.getByLabelText('City')).toHaveValue('London');
+    expect(screen.getByLabelText('State')).toHaveValue('England');
+    expect(screen.getByLabelText('Postal code')).toHaveValue('SW1A 2AA');
+
+    const saveBtn = screen.getByRole('button', { name: 'Save changes' });
+    expect(saveBtn).toBeEnabled();
+    fireEvent.click(saveBtn);
+
+    await waitFor(() => expect(mocks.updateAddress).toHaveBeenCalledWith('address-1', expect.objectContaining({
+      address_line1: '10 Downing Street',
+      city: 'London',
+      state: 'England',
+      postal_code: 'SW1A 2AA',
+      country: 'United Kingdom',
+    })));
+  });
+
+  it('applies, shows error for invalid, and removes promo codes in checkout', async () => {
+    const { checkoutService } = await import('../../services/checkoutService');
+    const validateSpy = vi.mocked(checkoutService.validatePromoCode);
+
+    mocks.getAddresses.mockResolvedValue({ addresses: [address], total: 1 });
+    validateSpy
+      .mockResolvedValueOnce({
+        valid: false,
+        message: 'Promo code expired on 2026-01-01',
+      })
+      .mockResolvedValueOnce({
+        valid: true,
+        code: 'SAVE10',
+        discount_type: 'percentage',
+        discount_value: 10,
+        discount_amount: 6000,
+        currency: 'NGN',
+        message: '₦6,000.00 discount applied',
+      });
+
+    render(<MemoryRouter initialEntries={['/checkout']}><CheckoutTestRoutes /></MemoryRouter>);
+    await waitFor(() => expect(mocks.getAddresses).toHaveBeenCalled());
+
+    const promoInput = screen.getByPlaceholderText('Promo code');
+    fireEvent.change(promoInput, { target: { value: 'EXPIRED' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Apply' }));
+
+    expect(await screen.findByText('Promo code expired on 2026-01-01')).toBeInTheDocument();
+
+    fireEvent.change(promoInput, { target: { value: 'save10' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Apply' }));
+
+    await waitFor(() => {
+      expect(validateSpy).toHaveBeenLastCalledWith(
+        expect.objectContaining({
+          code: 'SAVE10',
+          currency: 'NGN',
+        }),
+      );
+    });
+    expect(await screen.findByText(/Promo applied! 10% off/i)).toBeInTheDocument();
+    expect(screen.getByText('Promo (SAVE10)')).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Remove' }));
+    await waitFor(() => {
+      expect(screen.queryByText('Promo (SAVE10)')).not.toBeInTheDocument();
+    });
+    expect(screen.getByRole('button', { name: 'Apply' })).toBeInTheDocument();
   });
 });

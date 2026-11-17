@@ -3,7 +3,7 @@ import { createPortal } from 'react-dom';
 import api from '../../services/api';
 import { ROUTES } from '../../config/constants';
 import { createDhlBooking, getDhlLabel, getOrderDetail, recordDhlHandoff, refreshDhlTracking } from '../../services/adminOrderService';
-import type { OrderDetail } from '../../services/adminOrderService';
+import type { DhlPickupResult, OrderDetail } from '../../services/adminOrderService';
 
 const emptyHandoff = { occurred_at: '', counterparty: '', evidence_ref: '', evidence_sha256: '' };
 type Handoff = typeof emptyHandoff;
@@ -206,6 +206,23 @@ export default function DhlShipmentOperations({ order, onOrderChange, disabled =
     }
   }
 
+  async function notifyDhlForHubPickup() {
+    if (!booking || !usableBooking || running.current || locked || cancelled || held) return;
+    running.current = true; setBusy(true); setMessage('');
+    try {
+      const response = await api.post<DhlPickupResult>(
+        `/admin/orders/${order.id}/dhl/bookings/${booking.booking_id}/pickup`,
+        {}
+      );
+      await reload();
+      setMessage(`DHL hub pickup notified (Dispatch #${response.data.pickup_confirmation_number}).`);
+    } catch {
+      setMessage('DHL hub pickup notification could not be completed. Refresh shipment records and try again.');
+    } finally {
+      running.current = false; setBusy(false);
+    }
+  }
+
   const handleAutoFillHandoff = async () => {
     const occurred_at = getLocalNowString();
     const counterparty = 'DHL Express Courier';
@@ -241,7 +258,7 @@ export default function DhlShipmentOperations({ order, onOrderChange, disabled =
             DHL Shipment Operations
           </h2>
           <p className="text-xs text-gray-500 mt-1">
-            DHL pickup booking is unavailable. Record handoff only after actual collection from the ShopSoma hub.
+            DHL pickup booking is unavailable until a shipment is booked. Notify DHL for hub pickup once booked, and record handoff after collection from the ShopSoma hub.
           </p>
         </div>
         <div className="flex items-center gap-2">
@@ -408,6 +425,19 @@ export default function DhlShipmentOperations({ order, onOrderChange, disabled =
                       </span>
                     </div>
                   )}
+                  {booking.pickup_confirmation_number && (
+                    <div className="sm:col-span-2 flex flex-wrap items-center gap-2 pt-1 border-t border-gray-200/70">
+                      <span className="font-semibold text-gray-900">DHL Pickup Dispatch #:</span>
+                      <span className="font-mono font-bold text-xs text-amber-950 bg-amber-100 px-2.5 py-1 rounded border border-amber-300">
+                        {booking.pickup_confirmation_number}
+                      </span>
+                      {booking.pickup_scheduled_for && (
+                        <span className="text-xs text-gray-600">
+                          (Scheduled: {new Date(booking.pickup_scheduled_for).toLocaleString()})
+                        </span>
+                      )}
+                    </div>
+                  )}
                 </div>
 
                 {unresolved.has(booking.reconciliation_state) && (
@@ -425,6 +455,15 @@ export default function DhlShipmentOperations({ order, onOrderChange, disabled =
                   >
                     <span aria-hidden="true">📄</span>
                     Download DHL label
+                  </button>
+                  <button
+                    type="button"
+                    className={booking.pickup_confirmation_number ? btnSecondary : btnAmber}
+                    disabled={locked || !usableBooking || cancelled || held || !!booking.pickup_confirmation_number || !!booking.handoff_recorded_at}
+                    onClick={notifyDhlForHubPickup}
+                  >
+                    <span aria-hidden="true">🚚</span>
+                    {booking.pickup_confirmation_number ? `Pickup Notified (${booking.pickup_confirmation_number})` : 'Notify DHL for Hub Pickup'}
                   </button>
                   <button
                     className={btnSecondary}

@@ -57,6 +57,7 @@ from app.schemas.product import (
     VariationUpdate,
     VariationCreate,
     VariationPayload,
+    resolve_product_total_stock,
     validate_variation_inventory_shape,
 )
 from app.services.variation_persistence import (
@@ -244,6 +245,8 @@ class AdminProductResponse(BaseModel):
                             updated_at=ss.updated_at,
                         )
                     )
+
+        self.total_stock = resolve_product_total_stock(self)
 
         if self.compare_at_price is None:
             return self
@@ -1923,6 +1926,8 @@ async def list_all_products(
             .selectinload(Category.parent)
             .selectinload(Category.parent),
             selectinload(Product.shop_edit_categories),
+            selectinload(Product.variations).selectinload(Variation.size_stocks),
+            selectinload(Product.variants),
         )
     )
 
@@ -2011,7 +2016,23 @@ async def list_all_products(
                 "base_price": float(product.base_price),
                 "compare_at_price": float(product.compare_at_price) if product.compare_at_price else None,
                 "currency": product.currency,
-                "total_stock": product.total_stock,
+                "total_stock": resolve_product_total_stock(product),
+                "product_type": product.product_type.value if hasattr(product.product_type, "value") else str(product.product_type),
+                "variations": [
+                    {
+                        "id": str(v.id),
+                        "is_active": v.is_active,
+                        "size_stocks": [
+                            {
+                                "id": str(ss.id),
+                                "size": ss.size.value if hasattr(ss.size, "value") else str(ss.size),
+                                "stock": ss.stock,
+                            }
+                            for ss in (v.size_stocks or [])
+                        ],
+                    }
+                    for v in (product.variations or [])
+                ],
                 "made_to_order": product.made_to_order,
                 "made_to_order_timeline": product.made_to_order_timeline,
                 "status": product.status.value,
@@ -3761,7 +3782,14 @@ async def get_collection_products(
 
     # Get collection with products
     result = await db.execute(
-        select(ProductCollection).where(ProductCollection.id == collection_id)
+        select(ProductCollection)
+        .options(
+            selectinload(ProductCollection.products)
+            .selectinload(Product.variations)
+            .selectinload(Variation.size_stocks),
+            selectinload(ProductCollection.products).selectinload(Product.variants),
+        )
+        .where(ProductCollection.id == collection_id)
     )
     collection = result.scalar_one_or_none()
 
@@ -3779,7 +3807,7 @@ async def get_collection_products(
                 "sku": product.sku,
                 "base_price": float(product.base_price),
                 "compare_at_price": float(product.compare_at_price) if product.compare_at_price else None,
-                "total_stock": product.total_stock,
+                "total_stock": resolve_product_total_stock(product),
                 "status": product.status.value,
                 "is_featured": product.is_featured,
                 "moderation_status": product.moderation_status.value,
@@ -3875,7 +3903,14 @@ async def get_featured_products(
 
     Requires admin role
     """
-    result = await db.execute(select(Product).where(Product.is_featured == True))
+    result = await db.execute(
+        select(Product)
+        .options(
+            selectinload(Product.variations).selectinload(Variation.size_stocks),
+            selectinload(Product.variants),
+        )
+        .where(Product.is_featured == True)
+    )
     featured_products = result.scalars().all()
 
     return {
@@ -3887,7 +3922,7 @@ async def get_featured_products(
                 "sku": product.sku,
                 "base_price": float(product.base_price),
                 "compare_at_price": float(product.compare_at_price) if product.compare_at_price else None,
-                "total_stock": product.total_stock,
+                "total_stock": resolve_product_total_stock(product),
                 "status": product.status.value,
                 "is_featured": product.is_featured,
                 "moderation_status": product.moderation_status.value,

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { Link, useLocation, useNavigate, useNavigationType, useSearchParams } from 'react-router-dom';
 import { ArrowLeft, ArrowRight, ChevronDown, ChevronLeft, ChevronRight, X } from 'lucide-react';
 import Layout from '../../components/layout/Layout';
@@ -95,6 +95,8 @@ type ProductListProps = {
   /** The API has already applied the requested category association filter. */
   serverFilteredCategory?: boolean;
   heroOverride?: HeroContent;
+  storefrontHeader?: ReactNode;
+  designerMode?: boolean;
   categoryNav?: Category[];
   categoryNavAsTabs?: boolean;
   childCategoryOverrides?: Record<string, Category[]>;
@@ -222,6 +224,8 @@ export default function ProductList({
   initialParams,
   serverFilteredCategory = false,
   heroOverride,
+  storefrontHeader,
+  designerMode = false,
   categoryNav,
   categoryNavAsTabs = false,
   childCategoryOverrides,
@@ -563,7 +567,7 @@ export default function ProductList({
 
   // Sync filters.category when preference changes while curated filter is active
   useEffect(() => {
-    if (presetCategory) return;
+    if (presetCategory || designerMode) return;
     if (curatedFilterApplied) {
       if (interestCategory) {
         // Update to the new preference category
@@ -580,7 +584,7 @@ export default function ProductList({
         setCuratedFilterApplied(false);
       }
     }
-  }, [preferredInterest, interestCategory, curatedFilterApplied, presetCategory]);
+  }, [preferredInterest, interestCategory, curatedFilterApplied, presetCategory, designerMode]);
 
   const filterMenuRef = useRef<HTMLDivElement>(null);
 
@@ -1277,51 +1281,53 @@ export default function ProductList({
   return (
     <Layout>
       {/* Store Hero Section */}
-      <section
-        className="relative w-full min-h-[50vh] overflow-hidden flex items-end"
-      >
-        <picture className="absolute inset-0" aria-hidden="true">
-          {heroContent.mobileImageUrl && (
-            <source media="(max-width: 639px)" srcSet={heroContent.mobileImageUrl} />
-          )}
-          <img
-            src={heroContent.imageUrl}
-            alt=""
-            onError={(event) => {
-              const fallback = '/images/hero/shop-edits-2088.jpg';
-              if (!event.currentTarget.src.endsWith(fallback)) {
-                event.currentTarget.src = fallback;
-              }
-            }}
-            className={`h-full w-full object-cover ${heroContent.imagePositionClassName || 'object-center'}`}
-          />
-        </picture>
-        {/* Dark overlay for text legibility */}
-        <div className="absolute inset-0 bg-black/20" />
+      {storefrontHeader ?? (
+        <section
+          className="relative w-full min-h-[50vh] overflow-hidden flex items-end"
+        >
+          <picture className="absolute inset-0" aria-hidden="true">
+            {heroContent.mobileImageUrl && (
+              <source media="(max-width: 639px)" srcSet={heroContent.mobileImageUrl} />
+            )}
+            <img
+              src={heroContent.imageUrl}
+              alt=""
+              onError={(event) => {
+                const fallback = '/images/hero/shop-edits-2088.jpg';
+                if (!event.currentTarget.src.endsWith(fallback)) {
+                  event.currentTarget.src = fallback;
+                }
+              }}
+              className={`h-full w-full object-cover ${heroContent.imagePositionClassName || 'object-center'}`}
+            />
+          </picture>
+          {/* Dark overlay for text legibility */}
+          <div className="absolute inset-0 bg-black/20" />
 
-        {/* Overlay content - Left positioned */}
-        <div className="relative z-10 max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 w-full pb-8 sm:pb-12 lg:pb-16">
-          <div className="max-w-md">
-            <h1
-              className="text-2xl sm:text-3xl lg:text-4xl font-display text-white mb-3 sm:mb-4 break-words"
-              style={{ textShadow: '0 2px 8px rgba(0,0,0,0.4)' }}
-            >
-              {heroContent.title}
-            </h1>
-            <p
-              className="text-xs sm:text-sm font-serif text-white/95 leading-relaxed mb-4 sm:mb-6 break-words"
-              style={{ textShadow: '0 1px 4px rgba(0,0,0,0.3)' }}
-            >
-              {heroContent.body}
-            </p>
-            <button
-              className="inline-block px-5 sm:px-6 py-2 sm:py-2.5 bg-white/10 backdrop-blur-sm border border-white text-white text-[11px] sm:text-xs font-ui uppercase tracking-[0.2em] hover:bg-white hover:text-dark transition-all max-w-full truncate"
-            >
-              {heroContent.ctaLabel || 'Learn More'}
-            </button>
+          {/* Overlay content - Left positioned */}
+          <div className="relative z-10 max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 w-full pb-8 sm:pb-12 lg:pb-16">
+            <div className="max-w-md">
+              <h1
+                className="text-2xl sm:text-3xl lg:text-4xl font-display text-white mb-3 sm:mb-4 break-words"
+                style={{ textShadow: '0 2px 8px rgba(0,0,0,0.4)' }}
+              >
+                {heroContent.title}
+              </h1>
+              <p
+                className="text-xs sm:text-sm font-serif text-white/95 leading-relaxed mb-4 sm:mb-6 break-words"
+                style={{ textShadow: '0 1px 4px rgba(0,0,0,0.3)' }}
+              >
+                {heroContent.body}
+              </p>
+              <button
+                className="inline-block px-5 sm:px-6 py-2 sm:py-2.5 bg-white/10 backdrop-blur-sm border border-white text-white text-[11px] sm:text-xs font-ui uppercase tracking-[0.2em] hover:bg-white hover:text-dark transition-all max-w-full truncate"
+              >
+                {heroContent.ctaLabel || 'Learn More'}
+              </button>
+            </div>
           </div>
-        </div>
-      </section>
+        </section>
+      )}
 
       {/* Filter Bar + Search Row */}
       <section className="bg-[var(--color-page-bg)] border-b border-gray-200 w-full overflow-hidden">
@@ -1770,7 +1776,7 @@ export default function ProductList({
       <section className="bg-[var(--color-page-bg)] py-12">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
           <div className="space-y-8">
-              {preferredInterest && !showInterestBanner && (
+              {!designerMode && preferredInterest && !showInterestBanner && (
                 <div className="text-right">
                   <button
                     type="button"
@@ -1787,7 +1793,7 @@ export default function ProductList({
                 </div>
               )}
 
-              {preferredInterest && showInterestBanner && (
+              {!designerMode && preferredInterest && showInterestBanner && (
                 <div className="border border-gray-200 rounded-sm p-4 text-sm text-gray-700 bg-gray-50">
                   <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
                     <div>

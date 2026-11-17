@@ -904,6 +904,15 @@ async def bulk_upload_variable_products(
 
     created = 0
     for group in grouped.values():
+        total_variable_stock = (
+            0
+            if group["made_to_order"]
+            else sum(
+                size_data["stock"]
+                for v in group["variations"].values()
+                for size_data in v["sizes"]
+            )
+        )
         product = Product(
             vendor_id=vendor.id,
             title=group["title"],
@@ -914,7 +923,7 @@ async def bulk_upload_variable_products(
             base_price=group["base_price"],
             compare_at_price=group["compare_at_price"],
             currency=group["currency"],
-            total_stock=0,
+            total_stock=total_variable_stock,
             status=ProductStatus.DRAFT,
             is_featured=False,
             product_type=ProductType.VARIABLE,
@@ -1101,7 +1110,29 @@ async def list_products(
 
     # In stock
     if in_stock:
-        filters.append(Product.total_stock > 0)
+        filters.append(
+            or_(
+                Product.total_stock > 0,
+                and_(
+                    Product.made_to_order.is_(False),
+                    Product.variations.any(
+                        and_(
+                            Variation.is_active.is_(True),
+                            Variation.size_stocks.any(SizeStock.stock > 0),
+                        )
+                    ),
+                ),
+                and_(
+                    Product.made_to_order.is_(False),
+                    Product.variants.any(
+                        and_(
+                            ProductVariant.is_available.is_(True),
+                            ProductVariant.stock > 0,
+                        )
+                    ),
+                ),
+            )
+        )
 
     # Apply all filters
     if filters:

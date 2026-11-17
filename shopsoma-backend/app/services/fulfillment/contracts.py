@@ -8,6 +8,49 @@ from enum import Enum
 from uuid import UUID
 
 _SHA256_PATTERN = re.compile(r"[0-9a-fA-F]{64}\Z")
+_ISO_COUNTRY_CODE_PATTERN = re.compile(r"[A-Z]{2}\Z")
+
+COUNTRY_NAME_TO_ISO2: dict[str, str] = {
+    "NG": "NG",
+    "NIGERIA": "NG",
+    "GH": "GH",
+    "GHANA": "GH",
+    "US": "US",
+    "USA": "US",
+    "UNITED STATES": "US",
+    "UNITED STATES OF AMERICA": "US",
+    "GB": "GB",
+    "UK": "GB",
+    "UNITED KINGDOM": "GB",
+    "GREAT BRITAIN": "GB",
+    "CA": "CA",
+    "CANADA": "CA",
+    "ZA": "ZA",
+    "SOUTH AFRICA": "ZA",
+    "KE": "KE",
+    "KENYA": "KE",
+    "AE": "AE",
+    "UAE": "AE",
+    "UNITED ARAB EMIRATES": "AE",
+    "FR": "FR",
+    "FRANCE": "FR",
+    "DE": "DE",
+    "GERMANY": "DE",
+}
+
+
+def resolve_country_code(country: str | None) -> str | None:
+    """Resolve a human country name or ISO-2 code into an uppercase ISO-2 code."""
+    if not isinstance(country, str):
+        return None
+    cleaned = " ".join(country.strip().split()).upper()
+    if not cleaned:
+        return None
+    if cleaned in COUNTRY_NAME_TO_ISO2:
+        return COUNTRY_NAME_TO_ISO2[cleaned]
+    if _ISO_COUNTRY_CODE_PATTERN.fullmatch(cleaned):
+        return cleaned
+    return None
 
 
 def _require_non_empty(value: str, field_name: str) -> None:
@@ -66,6 +109,59 @@ class DomesticAddress:
             _require_non_empty(self.postal_code, "postal_code")
         if self.country_code != "NG":
             raise ValueError("country_code must be NG")
+
+
+@dataclass(frozen=True, slots=True)
+class ShippingAddress(DomesticAddress):
+    """Delivery address supporting both domestic (NG) and allow-listed export countries."""
+
+    def __post_init__(self) -> None:
+        for name in ("contact_name", "phone", "line1", "city", "state"):
+            _require_non_empty(getattr(self, name), name)
+        if self.line2 is not None:
+            _require_non_empty(self.line2, "line2")
+        if self.postal_code is not None:
+            _require_non_empty(self.postal_code, "postal_code")
+        if not isinstance(self.country_code, str) or not _ISO_COUNTRY_CODE_PATTERN.fullmatch(
+            self.country_code
+        ):
+            raise ValueError("country_code must be a 2-letter uppercase ISO code")
+
+
+def build_shipping_address(
+    *,
+    contact_name: str,
+    phone: str,
+    line1: str,
+    city: str,
+    state: str,
+    postal_code: str | None = None,
+    country_code: str = "NG",
+    line2: str | None = None,
+) -> DomesticAddress:
+    """Construct DomesticAddress for NG or ShippingAddress for international destinations."""
+    normalized_code = resolve_country_code(country_code) or country_code
+    if normalized_code == "NG":
+        return DomesticAddress(
+            contact_name=contact_name,
+            phone=phone,
+            line1=line1,
+            city=city,
+            state=state,
+            postal_code=postal_code,
+            country_code="NG",
+            line2=line2,
+        )
+    return ShippingAddress(
+        contact_name=contact_name,
+        phone=phone,
+        line1=line1,
+        city=city,
+        state=state,
+        postal_code=postal_code,
+        country_code=normalized_code,
+        line2=line2,
+    )
 
 
 @dataclass(frozen=True, slots=True)
