@@ -9,6 +9,7 @@ quoting, shipment booking, label download, tracking, and handoff.
 from __future__ import annotations
 
 from collections import defaultdict
+from dataclasses import dataclass
 from datetime import date, time, timedelta
 from decimal import Decimal
 import hashlib
@@ -165,42 +166,38 @@ async def _ensure_active_nigerian_hub(
 async def _compute_parcel_measurements(
     db: AsyncSession,
     *,
-    items: list[OrderItem],
+    order: Order,
 ) -> tuple[Decimal, Decimal, Decimal, Decimal]:
-    total_weight = Decimal("0.000")
-    max_length = Decimal("30.000")
-    max_width = Decimal("25.000")
-    total_height = Decimal("0.000")
+    """Aggregate the packed parcel exactly the way checkout rated it.
 
-    product_ids = [item.product_id for item in items if item.product_id is not None]
-    profiles_by_product: dict[uuid.UUID, ProductLogisticsProfile] = {}
-    if product_ids:
-        rows = (
-            await db.execute(
-                select(ProductLogisticsProfile).where(
-                    ProductLogisticsProfile.product_id.in_(product_ids)
-                )
-            )
-        ).scalars().all()
-        profiles_by_product = {row.product_id: row for row in rows}
+    Uses the same per-item resolver as the checkout DHL estimate (variant/product
+    logistics profile, then the vendor's product measurements, then a category
+    estimate for any value the vendor left blank), so the parcel booked with DHL
+    matches the parcel the customer was quoted for.
+    """
+    # Local import: the checkout estimate module imports DHL services at load time.
+    from app.services.checkout.estimates import _authoritative_parcel_measurements
 
-    for item in items:
+    measurements = await _authoritative_parcel_measurements(db, order)
+    total_weight = Decimal("0")
+    max_length = Decimal("0")
+    max_width = Decimal("0")
+    max_height = Decimal("0")
+    total_volume = Decimal("0")
+    for item, _product, _profile, values in measurements:
         qty = max(int(item.quantity or 1), 1)
-        profile = profiles_by_product.get(item.product_id) if item.product_id else None
-        if profile is not None:
-            total_weight += Decimal(str(profile.weight_kg)) * qty
-            max_length = max(max_length, Decimal(str(profile.length_cm)))
-            max_width = max(max_width, Decimal(str(profile.width_cm)))
-            total_height += Decimal(str(profile.height_cm)) * qty
-        else:
-            total_weight += Decimal("0.600") * qty
-            total_height += Decimal("5.000") * qty
-
-    if total_weight <= 0:
-        total_weight = Decimal("1.250")
-    if total_height <= 0:
-        total_height = Decimal("10.000")
-
+        weight_kg, length_cm, width_cm, height_cm = (Decimal(str(v)) for v in values)
+        total_weight += weight_kg * qty
+        max_length = max(max_length, length_cm)
+        max_width = max(max_width, width_cm)
+        max_height = max(max_height, height_cm)
+        total_volume += length_cm * width_cm * height_cm * qty
+    if total_weight <= 0 or max_length <= 0 or max_width <= 0:
+        total_weight = max(total_weight, Decimal("1.250"))
+        max_length = max(max_length, Decimal("30"))
+        max_width = max(max_width, Decimal("25"))
+    stacked_height = (total_volume / (max_length * max_width)) if total_volume > 0 else Decimal("0")
+    total_height = max(max_height, stacked_height, Decimal("1"))
     return (
         total_weight.quantize(Decimal("0.001")),
         max_length.quantize(Decimal("0.001")),
@@ -475,6 +472,7 @@ async def prepare_dhl_hub_package_for_order(
     *,
     order_id: uuid.UUID,
     actor_id: uuid.UUID | None = None,
+    measurement: "HubParcelMeasurement | None" = None,
 ) -> dict[str, Any]:
     """Idempotently prepare the Hub package, seal, custody stream, intent, and quote for an order."""
     order = (
@@ -750,20 +748,112 @@ async def prepare_dhl_hub_package_for_order(
     db.add(package)
     await db.flush()
 
-    weight_kg, length_cm, width_cm, height_cm = await _compute_parcel_measurements(
-        db, items=list(order.items)
+    if measurement is not None:
+        parcel = measurement
+        measurement_source = "hub_measured"
+    else:
+        weight_kg, length_cm, width_cm, height_cm = await _compute_parcel_measurements(
+            db, order=order
+        )
+        parcel = HubParcelMeasurement(
+            weight_kg=weight_kg, length_cm=length_cm, width_cm=width_cm, height_cm=height_cm
+        )
+        measurement_source = "estimated"
+
+    composition = [
+        PackedLine(
+            vendor_id=vendor_id,
+            cohort_id=cohorts_by_vendor[vendor_id].id,
+            order_item_id=item.id,
+            quantity=item.quantity,
+        )
+        for vendor_id, vendor_items in items_by_vendor.items()
+        for item in vendor_items
+    ]
+    seal = await _pack_seal_and_stage_version(
+        db,
+        order=order,
+        hub=hub,
+        package=package,
+        version_number=1,
+        parcel=parcel,
+        measurement_source=measurement_source,
+        reason=None,
+        composition=composition,
+        operator_id=operator_id,
     )
+    intent = await _create_intent_and_selected_quote(
+        db,
+        order=order,
+        hub=hub,
+        package=package,
+        version_number=1,
+        seal=seal,
+        operator_id=operator_id,
+    )
+
+    return {
+        "order_id": order.id,
+        "package_id": package.id,
+        "package_version": 1,
+        "seal_id": seal.id,
+        "intent_id": intent.id,
+        "hub_id": hub.id,
+        "replayed": False,
+    }
+
+
+@dataclass(frozen=True, slots=True)
+class HubParcelMeasurement:
+    """One physical piece as packed at the hub (already DHL-normalized when measured)."""
+
+    weight_kg: Decimal
+    length_cm: Decimal
+    width_cm: Decimal
+    height_cm: Decimal
+    box_preset_code: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class PackedLine:
+    vendor_id: uuid.UUID
+    cohort_id: uuid.UUID
+    order_item_id: uuid.UUID
+    quantity: int
+
+
+async def _pack_seal_and_stage_version(
+    db: AsyncSession,
+    *,
+    order: Order,
+    hub: FulfillmentHub,
+    package: HubPackage,
+    version_number: int,
+    parcel: HubParcelMeasurement,
+    measurement_source: str,
+    reason: str | None,
+    composition: list[PackedLine],
+    operator_id: uuid.UUID,
+) -> HubPackageSeal:
+    """Record one package version: measurements, composition, seal, ready, custody to 'staged'.
+
+    The package must already be in ``packing`` state at ``version_number``.
+    """
     packed_at = await db.scalar(text("SELECT clock_timestamp()"))
     assert packed_at is not None
     version = HubPackageVersion(
         package_id=package.id,
-        version=1,
+        version=version_number,
+        previous_version=version_number - 1 if version_number > 1 else None,
         order_id=order.id,
         hub_id=hub.id,
-        weight_kg=weight_kg,
-        length_cm=length_cm,
-        width_cm=width_cm,
-        height_cm=height_cm,
+        weight_kg=parcel.weight_kg,
+        length_cm=parcel.length_cm,
+        width_cm=parcel.width_cm,
+        height_cm=parcel.height_cm,
+        measurement_source=measurement_source,
+        box_preset_code=parcel.box_preset_code,
+        reason=reason,
         packed_by_id=operator_id,
         packed_at=packed_at,
         created_at=packed_at,
@@ -771,30 +861,28 @@ async def prepare_dhl_hub_package_for_order(
     db.add(version)
     await db.flush()
 
-    for vendor_id, vendor_items in items_by_vendor.items():
-        cohort = cohorts_by_vendor[vendor_id]
-        for item in vendor_items:
-            item_created = await db.scalar(text("SELECT clock_timestamp()"))
-            db.add(
-                HubPackageItem(
-                    package_id=package.id,
-                    package_version=1,
-                    order_id=order.id,
-                    hub_id=hub.id,
-                    cohort_id=cohort.id,
-                    vendor_id=vendor_id,
-                    order_item_id=item.id,
-                    quantity=item.quantity,
-                    created_at=item_created,
-                )
+    for line in composition:
+        item_created = await db.scalar(text("SELECT clock_timestamp()"))
+        db.add(
+            HubPackageItem(
+                package_id=package.id,
+                package_version=version_number,
+                order_id=order.id,
+                hub_id=hub.id,
+                cohort_id=line.cohort_id,
+                vendor_id=line.vendor_id,
+                order_item_id=line.order_item_id,
+                quantity=line.quantity,
+                created_at=item_created,
             )
+        )
     await db.flush()
 
     applied_at = await db.scalar(text("SELECT clock_timestamp()"))
     assert applied_at is not None
     seal = HubPackageSeal(
         package_id=package.id,
-        package_version=1,
+        package_version=version_number,
         opaque_value=f"seal-{uuid.uuid4().hex}",
         applied_by_id=operator_id,
         applied_at=applied_at,
@@ -805,7 +893,7 @@ async def prepare_dhl_hub_package_for_order(
     sealed_at = await db.scalar(text("SELECT clock_timestamp()"))
     await db.execute(
         text(
-            "UPDATE hub_packages SET state='sealed', sealed_at=:at, row_version=2 "
+            "UPDATE hub_packages SET state='sealed', sealed_at=:at, row_version=row_version+1 "
             "WHERE id=:id"
         ),
         {"id": package.id, "at": sealed_at},
@@ -813,25 +901,28 @@ async def prepare_dhl_hub_package_for_order(
     ready_at = await db.scalar(text("SELECT clock_timestamp()"))
     await db.execute(
         text(
-            "UPDATE hub_packages SET state='ready', ready_at=:at, row_version=3 "
+            "UPDATE hub_packages SET state='ready', ready_at=:at, row_version=row_version+1 "
             "WHERE id=:id"
         ),
         {"id": package.id, "at": ready_at},
     )
     await db.refresh(package)
 
-    # Create custody streams up to 'staged' (leaving 'released' for post-booking
-    # so booking/quote preflight sees no handoff events yet).
-    for vendor_id, cohort in cohorts_by_vendor.items():
+    # Custody streams up to 'staged' (leaving 'released' for post-booking so
+    # booking/quote preflight sees no handoff events yet).
+    stream_subjects = sorted(
+        {(line.cohort_id, line.vendor_id) for line in composition}, key=lambda s: (str(s[0]), str(s[1]))
+    )
+    for cohort_id, vendor_id in stream_subjects:
         stream_created = await db.scalar(text("SELECT clock_timestamp()"))
         assert stream_created is not None
         stream = CustodyStream(
-            cohort_id=cohort.id,
+            cohort_id=cohort_id,
             order_id=order.id,
             vendor_id=vendor_id,
             hub_id=hub.id,
             package_id=package.id,
-            package_version=1,
+            package_version=version_number,
             created_at=stream_created,
         )
         db.add(stream)
@@ -849,7 +940,7 @@ async def prepare_dhl_hub_package_for_order(
                 stream_id=stream.id,
                 version=pos,
                 previous_event_id=None if previous is None else previous.id,
-                cohort_id=cohort.id,
+                cohort_id=cohort_id,
                 order_id=order.id,
                 vendor_id=vendor_id,
                 hub_id=hub.id,
@@ -864,13 +955,25 @@ async def prepare_dhl_hub_package_for_order(
                 created_at=ev_time,
                 location="Lagos Hub",
                 package_id=package.id,
-                package_version=1,
+                package_version=version_number,
                 seal_id=None if event_type == "packed" else seal.id,
             )
             db.add(ev)
             await db.flush()
             previous = ev
+    return seal
 
+
+async def _create_intent_and_selected_quote(
+    db: AsyncSession,
+    *,
+    order: Order,
+    hub: FulfillmentHub,
+    package: HubPackage,
+    version_number: int,
+    seal: HubPackageSeal,
+    operator_id: uuid.UUID,
+) -> OutboundShipmentIntent:
     addr = order.shipping_address
     dest_name = (
         (getattr(addr, "full_name", None) if addr else None)
@@ -910,7 +1013,7 @@ async def prepare_dhl_hub_package_for_order(
     assert intent_created is not None
     intent = OutboundShipmentIntent(
         package_id=package.id,
-        package_version=1,
+        package_version=version_number,
         seal_id=seal.id,
         order_id=order.id,
         origin_hub_id=hub.id,
@@ -923,7 +1026,11 @@ async def prepare_dhl_hub_package_for_order(
         destination_postal_code=dest_postal,
         destination_country_code=dest_country_code,
         source_command="prepare_outbound",
-        idempotency_key=f"prep-intent-{package.id.hex}",
+        idempotency_key=(
+            f"prep-intent-{package.id.hex}"
+            if version_number == 1
+            else f"prep-intent-{package.id.hex}-v{version_number}"
+        ),
         created_by_id=operator_id,
         created_at=intent_created,
     )
@@ -939,15 +1046,216 @@ async def prepare_dhl_hub_package_for_order(
         intent=intent,
         operator_id=operator_id,
     )
+    return intent
 
+
+class HubMeasurementConflictError(ValueError):
+    """The package can no longer be re-measured (e.g. DHL label already booked)."""
+
+
+async def record_hub_parcel_measurement(
+    db: AsyncSession,
+    *,
+    order_id: uuid.UUID,
+    actor_id: uuid.UUID,
+    parcel: HubParcelMeasurement,
+) -> dict[str, Any]:
+    """Record the hub-measured parcel for an order before DHL booking.
+
+    * No ready package yet: prepare the package with these measurements.
+    * Ready package still estimated (or measured differently) and not booked:
+      repack to a new immutable version through the audited lifecycle
+      (invalidate intent -> retire seal -> new version -> re-seal -> new intent).
+    * Same measurements already recorded: idempotent replay.
+    """
+    from app.models.dhl_shipment import OutboundIntentShipmentGuard, OutboundShipmentBooking
+
+    package = (
+        await db.execute(
+            select(HubPackage)
+            .where(HubPackage.order_id == order_id, HubPackage.state == "ready")
+            .order_by(HubPackage.ready_at.desc(), HubPackage.created_at.desc())
+            .limit(1)
+            .with_for_update()
+        )
+    ).scalar_one_or_none()
+    if package is None:
+        result = await prepare_dhl_hub_package_for_order(
+            db, order_id=order_id, actor_id=actor_id, measurement=parcel
+        )
+        if result.get("replayed"):
+            # A concurrent preparation won; fall through to the repack path.
+            return await record_hub_parcel_measurement(
+                db, order_id=order_id, actor_id=actor_id, parcel=parcel
+            )
+        return {**result, "measured": True}
+
+    current = await db.get(HubPackageVersion, (package.id, package.current_version))
+    if current is None:
+        raise HubMeasurementConflictError("package version record is missing")
+    if (
+        current.measurement_source == "hub_measured"
+        and Decimal(current.weight_kg) == parcel.weight_kg
+        and Decimal(current.length_cm) == parcel.length_cm
+        and Decimal(current.width_cm) == parcel.width_cm
+        and Decimal(current.height_cm) == parcel.height_cm
+        and (current.box_preset_code or None) == (parcel.box_preset_code or None)
+    ):
+        return {
+            "order_id": order_id,
+            "package_id": package.id,
+            "package_version": package.current_version,
+            "replayed": True,
+            "measured": True,
+        }
+
+    handed_off = await db.scalar(
+        select(CustodyEvent.id)
+        .where(
+            CustodyEvent.package_id == package.id,
+            CustodyEvent.package_version == package.current_version,
+            CustodyEvent.event_type.in_(("released", "tendered", "provider_accepted")),
+        )
+        .limit(1)
+    )
+    if handed_off is not None:
+        raise HubMeasurementConflictError("parcel has already been handed to DHL")
+
+    blocking_booking = await db.scalar(
+        select(OutboundShipmentBooking.id)
+        .where(
+            OutboundShipmentBooking.package_id == package.id,
+            OutboundShipmentBooking.package_version == package.current_version,
+            OutboundShipmentBooking.classification != "failure",
+        )
+        .limit(1)
+    )
+    if blocking_booking is not None:
+        raise HubMeasurementConflictError(
+            "a DHL shipment already exists for this parcel; cancel it with DHL before re-measuring"
+        )
+
+    intent = (
+        await db.execute(
+            select(OutboundShipmentIntent)
+            .where(
+                OutboundShipmentIntent.package_id == package.id,
+                OutboundShipmentIntent.package_version == package.current_version,
+                ~select(OutboundShipmentIntentInvalidation.id)
+                .where(OutboundShipmentIntentInvalidation.intent_id == OutboundShipmentIntent.id)
+                .exists(),
+            )
+            .with_for_update()
+        )
+    ).scalar_one_or_none()
+    if intent is not None:
+        guard = await db.get(OutboundIntentShipmentGuard, intent.id)
+        if guard is not None and (guard.active_booking_id is not None or guard.booking_blocked_reason):
+            raise HubMeasurementConflictError(
+                "a DHL booking is in progress or needs reconciliation for this parcel"
+            )
+
+    order = (
+        await db.execute(
+            select(Order)
+            .options(selectinload(Order.shipping_address), selectinload(Order.customer))
+            .where(Order.id == order_id)
+        )
+    ).scalar_one()
+    hub = await db.get(FulfillmentHub, package.hub_id)
+    if hub is None:
+        raise HubMeasurementConflictError("package hub not found")
+    composition = [
+        PackedLine(
+            vendor_id=row.vendor_id,
+            cohort_id=row.cohort_id,
+            order_item_id=row.order_item_id,
+            quantity=row.quantity,
+        )
+        for row in (
+            await db.execute(
+                select(HubPackageItem)
+                .where(
+                    HubPackageItem.package_id == package.id,
+                    HubPackageItem.package_version == package.current_version,
+                )
+                .order_by(HubPackageItem.vendor_id, HubPackageItem.order_item_id)
+            )
+        ).scalars()
+    ]
+    if not composition:
+        raise HubMeasurementConflictError("package has no packed items")
+
+    reason = "Hub measured parcel" + (f" ({parcel.box_preset_code})" if parcel.box_preset_code else "")
+    if intent is not None:
+        invalidated_at = await db.scalar(text("SELECT clock_timestamp()"))
+        db.add(
+            OutboundShipmentIntentInvalidation(
+                intent_id=intent.id,
+                reason=reason,
+                actor_type="user",
+                actor_id=str(actor_id),
+                source_command="record_hub_parcel_measurement",
+                idempotency_key=f"hub-measure-{intent.id.hex}",
+                invalidated_at=invalidated_at,
+            )
+        )
+        await db.flush()
+    retired_at = await db.scalar(text("SELECT clock_timestamp()"))
+    await db.execute(
+        text(
+            "UPDATE hub_package_seals SET retired_at=:at, retired_by_id=:actor, "
+            "retirement_reason=:reason WHERE package_id=:pkg AND package_version=:ver "
+            "AND retired_at IS NULL"
+        ),
+        {
+            "at": retired_at,
+            "actor": actor_id,
+            "reason": reason,
+            "pkg": package.id,
+            "ver": package.current_version,
+        },
+    )
+    await db.execute(
+        text(
+            "UPDATE hub_packages SET state='packing', current_version=current_version+1, "
+            "sealed_at=NULL, ready_at=NULL, row_version=row_version+1 WHERE id=:id"
+        ),
+        {"id": package.id},
+    )
+    await db.refresh(package)
+    new_version = package.current_version
+
+    seal = await _pack_seal_and_stage_version(
+        db,
+        order=order,
+        hub=hub,
+        package=package,
+        version_number=new_version,
+        parcel=parcel,
+        measurement_source="hub_measured",
+        reason=reason,
+        composition=composition,
+        operator_id=actor_id,
+    )
+    new_intent = await _create_intent_and_selected_quote(
+        db,
+        order=order,
+        hub=hub,
+        package=package,
+        version_number=new_version,
+        seal=seal,
+        operator_id=actor_id,
+    )
     return {
-        "order_id": order.id,
+        "order_id": order_id,
         "package_id": package.id,
-        "package_version": 1,
+        "package_version": new_version,
         "seal_id": seal.id,
-        "intent_id": intent.id,
+        "intent_id": new_intent.id,
         "hub_id": hub.id,
         "replayed": False,
+        "measured": True,
     }
 
 

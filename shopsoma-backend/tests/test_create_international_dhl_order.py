@@ -160,7 +160,8 @@ async def test_create_international_dhl_order_to_ghana_selects_dhl_without_creat
     dhl_ops = prep_res.json()["dhl_operations"]
     assert len(dhl_ops["packages"]) == 1
     assert dhl_ops["packages"][0]["package_state"] == "ready"
-    assert dhl_ops["packages"][0]["selection_eligible"] is True
+    # Ready, but booking waits for the hub to weigh and measure the parcel.
+    assert dhl_ops["packages"][0]["selection_blockers"] == ["parcel_not_measured"]
     assert dhl_ops["bookings"] == []  # Still NO shipment booked!
 
     intent = await db_session.scalar(

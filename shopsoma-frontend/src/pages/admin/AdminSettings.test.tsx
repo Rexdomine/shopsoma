@@ -8,6 +8,7 @@ const mocks = vi.hoisted(() => ({
   previewManualShippingRates: vi.fn(), updateShippingProviderSettings: vi.fn(),
 }));
 vi.mock('../../components/admin/AdminSidebar', () => ({ default: () => null }));
+vi.mock('../../components/admin/ShippingBoxSettings', () => ({ default: () => null }));
 vi.mock('../../hooks/useCurrency', () => ({ useCurrency: () => ({ fetchExchangeRate: vi.fn() }) }));
 vi.mock('../../services/settingsService', () => ({
   ...mocks,

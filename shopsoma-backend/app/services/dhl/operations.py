@@ -4,11 +4,13 @@ Only explicit safe columns are selected. Never invoke shipment commands from GET
 """
 
 from datetime import datetime
+from decimal import Decimal
 from uuid import UUID
 
 from sqlalchemy import and_, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.services.dhl.parcel_limits import billable_weight_kg, volumetric_weight_kg
 from app.models.order import Order
 from app.models.package_custody import (
     CustodyEvent,
@@ -160,7 +162,16 @@ def operations_snapshot_query(order_id: UUID):
         ).label("handoffs"),
         _rows(selected_quotes).label("quotes"),
         _rows(
-            select(HubPackageVersion.package_id, HubPackageVersion.version).where(
+            select(
+                HubPackageVersion.package_id,
+                HubPackageVersion.version,
+                HubPackageVersion.weight_kg,
+                HubPackageVersion.length_cm,
+                HubPackageVersion.width_cm,
+                HubPackageVersion.height_cm,
+                HubPackageVersion.measurement_source,
+                HubPackageVersion.box_preset_code,
+            ).where(
                 HubPackageVersion.package_id.in_(package_ids)
             )
         ).label("versions"),
@@ -176,7 +187,35 @@ def _date(value):
     return datetime.fromisoformat(value) if isinstance(value, str) else value
 
 
-def project_operations(snapshot):
+def _parcel_projection(versions, package_id, version):
+    """Measurements of the current package version plus DHL billing context."""
+    rows = [r for r in versions if r["package_id"] == package_id]
+    current = next((r for r in rows if r["version"] == version), None)
+    if current is None or current.get("weight_kg") is None:
+        return {}
+    # Latest catalog-derived weight of the packed contents (no box), used by
+    # the admin form to suggest a scale reading for the chosen box.
+    estimated = sorted(
+        (r for r in rows if r.get("measurement_source", "estimated") == "estimated"),
+        key=lambda r: r["version"],
+    )
+    values = [Decimal(str(current[k])) for k in ("weight_kg", "length_cm", "width_cm", "height_cm")]
+    return {
+        "measurement_source": current.get("measurement_source") or "estimated",
+        "box_preset_code": current.get("box_preset_code"),
+        "weight_kg": values[0],
+        "length_cm": values[1],
+        "width_cm": values[2],
+        "height_cm": values[3],
+        "volumetric_weight_kg": volumetric_weight_kg(*values[1:]),
+        "billable_weight_kg": billable_weight_kg(*values),
+        "estimated_contents_weight_kg": (
+            Decimal(str(estimated[-1]["weight_kg"])) if estimated else None
+        ),
+    }
+
+
+def project_operations(snapshot, *, require_hub_measurement: bool = False):
     """Fail closed on ambiguous bindings or contradictions; never change rows."""
     rows = {
         key: snapshot.get(key) or []
@@ -347,6 +386,9 @@ def project_operations(snapshot):
             for b in subject_bookings
         ):
             blockers.append("expired_claim_requires_recovery")
+        parcel = _parcel_projection(rows["versions"], pid, version)
+        if require_hub_measurement and parcel.get("measurement_source") != "hub_measured":
+            blockers.append("parcel_not_measured")
         if (
             len(seals) > 1
             or len(intents) > 1
@@ -379,6 +421,7 @@ def project_operations(snapshot):
                 "active_booking_id": active_id,
                 "selection_eligible": not blockers,
                 "selection_blockers": blockers,
+                "parcel": parcel or None,
             }
         )
     return {
@@ -389,5 +432,12 @@ def project_operations(snapshot):
 
 
 async def load_dhl_operations(db: AsyncSession, *, order_id: UUID):
+    from app.core.config import settings
+
     snapshot = (await db.execute(operations_snapshot_query(order_id))).mappings().one()
-    return project_operations(snapshot)
+    return project_operations(
+        snapshot,
+        require_hub_measurement=bool(
+            getattr(settings, "DHL_REQUIRE_HUB_MEASURED_PARCEL", False)
+        ),
+    )

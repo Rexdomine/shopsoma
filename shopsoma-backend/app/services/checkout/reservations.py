@@ -8,7 +8,7 @@ import uuid
 
 
 from fastapi import HTTPException
-from sqlalchemy import select, text, tuple_
+from sqlalchemy import func, or_, select, text, tuple_
 from sqlalchemy.orm import selectinload
 
 from app.models.checkout_shipping_estimate import (
@@ -19,7 +19,11 @@ from app.models.checkout_shipping_estimate import (
 )
 from app.models.order import FulfillmentStatus, Order, PaymentStatus
 from app.models.product import Product, ProductVariant, SizeStock
-from app.models.stock_payment_persistence import PaymentAttempt, StockReservation
+from app.models.stock_payment_persistence import (
+    PaymentAttempt,
+    PaymentAttemptReservation,
+    StockReservation,
+)
 from app.services.checkout.estimates import (
     _estimate_request_fingerprint,
     _planned_ship_date,
@@ -157,6 +161,68 @@ _ACTIVE_OR_SETTLED_ATTEMPT_STATES = (
     "abandoned_unknown",
     "verified",
 )
+
+
+async def get_blocking_reserved_quantities(
+    db,
+    subjects: set[tuple[str, uuid.UUID]],
+) -> dict[tuple[str, uuid.UUID], int]:
+    """Return active non-reclaimable reservation totals keyed by (subject_kind, subject_id)."""
+    if not subjects or not hasattr(db, "execute"):
+        return {}
+
+    subject_list = list(subjects)
+    has_active_attempt = (
+        select(PaymentAttempt.id)
+        .where(
+            PaymentAttempt.order_id == StockReservation.order_id,
+            PaymentAttempt.state.in_(_ACTIVE_OR_SETTLED_ATTEMPT_STATES),
+        )
+        .exists()
+    )
+    has_authorized_attempt = (
+        select(PaymentAttemptReservation.attempt_id)
+        .join(
+            PaymentAttempt,
+            PaymentAttempt.id == PaymentAttemptReservation.attempt_id,
+        )
+        .where(
+            PaymentAttemptReservation.reservation_id == StockReservation.id,
+            PaymentAttempt.state.in_(("call_started", "abandoned_unknown", "verified")),
+            PaymentAttempt.authorization_deadline_at >= text("clock_timestamp()"),
+        )
+        .exists()
+    )
+    stmt = (
+        select(
+            StockReservation.inventory_subject_kind,
+            StockReservation.inventory_subject_id,
+            func.coalesce(func.sum(StockReservation.quantity), 0),
+        )
+        .join(Order, Order.id == StockReservation.order_id)
+        .where(
+            tuple_(
+                StockReservation.inventory_subject_kind,
+                StockReservation.inventory_subject_id,
+            ).in_(subject_list),
+            StockReservation.state == "active",
+            or_(
+                StockReservation.expires_at > text("clock_timestamp()"),
+                has_authorized_attempt,
+            ),
+            or_(
+                StockReservation.workflow_cohort != "domestic_checkout_v1",
+                Order.payment_status == PaymentStatus.PAID,
+                has_active_attempt,
+            ),
+        )
+        .group_by(
+            StockReservation.inventory_subject_kind,
+            StockReservation.inventory_subject_id,
+        )
+    )
+    rows = (await db.execute(stmt)).all()
+    return {(kind, subject_id): int(qty or 0) for kind, subject_id, qty in rows}
 
 
 async def reclaim_unattempted_reservations_for_subject(

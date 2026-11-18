@@ -8,37 +8,77 @@ interface Props {
   selectOption: (estimateId: string, optionId: string) => Promise<CheckoutEstimate>;
   refreshEstimate: () => Promise<CheckoutEstimate>;
   onSelectionConfirmed: (estimate: CheckoutEstimate) => void;
+  onStockConflict?: () => void;
+  onReturnToBag?: () => void;
   isSubmitting?: boolean;
+  disabled?: boolean;
 }
 
 const money = (amount: string, currency: string) =>
   `${currency} ${new Intl.NumberFormat('en-NG', { minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(Number(amount))}`;
+
+function extractConflictDetail(caught: unknown): string {
+  if (!axios.isAxiosError(caught)) return '';
+  const detail = (
+    caught.response?.data as
+      | { detail?: string | { message?: unknown; code?: unknown } }
+      | undefined
+  )?.detail;
+  if (typeof detail === 'string') return detail;
+  if (detail && typeof detail === 'object') {
+    if (typeof detail.message === 'string') return detail.message;
+    if (typeof detail.code === 'string') return detail.code;
+  }
+  return '';
+}
+
+function isStockConflictError(caught: unknown): boolean {
+  if (!axios.isAxiosError(caught) || caught.response?.status !== 409) {
+    return false;
+  }
+  return /insufficient stock|out of stock|inventory subject unavailable|stock_unavailable/i.test(
+    extractConflictDetail(caught),
+  );
+}
 
 export default function CheckoutEstimateSelector({
   estimate: initialEstimate,
   selectOption,
   refreshEstimate,
   onSelectionConfirmed,
+  onStockConflict,
+  onReturnToBag,
   isSubmitting,
+  disabled,
 }: Props) {
   const [estimate, setEstimate] = useState(initialEstimate);
   const [selectingId, setSelectingId] = useState<string | null>(null);
   const [error, setError] = useState('');
+  const [stockConflict, setStockConflict] = useState(false);
 
   useEffect(() => {
     setEstimate(initialEstimate);
     setSelectingId(null);
     setError('');
+    setStockConflict(false);
   }, [initialEstimate]);
 
   const choose = async (optionId: string) => {
     setSelectingId(optionId);
     setError('');
+    setStockConflict(false);
     try {
       const selected = await selectOption(estimate.id, optionId);
       setEstimate(selected);
     } catch (caught) {
-      if (axios.isAxiosError(caught) && caught.response?.status === 409) {
+      if (isStockConflictError(caught)) {
+        setEstimate((prev) => ({ ...prev, selected_option: null }));
+        setStockConflict(true);
+        setError(
+          'One or more items in your bag are out of stock or no longer available. Return to your bag to remove or update unavailable items.',
+        );
+        onStockConflict?.();
+      } else if (axios.isAxiosError(caught) && caught.response?.status === 409) {
         try {
           const replacement = await refreshEstimate();
           setEstimate(replacement);
@@ -116,7 +156,7 @@ export default function CheckoutEstimateSelector({
                 <button
                   type="button"
                   onClick={() => choose(option.id)}
-                  disabled={Boolean(selectingId) || selected || Boolean(isSubmitting)}
+                  disabled={Boolean(selectingId) || selected || Boolean(isSubmitting) || Boolean(disabled) || stockConflict}
                   aria-label={selected ? `Selected ${option.service_label}` : isSelecting ? 'Selecting…' : `Select ${option.service_label}`}
                   className={`px-3.5 py-1.5 rounded-sm border text-xs font-semibold transition-colors whitespace-nowrap disabled:opacity-50 ${
                     selected
@@ -131,10 +171,23 @@ export default function CheckoutEstimateSelector({
           </div>
         );
       })}
-      {error && <p role="alert" className="text-sm text-amber-700">{error}</p>}
+      {error && (
+        <div role="alert" className={`space-y-2 rounded-sm border p-3 ${stockConflict ? 'border-red-200 bg-red-50 text-red-800' : 'border-amber-200 bg-amber-50 text-amber-800'}`}>
+          <p className="text-sm">{error}</p>
+          {stockConflict && onReturnToBag && (
+            <button
+              type="button"
+              onClick={onReturnToBag}
+              className="text-xs font-semibold underline text-red-900 hover:text-red-700"
+            >
+              Return to Bag
+            </button>
+          )}
+        </div>
+      )}
       <button
         type="button"
-        disabled={!estimate.selected_option || Boolean(selectingId) || Boolean(isSubmitting)}
+        disabled={!estimate.selected_option || Boolean(selectingId) || Boolean(isSubmitting) || Boolean(disabled) || stockConflict}
         onClick={() => onSelectionConfirmed(estimate)}
         className="w-full py-3 rounded-sm bg-primary text-white text-sm font-semibold disabled:opacity-50 flex items-center justify-center gap-2"
       >

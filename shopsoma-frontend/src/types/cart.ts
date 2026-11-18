@@ -8,6 +8,27 @@ export interface CartItem {
   quantity: number;
   price: number; // Price at time of adding to cart
   subtotal: number; // price * quantity
+  available_stock?: number;
+  is_in_stock?: boolean;
+  stock_issue?: string | null;
+}
+
+export interface CartValidationItem {
+  product_id: string;
+  variant_id?: string | null;
+  product_title?: string | null;
+  requested_quantity: number;
+  available_stock: number;
+  is_in_stock: boolean;
+  made_to_order: boolean;
+  status: 'ok' | 'out_of_stock' | 'insufficient_stock' | 'unavailable';
+  message?: string | null;
+}
+
+export interface CartValidationResponse {
+  is_valid: boolean;
+  items: CartValidationItem[];
+  errors: string[];
 }
 
 export interface CartSummary {

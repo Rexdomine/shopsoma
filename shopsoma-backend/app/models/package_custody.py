@@ -109,6 +109,12 @@ class HubPackageVersion(Base):
     )
     packed_at = Column(DateTime(timezone=True), nullable=False)
     reason = Column(String(200))
+    # "estimated": derived from vendor catalog values / category defaults.
+    # "hub_measured": an admin weighed and measured the sealed parcel at the hub.
+    measurement_source = Column(
+        String(20), nullable=False, default="estimated", server_default="estimated"
+    )
+    box_preset_code = Column(String(50))
     created_at = Column(DateTime(timezone=True), nullable=False, server_default=_NOW)
 
     __table_args__ = (
@@ -117,6 +123,10 @@ class HubPackageVersion(Base):
             ["hub_packages.id", "hub_packages.order_id", "hub_packages.hub_id"],
             name="fk_hub_package_versions_package_identity",
             ondelete="RESTRICT",
+        ),
+        CheckConstraint(
+            "measurement_source IN ('estimated', 'hub_measured')",
+            name="ck_hub_package_versions_measurement_source",
         ),
         CheckConstraint(
             "version > 0 AND ((version = 1 AND previous_version IS NULL) OR "

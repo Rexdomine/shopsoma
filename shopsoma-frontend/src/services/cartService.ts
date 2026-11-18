@@ -1,5 +1,11 @@
 import type { AxiosRequestConfig } from 'axios';
-import type { Cart, CartItem, CartSummary } from '../types/cart';
+import type {
+  Cart,
+  CartItem,
+  CartSummary,
+  CartValidationItem,
+  CartValidationResponse,
+} from '../types/cart';
 import type { Product, ProductVariant } from '../types';
 import { calculateCartSummary } from '../utils/pricing';
 import { STORAGE_KEYS } from '../config/constants';
@@ -196,6 +202,88 @@ export class CartService {
     };
   }
 
+  static getLocalCartValidationIssues(items: CartItem[]): CartValidationItem[] {
+    const issues: CartValidationItem[] = [];
+    for (const item of items) {
+      const normalizedVariantId =
+        !item.variant?.id || item.variant.id.startsWith('default-') ? null : item.variant.id;
+      const madeToOrder = Boolean(item.product?.made_to_order);
+      if (madeToOrder) {
+        if (item.is_in_stock === false || item.variant?.is_available === false) {
+          issues.push({
+            product_id: item.product_id,
+            variant_id: normalizedVariantId,
+            product_title: item.product?.title,
+            requested_quantity: item.quantity,
+            available_stock: 0,
+            is_in_stock: false,
+            made_to_order: true,
+            status: 'unavailable',
+            message: item.stock_issue || `${item.product?.title || 'Item'} is no longer available.`,
+          });
+        }
+        continue;
+      }
+
+      const explicitStock =
+        typeof item.available_stock === 'number'
+          ? item.available_stock
+          : typeof item.variant?.stock === 'number'
+            ? item.variant.stock
+            : typeof item.product?.total_stock === 'number'
+              ? item.product.total_stock
+              : undefined;
+      const isUnavailable = item.is_in_stock === false || item.variant?.is_available === false;
+
+      if (isUnavailable || (typeof explicitStock === 'number' && explicitStock <= 0)) {
+        issues.push({
+          product_id: item.product_id,
+          variant_id: normalizedVariantId,
+          product_title: item.product?.title,
+          requested_quantity: item.quantity,
+          available_stock: Math.max(0, explicitStock ?? 0),
+          is_in_stock: false,
+          made_to_order: false,
+          status: 'out_of_stock',
+          message: item.stock_issue || `${item.product?.title || 'Item'} is out of stock.`,
+        });
+      } else if (typeof explicitStock === 'number' && item.quantity > explicitStock) {
+        issues.push({
+          product_id: item.product_id,
+          variant_id: normalizedVariantId,
+          product_title: item.product?.title,
+          requested_quantity: item.quantity,
+          available_stock: explicitStock,
+          is_in_stock: false,
+          made_to_order: false,
+          status: 'insufficient_stock',
+          message:
+            item.stock_issue ||
+            `Only ${explicitStock} of ${item.product?.title || 'Item'} available.`,
+        });
+      }
+    }
+    return issues;
+  }
+
+  static async validateCartItemsWithServer(items: CartItem[]): Promise<CartValidationResponse> {
+    if (!items.length) {
+      return { is_valid: true, items: [], errors: [] };
+    }
+    return this.request<CartValidationResponse>({
+      method: 'post',
+      url: '/cart/validate',
+      data: {
+        items: items.map((item) => ({
+          product_id: item.product_id,
+          variant_id:
+            !item.variant?.id || item.variant.id.startsWith('default-') ? null : item.variant.id,
+          quantity: item.quantity,
+        })),
+      },
+    });
+  }
+
   /**
    * Validate cart items (check stock, prices, etc.)
    */
@@ -204,25 +292,22 @@ export class CartService {
     errors: string[];
     updatedCart?: Cart;
   }> {
-    // This would call the backend to validate
-    // For now, just basic validation
-    const errors: string[] = [];
-
-    cart.items.forEach(item => {
-      if (item.quantity <= 0) {
-        errors.push(`Invalid quantity for ${item.product.title}`);
-      }
-
-      if (!item.product.made_to_order && (!item.variant.stock || item.variant.stock < item.quantity)) {
-        errors.push(`${item.product.title} (${item.variant.size}) is out of stock`);
-      }
-    });
-
-    return {
-      isValid: errors.length === 0,
-      errors,
-      updatedCart: errors.length > 0 ? undefined : cart,
-    };
+    try {
+      const serverResult = await this.validateCartItemsWithServer(cart.items);
+      return {
+        isValid: serverResult.is_valid,
+        errors: serverResult.errors,
+        updatedCart: serverResult.is_valid ? cart : undefined,
+      };
+    } catch {
+      const localIssues = this.getLocalCartValidationIssues(cart.items);
+      const errors = localIssues.map((issue) => issue.message || 'Item is unavailable.');
+      return {
+        isValid: errors.length === 0,
+        errors,
+        updatedCart: errors.length > 0 ? undefined : cart,
+      };
+    }
   }
 
   private static transformProduct(productData: any): Product {
@@ -308,7 +393,25 @@ export class CartService {
       : product.variants?.find((v) => v.id === serverItem.variant_id);
 
     if (!variant) {
-      variant = this.transformVariant(null, product.id);
+      const fallbackStock =
+        typeof serverItem.available_stock === 'number'
+          ? serverItem.available_stock
+          : Number(product.total_stock ?? 0);
+      variant = this.transformVariant(
+        {
+          id: serverItem.variant_id || `default-${product.id}`,
+          product_id: product.id,
+          price: serverItem.price ?? product.base_price,
+          stock: fallbackStock,
+          is_available:
+            typeof serverItem.is_in_stock === 'boolean'
+              ? serverItem.is_in_stock
+              : product.made_to_order
+                ? true
+                : fallbackStock > 0,
+        },
+        product.id,
+      );
     }
 
     return {
@@ -319,6 +422,15 @@ export class CartService {
       quantity: serverItem.quantity,
       price: serverItem.price,
       subtotal: serverItem.price * serverItem.quantity,
+      available_stock:
+        typeof serverItem.available_stock === 'number' ? serverItem.available_stock : variant.stock,
+      is_in_stock:
+        typeof serverItem.is_in_stock === 'boolean'
+          ? serverItem.is_in_stock
+          : product.made_to_order
+            ? true
+            : variant.is_available && variant.stock >= serverItem.quantity,
+      stock_issue: serverItem.stock_issue ?? null,
     };
   }
 

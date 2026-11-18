@@ -20,6 +20,7 @@ from app.models.checkout_shipping_estimate import (
     CheckoutShippingEstimateSelection,
 )
 from app.models.address import Address
+from app.models.category import Category
 from app.models.order import Order, OrderItem
 from app.models.product import Product
 from app.models.product_logistics_profile import ProductLogisticsProfile
@@ -59,6 +60,7 @@ from app.services.fulfillment.contracts import (
 )
 from app.services.shipping.contracts import DomesticRateRequest
 from app.services.shipping.capabilities import domestic_shipping_capabilities
+from app.services.shipping.parcel_defaults import fill_missing_measurements
 from app.services.checkout.capabilities import authorize_checkout_actor
 
 _CENT = Decimal("0.01")
@@ -766,6 +768,21 @@ async def _authoritative_parcel_measurements(
     profiles_by_item = {
         (profile.product_id, profile.variant_id): profile for profile in profile_rows
     }
+    category_ids = {
+        product.category_id for _, product in rows if product.category_id is not None
+    }
+    category_hints: dict = {}
+    if category_ids:
+        category_hints = {
+            category_id: (slug, name)
+            for category_id, slug, name in (
+                await db.execute(
+                    select(Category.id, Category.slug, Category.name).where(
+                        Category.id.in_(category_ids)
+                    )
+                )
+            ).all()
+        }
 
     measurements = []
     for item, product in rows:
@@ -798,6 +815,13 @@ async def _authoritative_parcel_measurements(
                 product.width_cm,
                 product.height_cm,
             )
+        # Vendors may omit parcel measurements. Fill only the missing values with
+        # a conservative category estimate so DHL rating still works; vendor
+        # supplied values always take precedence.
+        slug, name = category_hints.get(product.category_id, (None, None))
+        values, _estimated = fill_missing_measurements(
+            values, (slug, name, item.product_title, product.title)
+        )
         measurements.append((item, product, profile, values))
     return measurements
 

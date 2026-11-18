@@ -42,7 +42,7 @@ async function fillProduct(container: HTMLElement, mode: 'single' | 'variable') 
   fireEvent.change(screen.getByPlaceholderText('Describe your product'), { target: { value: 'A linen shirt' } });
   fireEvent.change(screen.getAllByPlaceholderText('0.00')[0], { target: { value: '100' } });
   for (const label of ['Weight (kg)', 'Length (cm)', 'Width (cm)', 'Height (cm)']) {
-    fireEvent.change(screen.getByText(`${label} *`).parentElement!.querySelector('input')!, { target: { value: '1' } });
+    fireEvent.change(screen.getByText(label).parentElement!.querySelector('input')!, { target: { value: '1' } });
   }
   if (mode === 'single') {
     fireEvent.change(screen.getByPlaceholderText('E.g., Black'), { target: { value: 'Black' } });

@@ -132,6 +132,10 @@ class Settings(BaseSettings):
     DHL_LIVE_ENABLED: bool = False
     DHL_EXPORT_ENABLED: bool = True
     DHL_ALLOWED_EXPORT_COUNTRIES: str = "GH,US,GB,CA,ZA,KE,AE,FR,DE"
+    # Require the hub to record the real packed parcel (scale weight + box
+    # dimensions) before a DHL label can be booked. Vendor catalog values and
+    # category estimates are never sent to DHL for booking when this is on.
+    DHL_REQUIRE_HUB_MEASURED_PARCEL: bool = True
     DHL_DOMESTIC_QUOTE_TTL_SECONDS: int = Field(default=1800, ge=300, le=3600)
     DHL_DOMESTIC_PAYMENT_WINDOW_SECONDS: int = Field(default=1800, ge=300, le=3600)
     DHL_DOMESTIC_AUTH_GRACE_SECONDS: int = Field(default=900, ge=60, le=1800)

@@ -117,7 +117,7 @@ describe('VendorProductAdd price formatting and humanization', () => {
     // Shipping details
     for (const label of ['Weight (kg)', 'Length (cm)', 'Width (cm)', 'Height (cm)']) {
       fireEvent.change(
-        screen.getByText(`${label} *`).parentElement!.querySelector('input')!,
+        screen.getByText(label).parentElement!.querySelector('input')!,
         { target: { value: '1' } }
       );
     }
