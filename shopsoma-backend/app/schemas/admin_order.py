@@ -210,7 +210,22 @@ DHLSelectionBlocker = Literal[
     "order_cancelled", "package_not_ready", "custody_handed_off", "active_seal_missing",
     "active_intent_missing", "selected_dhl_quote_missing", "active_booking_exists",
     "reconciliation_required", "expired_claim_requires_recovery", "inconsistent_persisted_state",
+    "parcel_not_measured",
 ]
+
+
+class DHLParcelMeasurement(BaseModel):
+    """Measurements of the current package version and DHL billing context."""
+
+    measurement_source: Literal["estimated", "hub_measured"]
+    box_preset_code: Optional[str] = None
+    weight_kg: Decimal
+    length_cm: Decimal
+    width_cm: Decimal
+    height_cm: Decimal
+    volumetric_weight_kg: Decimal
+    billable_weight_kg: Decimal
+    estimated_contents_weight_kg: Optional[Decimal] = None
 
 
 class DHLOperationPackage(BaseModel):
@@ -224,6 +239,17 @@ class DHLOperationPackage(BaseModel):
     active_booking_id: Optional[UUID]
     selection_eligible: bool
     selection_blockers: List[DHLSelectionBlocker]
+    parcel: Optional[DHLParcelMeasurement] = None
+
+
+class DHLParcelMeasurementRequest(BaseModel):
+    """Hub scale weight and box dimensions for the sealed parcel."""
+
+    box_preset_code: Optional[str] = Field(None, max_length=50)
+    weight_kg: Decimal = Field(..., gt=0, le=1000)
+    length_cm: Decimal = Field(..., gt=0, le=1000)
+    width_cm: Decimal = Field(..., gt=0, le=1000)
+    height_cm: Decimal = Field(..., gt=0, le=1000)
 
 
 class DHLOperationBooking(BaseModel):

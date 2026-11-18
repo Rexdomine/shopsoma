@@ -303,7 +303,7 @@ async def resolve_order_variant(
                     product.compare_at_price,
                 ),
             )
-        variant_stock = variant.stock
+        variant_stock = variant.stock if (product.made_to_order or variant.is_available) else 0
         if product.made_to_order:
             variant_stock = max(variant_stock, 999999)
         return {
@@ -329,6 +329,11 @@ async def resolve_order_variant(
 
     if size_stock_row:
         size_stock, variation = size_stock_row
+        if not variation.is_active:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Selected variation for '{product.title}' is not available",
+            )
         unit_price = effective_variation_price(
             variation.price,
             variation_sale_price(
@@ -385,6 +390,11 @@ async def resolve_order_variant(
     variation = variation_result.scalar_one_or_none()
 
     if variation:
+        if not variation.is_active:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Selected variation for '{product.title}' is not available",
+            )
         if product.variants or (variation.is_active and bool(variation.size_stocks)):
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
@@ -774,6 +784,7 @@ async def review_order(
     # Collect and validate items
     items_details = []
     subtotal = Decimal("0.00")
+    requested_by_subject: dict[tuple[str, UUID], int] = {}
 
     for item in review_data.items:
         # Get product
@@ -816,6 +827,8 @@ async def review_order(
         unit_price = product.base_price
         stock = product.total_stock
         variant_details = None
+        stock_source = "product"
+        stock_id = product.id
 
         if item.variant_id:
             resolved_variant = await resolve_order_variant(
@@ -825,13 +838,18 @@ async def review_order(
             unit_price = resolved_variant["unit_price"]
             stock = resolved_variant["stock"]
             variant_details = resolved_variant["variant_details"]
+            stock_source = resolved_variant["stock_source"]
+            stock_id = resolved_variant["stock_id"]
 
-        # Check stock
-        if not product.made_to_order and stock < item.quantity:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail=f"Insufficient stock for '{product.title}'. Available: {stock}",
-            )
+        # Check stock (aggregating duplicate line items for the same inventory subject)
+        if not product.made_to_order:
+            subject_key = (stock_source, stock_id)
+            requested_by_subject[subject_key] = requested_by_subject.get(subject_key, 0) + item.quantity
+            if stock < requested_by_subject[subject_key]:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail=f"Insufficient stock for '{product.title}'. Available: {stock}",
+                )
 
         source_currency = _normalize_currency(product.currency)
         unit_price_decimal = _convert_currency(
@@ -1130,6 +1148,7 @@ async def create_order(
     quote_items_input = []
     order_item_media = {}
     stock_updates = []
+    requested_by_subject: dict[tuple[str, UUID], int] = {}
     subtotal = Decimal("0.00")
 
     for item_data in order_data.items:
@@ -1182,12 +1201,15 @@ async def create_order(
             stock_source = resolved_variant["stock_source"]
             stock_id = resolved_variant["stock_id"]
 
-        # Check stock
-        if not product.made_to_order and stock < item_data.quantity:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail=f"Insufficient stock for '{product.title}'",
-            )
+        # Check stock (aggregating duplicate line items for the same inventory subject)
+        if not product.made_to_order:
+            subject_key = (stock_source, stock_id)
+            requested_by_subject[subject_key] = requested_by_subject.get(subject_key, 0) + item_data.quantity
+            if stock < requested_by_subject[subject_key]:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail=f"Insufficient stock for '{product.title}'",
+                )
 
         source_currency = _normalize_currency(product.currency)
         unit_price_decimal = _convert_currency(

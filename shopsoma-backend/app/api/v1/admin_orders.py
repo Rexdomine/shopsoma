@@ -65,6 +65,7 @@ from app.schemas.admin_order import (
     DHLBookingReconciliationRequest,
     DHLHandoffRequest,
     DHLHandoffResult,
+    DHLParcelMeasurementRequest,
     DHLPickupRequest,
     DHLPickupResult,
     DHLTrackingRefreshRequest,
@@ -2011,6 +2012,88 @@ async def prepare_dhl_package(
             else status.HTTP_400_BAD_REQUEST
         )
         raise HTTPException(status_code=status_code, detail=detail) from exc
+
+    return await get_order_detail(order_id=order_id, admin=admin, db=db)
+
+
+@router.post("/{order_id}/dhl/parcel-measurement", response_model=OrderDetail)
+async def record_dhl_parcel_measurement(
+    order_id: str,
+    payload: DHLParcelMeasurementRequest,
+    admin: User = Depends(get_current_admin),
+    db: AsyncSession = Depends(get_db),
+):
+    """Record the hub scale weight and box dimensions of the sealed parcel.
+
+    Measurements are validated against DHL Express single-piece limits and
+    normalized (whole centimetres, longest side first). An unbooked package is
+    repacked to a new audited version; booked parcels cannot be re-measured.
+    """
+    try:
+        parsed_order_id = UUID(order_id)
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Invalid order id"
+        ) from exc
+
+    from app.services.dhl.hub_preparation import (
+        HubMeasurementConflictError,
+        HubParcelMeasurement,
+        record_hub_parcel_measurement,
+    )
+    from app.services.dhl.parcel_limits import ParcelValidationError, normalize_dhl_parcel
+    from app.services.shipping.box_presets import find_box_preset
+
+    order = await db.scalar(select(Order).where(Order.id == parsed_order_id).with_for_update())
+    if order is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Order not found")
+    if order.fulfillment_status == FulfillmentStatus.CANCELLED:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Order is cancelled")
+    if order.payment_status != PaymentStatus.PAID:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Parcel can only be measured for paid orders",
+        )
+
+    box_code = None
+    if payload.box_preset_code:
+        preset = await find_box_preset(db, payload.box_preset_code)
+        if preset is None or not preset.is_active:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail="Unknown or inactive shipping box",
+            )
+        box_code = preset.code
+    try:
+        parcel = normalize_dhl_parcel(
+            payload.weight_kg, payload.length_cm, payload.width_cm, payload.height_cm
+        )
+    except ParcelValidationError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail={"message": "Parcel is not accepted by DHL Express", "errors": exc.errors},
+        ) from exc
+
+    try:
+        await record_hub_parcel_measurement(
+            db,
+            order_id=parsed_order_id,
+            actor_id=admin.id,
+            parcel=HubParcelMeasurement(
+                weight_kg=parcel.weight_kg,
+                length_cm=parcel.length_cm,
+                width_cm=parcel.width_cm,
+                height_cm=parcel.height_cm,
+                box_preset_code=box_code,
+            ),
+        )
+        await db.commit()
+    except HubMeasurementConflictError as exc:
+        await db.rollback()
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
+    except ValueError as exc:
+        await db.rollback()
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
 
     return await get_order_detail(order_id=order_id, admin=admin, db=db)
 

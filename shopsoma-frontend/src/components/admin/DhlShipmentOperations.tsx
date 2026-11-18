@@ -4,6 +4,7 @@ import api from '../../services/api';
 import { ROUTES } from '../../config/constants';
 import { createDhlBooking, getDhlLabel, getOrderDetail, recordDhlHandoff, refreshDhlTracking } from '../../services/adminOrderService';
 import type { DhlPickupResult, OrderDetail } from '../../services/adminOrderService';
+import DhlParcelMeasurementCard from './DhlParcelMeasurementCard';
 
 const emptyHandoff = { occurred_at: '', counterparty: '', evidence_ref: '', evidence_sha256: '' };
 type Handoff = typeof emptyHandoff;
@@ -22,6 +23,7 @@ const blockerCopy: Record<string, string> = {
   reconciliation_required: 'Reconciliation required',
   expired_claim_requires_recovery: 'Expired attempt requires authorized recovery',
   inconsistent_persisted_state: 'Shipment records require review',
+  parcel_not_measured: 'Weigh and measure the packed parcel before creating the DHL shipment',
 };
 
 const btnBase = 'inline-flex items-center justify-center gap-2 px-4 py-2.5 rounded-lg text-sm font-medium transition shadow-xs disabled:opacity-50 disabled:cursor-not-allowed focus:outline-none focus:ring-2 focus:ring-offset-1';
@@ -320,6 +322,19 @@ export default function DhlShipmentOperations({ order, onOrderChange, disabled =
                 <span className="text-gray-300">|</span>
                 <span className="font-medium text-gray-700">Package version:</span> {selected.package_version}
               </div>
+            )}
+
+            {(selected || (ready.length === 0 && !bookings.length && !cancelled && order.payment_status === 'paid')) && (
+              <DhlParcelMeasurementCard
+                order={order}
+                pkg={selected}
+                disabled={locked || held || cancelled}
+                onOrderChange={fresh => {
+                  onOrderChange(fresh);
+                  const firstReady = fresh.dhl_operations?.packages.find(p => p.package_state === 'ready');
+                  if (firstReady) setPackageId(firstReady.package_id);
+                }}
+              />
             )}
 
             {selected?.selection_blockers.map(code => {

@@ -77,7 +77,7 @@ describe('CheckoutEstimateSelector', () => {
     expect(onSelectionConfirmed).toHaveBeenCalledWith(expect.objectContaining({ selected_option: expect.objectContaining({ id: 'option-1' }) }));
   });
 
-  it.each(['expired', 'stale', 'stock'])('refreshes options after a %s 409 without silently selecting a replacement', async (reason) => {
+  it.each(['expired', 'stale'])('refreshes options after a %s 409 without silently selecting a replacement', async (reason) => {
     const conflict = { isAxiosError: true, response: { status: 409, data: { detail: `${reason} checkout estimate` } } };
     const selectOption = vi.fn().mockRejectedValue(conflict);
     const refreshEstimate = vi.fn().mockResolvedValue(estimate(2));
@@ -91,6 +91,35 @@ describe('CheckoutEstimateSelector', () => {
     expect(screen.getByRole('button', { name: 'Continue to payment' })).toBeDisabled();
     expect(screen.getAllByRole('button', { name: /^Select / })).toHaveLength(2);
   });
+
+  it.each(['insufficient stock', 'inventory subject unavailable'])(
+    'halts quote refresh and shows a clear stock error after a %s 409',
+    async (detail) => {
+      const conflict = { isAxiosError: true, response: { status: 409, data: { detail } } };
+      const selectOption = vi.fn().mockRejectedValue(conflict);
+      const refreshEstimate = vi.fn().mockResolvedValue(estimate(2));
+      const onStockConflict = vi.fn();
+      const onReturnToBag = vi.fn();
+      const { onSelectionConfirmed } = renderSelector({
+        selectOption,
+        refreshEstimate,
+        onStockConflict,
+        onReturnToBag,
+      });
+
+      fireEvent.click(screen.getByRole('button', { name: 'Select Standard delivery' }));
+
+      expect(await screen.findByText(/out of stock or no longer available/i)).toBeInTheDocument();
+      expect(screen.queryByText(/Delivery options changed/i)).not.toBeInTheDocument();
+      expect(refreshEstimate).not.toHaveBeenCalled();
+      expect(onSelectionConfirmed).not.toHaveBeenCalled();
+      expect(onStockConflict).toHaveBeenCalledTimes(1);
+      expect(screen.getByRole('button', { name: 'Select Standard delivery' })).toBeDisabled();
+      expect(screen.getByRole('button', { name: 'Continue to payment' })).toBeDisabled();
+      fireEvent.click(screen.getByRole('button', { name: 'Return to Bag' }));
+      expect(onReturnToBag).toHaveBeenCalledTimes(1);
+    },
+  );
 
   it('keeps a 503 retryable and never marks selection complete', async () => {
     const unavailable = { isAxiosError: true, response: { status: 503 } };

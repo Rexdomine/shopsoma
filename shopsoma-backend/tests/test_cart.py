@@ -599,3 +599,336 @@ async def test_add_to_cart_respects_existing_variant_stock_limits(
 
     assert response.status_code == 400
     assert response.json()["detail"] == "Insufficient stock. Available: 2"
+
+
+@pytest.mark.asyncio
+async def test_validate_cart_and_get_cart_flag_zero_stock_and_active_payment_reservations(
+    client: AsyncClient,
+    db_session: AsyncSession,
+    vendor_user,
+    customer_user,
+    monkeypatch,
+):
+    from datetime import timedelta
+    from decimal import Decimal
+    from sqlalchemy import select, text
+    from app.core.config import settings
+    from app.models.address import Address
+    from app.models.order import Order
+    from app.models.product import ModerationStatus, Product, ProductStatus, ProductType, ProductVariant
+    from app.models.shipping_rate import ShippingRate
+    from app.models.stock_payment_persistence import (
+        PaymentAttempt,
+        PaymentAttemptReservation,
+        StockReservation,
+    )
+    import uuid
+
+    monkeypatch.setattr(settings, "DOMESTIC_CHECKOUT_PREREQUISITES_ENABLED", True)
+    monkeypatch.setattr(settings, "DOMESTIC_CHECKOUT_COHORT_PERCENTAGE", 100)
+
+    address = Address(
+        id=uuid.uuid4(),
+        user_id=customer_user["user"].id,
+        full_name="Other Customer",
+        phone_number="08012345678",
+        address_line1="1 Test Street",
+        city="Lagos",
+        state="Lagos",
+        country="Nigeria",
+    )
+    rate = ShippingRate(
+        id=uuid.uuid4(),
+        name="Standard",
+        description="3-5 days",
+        base_rate=Decimal("1500.00"),
+        country="Nigeria",
+        state="Lagos",
+        min_delivery_days=3,
+        max_delivery_days=5,
+        is_active=True,
+        is_default=True,
+        priority=0,
+    )
+    product = Product(
+        id=uuid.uuid4(),
+        vendor_id=vendor_user["vendor"].id,
+        title="Kester Club Item",
+        description="Single stock reservation test",
+        base_price=Decimal("45000.00"),
+        total_stock=1,
+        status=ProductStatus.ACTIVE,
+        moderation_status=ModerationStatus.APPROVED,
+        product_type=ProductType.SINGLE,
+    )
+    db_session.add_all([address, rate, product])
+    await db_session.flush()
+
+    variant = ProductVariant(
+        id=uuid.uuid4(),
+        product_id=product.id,
+        size="M",
+        price=Decimal("45000.00"),
+        stock=1,
+        is_available=True,
+    )
+    db_session.add(variant)
+    product_id = str(product.id)
+    variant_id = str(variant.id)
+    address_id = str(address.id)
+    await db_session.commit()
+
+    session_headers = {"X-Session-ID": "validate-reservation-session"}
+    added = await client.post(
+        "/api/v1/cart/items",
+        json={
+            "product_id": product_id,
+            "variant_id": variant_id,
+            "quantity": 1,
+        },
+        headers=session_headers,
+    )
+    assert added.status_code == 200
+
+    # Create a competing order, estimate, and reservation via the real checkout endpoints
+    created = await client.post(
+        "/api/v1/orders",
+        headers=customer_user["headers"],
+        json={
+            "items": [
+                {
+                    "product_id": product_id,
+                    "variant_id": variant_id,
+                    "quantity": 1,
+                }
+            ],
+            "shipping_address_id": address_id,
+            "currency": "NGN",
+        },
+    )
+    assert created.status_code == 201, created.text
+    order_id = created.json()["id"]
+    estimate_res = await client.post(
+        f"/api/v1/orders/{order_id}/checkout-estimates",
+        headers={**customer_user["headers"], "X-Idempotency-Key": "cart-val-est"},
+    )
+    assert estimate_res.status_code == 201, estimate_res.text
+    estimate_json = estimate_res.json()
+    select_res = await client.post(
+        f"/api/v1/orders/{order_id}/checkout-estimates/{estimate_json['id']}"
+        f"/options/{estimate_json['options'][0]['id']}/select",
+        headers={**customer_user["headers"], "X-Idempotency-Key": "cart-val-sel"},
+    )
+    assert select_res.status_code == 200, select_res.text
+
+    # Before payment initialization, the reservation is unattempted (reclaimable), so cart remains valid
+    unattempted_validate = await client.post(
+        "/api/v1/cart/validate",
+        json={
+            "items": [
+                {
+                    "product_id": product_id,
+                    "variant_id": variant_id,
+                    "quantity": 1,
+                }
+            ]
+        },
+    )
+    assert unattempted_validate.status_code == 200
+    assert unattempted_validate.json()["is_valid"] is True
+
+    # Once a PaymentAttempt is active, the reservation is non-reclaimable (blocking)
+    db_session.expire_all()
+    order = await db_session.get(Order, uuid.UUID(order_id))
+    reservation = await db_session.scalar(
+        select(StockReservation).where(StockReservation.order_id == order.id)
+    )
+    now = await db_session.scalar(select(text("clock_timestamp()")))
+    txid = await db_session.scalar(select(text("txid_current()")))
+    attempt = PaymentAttempt(
+        id=uuid.uuid4(),
+        order_id=order.id,
+        customer_id=order.customer_id,
+        workflow_cohort="domestic_checkout_v1",
+        checkout_estimate_selection_id=order.checkout_estimate_selection_id,
+        amount=order.total_amount,
+        currency=order.currency,
+        provider="paystack",
+        provider_reference=f"ref-{uuid.uuid4().hex}",
+        state="pending",
+        payment_window_seconds=1800,
+        authorization_grace_seconds=900,
+        expires_at=now + timedelta(seconds=1800),
+        authorization_deadline_at=now + timedelta(seconds=2700),
+        claim_ttl_seconds=300,
+        source_command="initialize_checkout_payment",
+        idempotency_key=f"init-{order.id}",
+        creation_txid=txid,
+    )
+    db_session.add(attempt)
+    await db_session.flush()
+    db_session.add(
+        PaymentAttemptReservation(
+            attempt_id=attempt.id,
+            reservation_id=reservation.id,
+            membership_family="domestic_checkout_v1",
+            order_id=order.id,
+            order_item_id=reservation.order_item_id,
+            checkout_estimate_selection_id=order.checkout_estimate_selection_id,
+            creation_txid=txid,
+        )
+    )
+    await db_session.commit()
+
+    # Cart validate & GET /cart now report the item as out of stock
+    validate_res = await client.post(
+        "/api/v1/cart/validate",
+        json={
+            "items": [
+                {
+                    "product_id": product_id,
+                    "variant_id": variant_id,
+                    "quantity": 1,
+                }
+            ]
+        },
+    )
+    assert validate_res.status_code == 200, validate_res.text
+    validate_body = validate_res.json()
+    assert validate_body["is_valid"] is False
+    assert validate_body["items"][0]["is_in_stock"] is False
+    assert validate_body["items"][0]["available_stock"] == 0
+    assert validate_body["items"][0]["status"] == "out_of_stock"
+
+    cart_res = await client.get("/api/v1/cart", headers=session_headers)
+    assert cart_res.status_code == 200, cart_res.text
+    cart_item = cart_res.json()["items"][0]
+    assert cart_item["is_in_stock"] is False
+    assert cart_item["available_stock"] == 0
+    assert "out of stock" in cart_item["stock_issue"].lower()
+
+    # Adding another shopper's cart item against the locked stock is rejected
+    second_add = await client.post(
+        "/api/v1/cart/items",
+        json={
+            "product_id": product_id,
+            "variant_id": variant_id,
+            "quantity": 1,
+        },
+        headers={"X-Session-ID": "other-shopper-session"},
+    )
+    assert second_add.status_code == 400
+    assert second_add.json()["detail"] == "Product is out of stock"
+
+
+@pytest.mark.asyncio
+async def test_create_order_rejects_unavailable_variant_and_duplicate_overstock_lines(
+    client: AsyncClient,
+    db_session: AsyncSession,
+    vendor_user,
+    customer_user,
+):
+    from decimal import Decimal
+    from app.models.address import Address
+    from app.models.product import ModerationStatus, Product, ProductStatus, ProductType, ProductVariant
+    from app.models.shipping_rate import ShippingRate
+    import uuid
+
+    address = Address(
+        id=uuid.uuid4(),
+        user_id=customer_user["user"].id,
+        full_name="Order Customer",
+        phone_number="08012345678",
+        address_line1="1 Safe Street",
+        city="Lagos",
+        state="Lagos",
+        country="Nigeria",
+    )
+    rate = ShippingRate(
+        id=uuid.uuid4(),
+        name="Standard",
+        description="3-5 days",
+        base_rate=Decimal("1500.00"),
+        country="Nigeria",
+        state="Lagos",
+        min_delivery_days=3,
+        max_delivery_days=5,
+        is_active=True,
+        is_default=True,
+        priority=0,
+    )
+    product = Product(
+        id=uuid.uuid4(),
+        vendor_id=vendor_user["vendor"].id,
+        title="Unavailable Variant Dress",
+        description="Variant availability test",
+        base_price=Decimal("30000.00"),
+        total_stock=1,
+        status=ProductStatus.ACTIVE,
+        moderation_status=ModerationStatus.APPROVED,
+        product_type=ProductType.VARIABLE,
+    )
+    db_session.add_all([address, rate, product])
+    await db_session.flush()
+
+    unavailable_variant = ProductVariant(
+        id=uuid.uuid4(),
+        product_id=product.id,
+        size="S",
+        price=Decimal("30000.00"),
+        stock=2,
+        is_available=False,
+    )
+    one_left_variant = ProductVariant(
+        id=uuid.uuid4(),
+        product_id=product.id,
+        size="M",
+        price=Decimal("30000.00"),
+        stock=1,
+        is_available=True,
+    )
+    db_session.add_all([unavailable_variant, one_left_variant])
+    await db_session.commit()
+
+    resp_unavailable = await client.post(
+        "/api/v1/orders",
+        headers=customer_user["headers"],
+        json={
+            "items": [
+                {
+                    "product_id": str(product.id),
+                    "variant_id": str(unavailable_variant.id),
+                    "quantity": 1,
+                }
+            ],
+            "shipping_address_id": str(address.id),
+            "shipping_rate_id": str(rate.id),
+            "currency": "NGN",
+        },
+    )
+    assert resp_unavailable.status_code == 400
+    assert "insufficient stock" in resp_unavailable.json()["detail"].lower()
+
+    resp_duplicate = await client.post(
+        "/api/v1/orders",
+        headers=customer_user["headers"],
+        json={
+            "items": [
+                {
+                    "product_id": str(product.id),
+                    "variant_id": str(one_left_variant.id),
+                    "quantity": 1,
+                },
+                {
+                    "product_id": str(product.id),
+                    "variant_id": str(one_left_variant.id),
+                    "quantity": 1,
+                },
+            ],
+            "shipping_address_id": str(address.id),
+            "shipping_rate_id": str(rate.id),
+            "currency": "NGN",
+        },
+    )
+    assert resp_duplicate.status_code == 400
+    assert "insufficient stock" in resp_duplicate.json()["detail"].lower()

@@ -591,7 +591,19 @@ export const requestDhlPickup = async (
 };
 
 export type DhlReconciliationState = 'not_required' | 'in_progress' | 'required' | 'expired_claim_requires_recovery' | 'resolved' | 'inconsistent';
-export type DhlSelectionBlocker = 'order_cancelled' | 'package_not_ready' | 'custody_handed_off' | 'active_seal_missing' | 'active_intent_missing' | 'selected_dhl_quote_missing' | 'active_booking_exists' | 'reconciliation_required' | 'expired_claim_requires_recovery' | 'inconsistent_persisted_state';
+export type DhlSelectionBlocker = 'order_cancelled' | 'package_not_ready' | 'custody_handed_off' | 'active_seal_missing' | 'active_intent_missing' | 'selected_dhl_quote_missing' | 'active_booking_exists' | 'reconciliation_required' | 'expired_claim_requires_recovery' | 'inconsistent_persisted_state' | 'parcel_not_measured';
+/** Decimal values are serialized by the API as strings. */
+export interface DhlParcelMeasurement {
+  measurement_source: 'estimated' | 'hub_measured';
+  box_preset_code: string | null;
+  weight_kg: string;
+  length_cm: string;
+  width_cm: string;
+  height_cm: string;
+  volumetric_weight_kg: string;
+  billable_weight_kg: string;
+  estimated_contents_weight_kg: string | null;
+}
 export interface DhlOperationPackage {
   package_id: string;
   package_version: number;
@@ -603,6 +615,7 @@ export interface DhlOperationPackage {
   active_booking_id: string | null;
   selection_eligible: boolean;
   selection_blockers: DhlSelectionBlocker[];
+  parcel?: DhlParcelMeasurement | null;
 }
 export interface DhlOperationBooking {
   booking_id: string;

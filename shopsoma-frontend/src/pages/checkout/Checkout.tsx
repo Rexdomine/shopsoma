@@ -1,5 +1,5 @@
 import { getShippingProviderSettings, type ShippingProviderSettings } from '../../services/settingsService';
-import { useState, useEffect, useRef } from 'react';
+import { useCallback, useState, useEffect, useRef } from 'react';
 import { flushSync } from 'react-dom';
 import { buildPaystackWidgetConfig, type PaymentGateway, type InitializePaymentResponse } from '../../services/paymentService';
 import { Link, useLocation, useNavigate } from 'react-router-dom';
@@ -16,6 +16,7 @@ import {
   type NormalizedGoogleAddress,
 } from '../../services/googleMapsAutocomplete';
 import { CartService } from '../../services/cartService';
+import type { CartValidationItem } from '../../types/cart';
 import { paymentService } from '../../services/paymentService';
 import { useAuth } from '../../context/AuthContext';
 import { usePreferenceStore } from '../../store/preferenceStore';
@@ -146,6 +147,10 @@ export default function Checkout() {
   // Use cart from store so it updates when synced after login
   const cart = useCartStore((state) => state.cart);
   const syncItemPrices = useCartStore((state) => state.syncItemPrices);
+  const removeItem = useCartStore((state) => state.removeItem);
+  const [stockIssues, setStockIssues] = useState<CartValidationItem[]>([]);
+  const [stockConflictMessage, setStockConflictMessage] = useState('');
+  const [isValidatingStock, setIsValidatingStock] = useState(false);
 
   // Address state
   const [addresses, setAddresses] = useState<Address[]>([]);
@@ -441,6 +446,61 @@ export default function Checkout() {
   const [isSwitchingCurrency, setIsSwitchingCurrency] = useState(false);
   const isCheckoutRequestPending = isLoadingShipping || isReviewingOrder || isCreatingOrder || isSavingAddress;
   const isPaymentLocked = Boolean(currentPaymentGateway) || showStripePaymentModal;
+  const hasStockIssues = stockIssues.length > 0 || Boolean(stockConflictMessage);
+
+  const validateCheckoutStock = useCallback(async (clearConflictMessage = false): Promise<CartValidationItem[]> => {
+    if (cart.items.length === 0) {
+      setStockIssues([]);
+      setStockConflictMessage('');
+      return [];
+    }
+    const localIssues =
+      typeof CartService.getLocalCartValidationIssues === 'function'
+        ? CartService.getLocalCartValidationIssues(cart.items)
+        : [];
+    if (typeof CartService.validateCartItemsWithServer !== 'function') {
+      setStockIssues(localIssues);
+      if (clearConflictMessage && localIssues.length === 0) setStockConflictMessage('');
+      return localIssues;
+    }
+    setIsValidatingStock(true);
+    try {
+      const result = await CartService.validateCartItemsWithServer(cart.items);
+      const serverIssues = result.items.filter((item) => !item.is_in_stock);
+      setStockIssues(serverIssues);
+      if (clearConflictMessage && serverIssues.length === 0) setStockConflictMessage('');
+      return serverIssues;
+    } catch {
+      setStockIssues(localIssues);
+      return localIssues;
+    } finally {
+      setIsValidatingStock(false);
+    }
+  }, [cart.items]);
+
+  useEffect(() => {
+    setStockConflictMessage('');
+  }, [cart.items]);
+
+  useEffect(() => {
+    if (isPaymentLocked || enforcedOrder) return;
+    void validateCheckoutStock(false);
+  }, [cart.items, isPaymentLocked, enforcedOrder, validateCheckoutStock]);
+
+  const handleRemoveUnavailableItems = () => {
+    if (typeof removeItem !== 'function') return;
+    for (const issue of stockIssues) {
+      const matching = cart.items.filter((item) => {
+        const normalizedVariantId =
+          !item.variant?.id || item.variant.id.startsWith('default-') ? null : item.variant.id;
+        return item.product_id === issue.product_id && normalizedVariantId === (issue.variant_id || null);
+      });
+      for (const item of matching) {
+        removeItem(item.id);
+      }
+    }
+    setStockConflictMessage('');
+  };
 
   // Email validation state
   const [emailError, setEmailError] = useState('');
@@ -1394,7 +1454,7 @@ export default function Checkout() {
   };
 
   const handlePurchase = async () => {
-    if (!selectedAddressId || showNewAddressForm || (!secureShipping && !orderReview) || priceChangeNotice) return;
+    if (!selectedAddressId || showNewAddressForm || (!secureShipping && !orderReview) || priceChangeNotice || hasStockIssues) return;
 
     if (enforcedOrder) {
       if (enforcedOrder.workflow_cohort === 'domestic_checkout_v1' && checkoutEstimate?.selected_option) {
@@ -1419,6 +1479,11 @@ export default function Checkout() {
 
     setIsCreatingOrder(true);
     try {
+      const latestStockIssues = await validateCheckoutStock();
+      if (latestStockIssues.length > 0) {
+        setIsCreatingOrder(false);
+        return;
+      }
       const orderRequest = buildCurrentOrderRequest();
 
       const order = await checkoutService.createOrder(orderRequest);
@@ -1502,6 +1567,12 @@ export default function Checkout() {
       const errorMessage = typeof detail === 'string'
         ? detail
         : detail?.message || error.message || 'Failed to create order. Please try again.';
+      if (/insufficient stock|out of stock|not available/i.test(errorMessage)) {
+        setStockConflictMessage(errorMessage);
+        void validateCheckoutStock();
+        setIsCreatingOrder(false);
+        return;
+      }
       alert(errorMessage);
       setIsCreatingOrder(false);
     }
@@ -1795,7 +1866,7 @@ export default function Checkout() {
   const hasSelectedAddress = !!selectedAddressId;
   const hasSelectedShipping = !!selectedShippingRateId;
   const hasSelectedEstimateOption = Boolean(checkoutEstimate?.selected_option);
-  const canPurchase = paymentOptions.length > 0 && step === 'payment' && hasEmail && hasSelectedAddress && !showNewAddressForm && (secureShipping || (hasSelectedShipping && orderReview)) && (!enforcedOrder || (enforcedOrder.workflow_cohort === 'domestic_checkout_v1' && hasSelectedEstimateOption)) && !priceChangeNotice;
+  const canPurchase = paymentOptions.length > 0 && step === 'payment' && hasEmail && hasSelectedAddress && !showNewAddressForm && (secureShipping || (hasSelectedShipping && orderReview)) && (!enforcedOrder || (enforcedOrder.workflow_cohort === 'domestic_checkout_v1' && hasSelectedEstimateOption)) && !priceChangeNotice && !hasStockIssues && !isValidatingStock;
 
   const selectedShippingRate = shippingRates.find(rate => rate.id === selectedShippingRateId);
   const shippingRateInSelectedCurrency = selectedShippingRate
@@ -1846,6 +1917,7 @@ export default function Checkout() {
   const goBackToBag = () => navigate(ROUTES.CART);
 
   const handleEmailConfirm = () => {
+    if (hasStockIssues || isValidatingStock) return;
     setEmailError('');
 
     if (!email.trim()) {
@@ -1873,7 +1945,7 @@ export default function Checkout() {
   };
 
   const handleAddressSave = async () => {
-    if (showNewAddressForm) return;
+    if (showNewAddressForm || hasStockIssues || isValidatingStock) return;
     if (hasSelectedAddress && !selectedAddressNeedsPostalCode) {
       if (secureShipping) {
         // Domestic server-owned estimates require a durable order, but the
@@ -1889,7 +1961,7 @@ export default function Checkout() {
   };
 
   const handleShippingSave = async () => {
-    if (showNewAddressForm) return;
+    if (showNewAddressForm || hasStockIssues || isValidatingStock) return;
     setIsReviewingOrder(true);
     try {
       const review = await handleReviewOrder();
@@ -1968,6 +2040,43 @@ export default function Checkout() {
                 <h2 className="text-center text-lg font-semibold uppercase tracking-[0.2em] text-gray-700">Checkout</h2>
               </div>
 
+              {hasStockIssues && (
+                <div role="alert" className="rounded-sm border border-red-300 bg-red-50 p-4 space-y-2.5 text-red-900">
+                  <p className="text-sm font-semibold">
+                    {stockIssues.length > 0
+                      ? 'Some items in your bag are out of stock or no longer available.'
+                      : stockConflictMessage}
+                  </p>
+                  {stockIssues.length > 0 && (
+                    <ul className="list-disc pl-5 text-sm space-y-1">
+                      {stockIssues.map((issue) => (
+                        <li key={`${issue.product_id}-${issue.variant_id || 'base'}`}>
+                          {issue.message || `${issue.product_title || 'Item'} is out of stock.`}
+                        </li>
+                      ))}
+                    </ul>
+                  )}
+                  <div className="flex flex-wrap items-center gap-3 pt-1">
+                    {stockIssues.length > 0 && typeof removeItem === 'function' && (
+                      <button
+                        type="button"
+                        onClick={handleRemoveUnavailableItems}
+                        className="px-3.5 py-1.5 rounded-sm bg-red-700 text-white text-xs font-semibold hover:bg-red-800 transition"
+                      >
+                        Remove unavailable items
+                      </button>
+                    )}
+                    <button
+                      type="button"
+                      onClick={goBackToBag}
+                      className="px-3.5 py-1.5 rounded-sm border border-red-300 bg-white text-red-900 text-xs font-semibold hover:bg-red-100 transition"
+                    >
+                      Return to Bag
+                    </button>
+                  </div>
+                </div>
+              )}
+
               <div className="space-y-8">
                 {/* Email Step */}
                 <div className="space-y-3">
@@ -2017,7 +2126,7 @@ export default function Checkout() {
                           <button
                             type="button"
                             onClick={handleEmailConfirm}
-                            disabled={!hasEmail}
+                            disabled={!hasEmail || hasStockIssues || isValidatingStock}
                             className="px-6 py-2 rounded-sm bg-primary text-white text-sm font-semibold disabled:opacity-50 hover:bg-primary-dark transition"
                           >
                             Confirm
@@ -2639,7 +2748,7 @@ export default function Checkout() {
                             <button
                               type="button"
                               onClick={handleAddressSave}
-                              disabled={step !== 'address' || showNewAddressForm || !hasSelectedAddress || selectedAddressNeedsPostalCode || isCheckoutRequestPending || !shippingConfigLoaded || shippingConfigError || isPaymentLocked || isSwitchingCurrency}
+                              disabled={step !== 'address' || showNewAddressForm || !hasSelectedAddress || selectedAddressNeedsPostalCode || isCheckoutRequestPending || !shippingConfigLoaded || shippingConfigError || isPaymentLocked || isSwitchingCurrency || hasStockIssues || isValidatingStock}
                               className="w-full py-3 rounded-sm bg-primary text-white text-sm font-semibold disabled:opacity-50"
                             >
                               {isLoadingShipping ? 'Calculating Shipping...' : 'Continue'}
@@ -2718,7 +2827,7 @@ export default function Checkout() {
                         <button
                           type="button"
                           onClick={() => void handlePurchase()}
-                          disabled={isCreatingOrder || showNewAddressForm || !hasEmail || !isEmailConfirmed || Boolean(priceChangeNotice)}
+                          disabled={isCreatingOrder || showNewAddressForm || !hasEmail || !isEmailConfirmed || Boolean(priceChangeNotice) || hasStockIssues || isValidatingStock}
                           className="w-full py-3 rounded-sm bg-primary text-white text-sm font-semibold disabled:opacity-50"
                         >
                           {shippingProvider === 'combined'
@@ -2802,7 +2911,7 @@ export default function Checkout() {
                       <button
                         type="button"
                         onClick={handleShippingSave}
-                        disabled={!hasSelectedShipping || isReviewingOrder || step !== 'shipping' || showNewAddressForm}
+                        disabled={!hasSelectedShipping || isReviewingOrder || step !== 'shipping' || showNewAddressForm || hasStockIssues || isValidatingStock}
                         aria-busy={isReviewingOrder}
                         className="px-6 py-2 rounded-sm bg-primary text-white text-sm font-semibold disabled:opacity-50 flex items-center justify-center gap-2"
                       >
@@ -2885,6 +2994,29 @@ export default function Checkout() {
                           selectOption={selectCheckoutOption}
                           refreshEstimate={refreshCheckoutEstimate}
                           isSubmitting={isCreatingOrder || showNewAddressForm}
+                          disabled={hasStockIssues}
+                          onReturnToBag={goBackToBag}
+                          onStockConflict={() => {
+                            void (async () => {
+                              setStockConflictMessage(
+                                'One or more items in your bag are out of stock or no longer available. Return to your bag to remove or update unavailable items.',
+                              );
+                              await validateCheckoutStock();
+                              if (enforcedOrder) {
+                                try {
+                                  await checkoutService.cancelOrder(
+                                    enforcedOrder.id,
+                                    'Cancelled after stock conflict during delivery selection',
+                                    checkoutCapability,
+                                  );
+                                } catch {
+                                  // Best-effort cleanup of unpaid order; keep customer on clear stock error state
+                                }
+                                discardExpiredCheckout();
+                                setStep(selectedAddressId ? 'shipping' : 'address');
+                              }
+                            })();
+                          }}
                           onSelectionConfirmed={(selectedEstimate) => {
                             if (isCreatingOrder || showNewAddressForm) return;
                             const selectedOption = selectedEstimate.selected_option;

@@ -1,9 +1,11 @@
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Minus, Plus } from 'lucide-react';
 import { useNavigate, Link } from 'react-router-dom';
 import Layout from '../../components/layout/Layout';
 import { productService } from '../../services/productService';
+import { CartService } from '../../services/cartService';
 import type { Product, ProductVariant } from '../../types';
+import type { CartItem, CartValidationItem } from '../../types/cart';
 import { IMAGE_CONFIG, ROUTES } from '../../config/constants';
 import ProductCard from '../../components/products/ProductCard';
 import { useCartStore } from '../../store/cartStore';
@@ -25,11 +27,65 @@ export default function Cart() {
   const { favorites, toggleFavorite } = useWishlistActions();
 
   const [recommended, setRecommended] = useState<Product[]>([]);
+  const [validationItems, setValidationItems] = useState<CartValidationItem[]>([]);
+  const [isValidatingStock, setIsValidatingStock] = useState(false);
   const [editingItem, setEditingItem] = useState<{
     itemId: string;
     product: Product;
     variant: ProductVariant;
   } | null>(null);
+
+  const itemValidationKey = (productId: string, variantId?: string | null) =>
+    `${productId}:${!variantId || variantId.startsWith('default-') ? '' : variantId}`;
+
+  const validateCartStock = useCallback(async (items: CartItem[]): Promise<CartValidationItem[]> => {
+    if (items.length === 0) {
+      setValidationItems([]);
+      return [];
+    }
+    setIsValidatingStock(true);
+    try {
+      if (typeof CartService.validateCartItemsWithServer === 'function') {
+        const result = await CartService.validateCartItemsWithServer(items);
+        setValidationItems(result.items);
+        return result.items;
+      }
+      const localIssues = CartService.getLocalCartValidationIssues(items);
+      setValidationItems(localIssues);
+      return localIssues;
+    } catch {
+      const localIssues =
+        typeof CartService.getLocalCartValidationIssues === 'function'
+          ? CartService.getLocalCartValidationIssues(items)
+          : [];
+      setValidationItems(localIssues);
+      return localIssues;
+    } finally {
+      setIsValidatingStock(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    void validateCartStock(cart.items);
+  }, [cart.items, validateCartStock]);
+
+  const validationByKey = useMemo(() => {
+    const map = new Map<string, CartValidationItem>();
+    for (const item of validationItems) {
+      map.set(itemValidationKey(item.product_id, item.variant_id), item);
+    }
+    return map;
+  }, [validationItems]);
+
+  const stockIssues = useMemo(() => {
+    const serverIssues = validationItems.filter((item) => !item.is_in_stock);
+    if (serverIssues.length > 0) return serverIssues;
+    return typeof CartService.getLocalCartValidationIssues === 'function'
+      ? CartService.getLocalCartValidationIssues(cart.items)
+      : [];
+  }, [validationItems, cart.items]);
+
+  const hasStockIssues = stockIssues.length > 0;
 
   const subtotalInSelectedCurrency = cart.items.reduce((sum, item) => {
     return sum + convertCurrencyWithRates(
@@ -93,7 +149,13 @@ export default function Cart() {
   };
 
 
-  const handleCheckout = () => {
+  const handleCheckout = async () => {
+    if (cart.items.length === 0 || isValidatingStock) return;
+    const latest = await validateCartStock(cart.items);
+    const latestIssues = latest.filter((entry) => !entry.is_in_stock);
+    if (latestIssues.length > 0 || CartService.getLocalCartValidationIssues(cart.items).length > 0) {
+      return;
+    }
     navigate(ROUTES.CHECKOUT);
   };
 
@@ -130,6 +192,25 @@ export default function Cart() {
                 const imageSource = getProductImageSource(item.product);
                 const brand = item.product.vendor_name ?? 'Shopsoma Collective';
                 const category = item.product.category_name ?? '';
+                const itemValidation = validationByKey.get(
+                  itemValidationKey(item.product_id, item.variant?.id),
+                );
+                const localItemIssues =
+                  typeof CartService.getLocalCartValidationIssues === 'function'
+                    ? CartService.getLocalCartValidationIssues([item])
+                    : [];
+                const activeIssue =
+                  itemValidation && !itemValidation.is_in_stock
+                    ? itemValidation
+                    : localItemIssues[0];
+                const maxAvailable =
+                  itemValidation && !itemValidation.made_to_order
+                    ? itemValidation.available_stock
+                    : !item.product.made_to_order && typeof item.variant?.stock === 'number'
+                      ? item.variant.stock
+                      : undefined;
+                const canIncrement =
+                  typeof maxAvailable !== 'number' || item.quantity < maxAvailable;
 
                 const showMoveToWishlist = !favorites.has(item.product_id);
                 return (
@@ -174,7 +255,8 @@ export default function Cart() {
                             <span className="px-4 py-1 text-sm font-semibold">{item.quantity}</span>
                             <button
                               type="button"
-                              className="px-3 py-1 text-gray-500 hover:text-primary"
+                              disabled={!canIncrement}
+                              className="px-3 py-1 text-gray-500 hover:text-primary disabled:opacity-40 disabled:cursor-not-allowed"
                               onClick={() => handleQuantityChange(item.id, 'inc')}
                             >
                               <Plus className="w-4 h-4" />
@@ -185,6 +267,14 @@ export default function Cart() {
                           <p>Size: {item.variant.size}</p>
                           <p>Color: {item.variant.color}</p>
                         </div>
+                        {activeIssue && (
+                          <p
+                            role="alert"
+                            className="text-xs font-medium text-red-700 bg-red-50 border border-red-200 px-3 py-2 rounded-sm"
+                          >
+                            {activeIssue.message || `${item.product.title} is out of stock.`}
+                          </p>
+                        )}
                         <div className="flex items-center justify-between pt-2 text-sm">
                           {showMoveToWishlist ? (
                             <button
@@ -261,13 +351,30 @@ export default function Cart() {
                   />
                 </div>
                 <div className="space-y-3 pt-2">
+                  {hasStockIssues && (
+                    <div
+                      role="alert"
+                      className="rounded-sm border border-red-200 bg-red-50 p-3 text-xs text-red-800 space-y-1"
+                    >
+                      <p className="font-semibold">
+                        Remove or adjust out-of-stock items before checking out.
+                      </p>
+                      <ul className="list-disc pl-4 space-y-0.5">
+                        {stockIssues.map((issue) => (
+                          <li key={`${issue.product_id}-${issue.variant_id || 'base'}`}>
+                            {issue.message || `${issue.product_title || 'Item'} is out of stock.`}
+                          </li>
+                        ))}
+                      </ul>
+                    </div>
+                  )}
                   <button
                     type="button"
-                    onClick={handleCheckout}
-                    disabled={cart.items.length === 0}
+                    onClick={() => void handleCheckout()}
+                    disabled={cart.items.length === 0 || isValidatingStock || hasStockIssues}
                     className="w-full bg-primary text-white py-3 text-sm font-semibold hover:bg-primary-dark transition disabled:opacity-50 disabled:cursor-not-allowed border border-primary"
                   >
-                    Proceed to Checkout
+                    {isValidatingStock ? 'Checking stock…' : 'Proceed to Checkout'}
                   </button>
                   <button
                     type="button"

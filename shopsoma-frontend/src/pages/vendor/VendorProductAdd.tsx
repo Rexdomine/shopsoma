@@ -917,8 +917,16 @@ export default function VendorProductAdd() {
       return;
     }
 
-    if ([weightKg, lengthCm, widthCm, heightCm].some((value) => !value || Number(value) <= 0)) {
-      warning('Weight and all parcel dimensions are required for DHL shipping', 'Missing shipping details');
+    // Parcel measurements are optional: when blank, shipping rates are estimated
+    // from the product category and the hub weighs the packed parcel. If any one
+    // value is entered, all four must be valid so the backend never stores a
+    // partial measurement.
+    const parcelValues = [weightKg, lengthCm, widthCm, heightCm];
+    if (
+      parcelValues.some((value) => value.trim()) &&
+      parcelValues.some((value) => !value.trim() || !(Number(value) > 0))
+    ) {
+      warning('Enter positive values for weight, length, width and height, or leave all four blank', 'Incomplete parcel details');
       return;
     }
 
@@ -1061,10 +1069,14 @@ export default function VendorProductAdd() {
         made_to_order_timeline: estimatedProductionTime.trim() || undefined,
         care_instructions: productCare || undefined,
         fabric_composition: (materials === 'Others' ? customMaterial.trim() : materials) || undefined,
-        weight_kg: Number(weightKg),
-        length_cm: Number(lengthCm),
-        width_cm: Number(widthCm),
-        height_cm: Number(heightCm),
+        ...(weightKg.trim() && lengthCm.trim() && widthCm.trim() && heightCm.trim()
+          ? {
+              weight_kg: Number(weightKg),
+              length_cm: Number(lengthCm),
+              width_cm: Number(widthCm),
+              height_cm: Number(heightCm),
+            }
+          : {}),
         images: orderedUploadedImages.map((image, index) => ({
           image_url: image.imageUrl!,
           thumbnail_url: image.thumbnailUrl,
@@ -1668,11 +1680,11 @@ export default function VendorProductAdd() {
                   <div className="rounded-xl border border-[#105E53]/15 bg-[#105E53]/5 p-4">
                     <div className="flex items-center justify-between">
                       <p className="text-sm font-semibold text-[#105E53]">Shipping parcel details</p>
-                      <span className="inline-flex items-center px-2 py-0.5 rounded text-[10px] font-semibold bg-amber-100 text-amber-800 border border-amber-200">
-                        DHL Coming Soon
+                      <span className="inline-flex items-center px-2 py-0.5 rounded text-[10px] font-semibold bg-gray-100 text-gray-600 border border-gray-200">
+                        Optional
                       </span>
                     </div>
-                    <p className="mt-1 text-xs text-gray-500">Enter packed measurements for automated shipping rates (DHL integration is coming soon): weight in kilograms and dimensions in centimetres.</p>
+                    <p className="mt-1 text-xs text-gray-500">Enter the packed weight (kg) and dimensions (cm) if you know them, for the most accurate DHL shipping rates. Not sure? Leave all four blank — we'll estimate from the product category and our hub will weigh the packed parcel before it ships.</p>
                     <div className="mt-3 grid grid-cols-2 gap-4">
                       {[
                         ['Weight (kg)', weightKg, setWeightKg],
@@ -1681,8 +1693,8 @@ export default function VendorProductAdd() {
                         ['Height (cm)', heightCm, setHeightCm],
                       ].map(([label, value, setter]) => (
                         <div key={String(label)}>
-                          <label className="mb-1 block text-xs font-medium text-gray-700">{String(label)} *</label>
-                          <input type="number" min="0.001" step="0.001" value={String(value)} onChange={(e) => (setter as (next: string) => void)(e.target.value)} className="w-full rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm focus:outline-none focus:border-[#105E53] focus:ring-2 focus:ring-[#105E53]/20" required />
+                          <label className="mb-1 block text-xs font-medium text-gray-700">{String(label)}</label>
+                          <input type="number" min="0.001" step="0.001" value={String(value)} onChange={(e) => (setter as (next: string) => void)(e.target.value)} className="w-full rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm focus:outline-none focus:border-[#105E53] focus:ring-2 focus:ring-[#105E53]/20" />
                         </div>
                       ))}
                     </div>
