@@ -356,7 +356,7 @@ export default function DhlShipmentOperations({ order, onOrderChange, disabled =
               );
             })}
 
-            {held && (
+            {held && !busy && (
               <div role="alert" className="p-3 bg-red-50 border border-red-200 text-red-800 text-xs rounded-lg">
                 An unresolved local shipment command blocks new mutations, including after reload. Request authorized outcome review; an empty record does not prove no shipment was created.
               </div>
