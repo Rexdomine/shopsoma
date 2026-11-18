@@ -51,10 +51,6 @@ vi.mock('../../store/cartStore', () => ({
     selector({ cart: { summary: { itemCount: 0 } } }),
 }));
 
-vi.mock('../../components/shipping/CustomerShippingQuotes', () => ({
-  default: () => <div data-testid="shipping-quotes" />,
-}));
-
 describe('ProfileOrders', () => {
   const mockOrderData = {
     id: 'order-123',
@@ -141,6 +137,8 @@ describe('ProfileOrders', () => {
     expect(screen.getByText('Silk Adire Kaftan')).toBeInTheDocument();
     expect(screen.getByText('Blue / M')).toBeInTheDocument();
     expect(screen.getByText('Qty: 2')).toBeInTheDocument();
+    expect(screen.queryByText(/Secure delivery options/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/No delivery quote has been requested/i)).not.toBeInTheDocument();
 
     // Close modal
     fireEvent.click(screen.getAllByRole('button', { name: 'Close' })[0]);
