@@ -303,7 +303,11 @@ async def resolve_order_variant(
                     product.compare_at_price,
                 ),
             )
-        variant_stock = variant.stock if (product.made_to_order or variant.is_available) else 0
+        variant_stock = (
+            variant.stock
+            if (product.made_to_order or getattr(variant, "is_available", True))
+            else 0
+        )
         if product.made_to_order:
             variant_stock = max(variant_stock, 999999)
         return {
@@ -329,7 +333,7 @@ async def resolve_order_variant(
 
     if size_stock_row:
         size_stock, variation = size_stock_row
-        if not variation.is_active:
+        if not getattr(variation, "is_active", True):
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail=f"Selected variation for '{product.title}' is not available",
@@ -390,7 +394,7 @@ async def resolve_order_variant(
     variation = variation_result.scalar_one_or_none()
 
     if variation:
-        if not variation.is_active:
+        if not getattr(variation, "is_active", True):
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail=f"Selected variation for '{product.title}' is not available",
