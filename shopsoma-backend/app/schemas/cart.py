@@ -28,9 +28,40 @@ class CartItemResponse(CartItemBase):
     updated_at: datetime
     product: Optional[ProductResponse] = None
     variant: Optional[ProductVariantResponse] = None
+    available_stock: Optional[int] = None
+    is_in_stock: bool = True
+    stock_issue: Optional[str] = None
 
     class Config:
         from_attributes = True
+
+
+class CartValidateItem(BaseModel):
+    product_id: str
+    variant_id: Optional[str] = None
+    quantity: int = Field(ge=1, description="Quantity must be at least 1")
+
+
+class CartValidateRequest(BaseModel):
+    items: List[CartValidateItem]
+
+
+class CartValidateItemResult(BaseModel):
+    product_id: str
+    variant_id: Optional[str] = None
+    product_title: Optional[str] = None
+    requested_quantity: int
+    available_stock: int
+    is_in_stock: bool
+    made_to_order: bool = False
+    status: str
+    message: Optional[str] = None
+
+
+class CartValidateResponse(BaseModel):
+    is_valid: bool
+    items: List[CartValidateItemResult]
+    errors: List[str]
 
 
 class CartSummary(BaseModel):

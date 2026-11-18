@@ -58,6 +58,11 @@ vi.mock('../../utils/orderStatusMessages', () => ({
   getStatusBadgeConfig: () => ({ label: 'Order received', className: 'bg-gray-100 text-gray-900' }),
 }));
 
+vi.mock('../../services/parcelMeasurementService', async () => ({
+  ...(await vi.importActual<typeof import('../../services/parcelMeasurementService')>('../../services/parcelMeasurementService')),
+  getShippingBoxPresets: vi.fn().mockResolvedValue({ presets: [], is_default: true }),
+  recordDhlParcelMeasurement: vi.fn(),
+}));
 vi.mock('../../services/adminOrderService', () => ({
   getOrderDetail: mocks.getOrderDetail,
   updateOrderStatus: mocks.updateOrderStatus,

@@ -707,6 +707,21 @@ def _setting_bool(settings: object, upper_name: str, lower_name: str) -> bool:
     return False
 
 
+HUB_MEASUREMENT_REQUIRED_DETAIL = (
+    "weigh and measure the packed parcel at the hub before booking DHL"
+)
+
+
+def _ensure_hub_measured_parcel(settings: object, package_version: HubPackageVersion) -> None:
+    """Never book DHL with catalog/estimated measurements when the gate is enabled."""
+    if not _setting_bool(
+        settings, "DHL_REQUIRE_HUB_MEASURED_PARCEL", "dhl_require_hub_measured_parcel"
+    ):
+        return
+    if getattr(package_version, "measurement_source", "estimated") != "hub_measured":
+        raise ShipmentPhase4Error(HUB_MEASUREMENT_REQUIRED_DETAIL)
+
+
 def _cohort_allowlist(settings: Settings) -> frozenset[uuid.UUID]:
     return settings.dhl_domestic_sandbox_cohort_ids
 
@@ -2044,6 +2059,7 @@ async def book_outbound_shipment(
         order_id=order_id,
         command=command,
     )
+    _ensure_hub_measured_parcel(settings, package_version)
     quoted_service = await _load_persisted_quoted_service(db, intent_id=intent.id)
 
     guard = await _load_or_create_guard(db, intent_id=intent.id)

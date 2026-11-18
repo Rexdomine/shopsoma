@@ -8,13 +8,16 @@ import uuid
 
 from app.core.database import get_db
 from app.models.cart import CartItem, Coupon
-from app.models.product import Product, Variation
+from app.models.product import Product, ProductStatus, Variation
 from app.schemas.cart import (
     CartItemCreate,
     CartItemUpdate,
     CartItemResponse,
     CartResponse,
     CartSummary,
+    CartValidateItemResult,
+    CartValidateRequest,
+    CartValidateResponse,
     ApplyCouponRequest,
     ApplyCouponResponse,
 )
@@ -31,6 +34,7 @@ from app.schemas.product import (
 )
 from app.api.dependencies import get_optional_user
 from app.models.user import User
+from app.services.checkout.reservations import get_blocking_reserved_quantities
 from app.services.vendor_visibility import customer_visible_vendor_product_filter
 
 router = APIRouter(prefix="/cart", tags=["cart"])
@@ -69,6 +73,8 @@ def resolve_variant_response(
             response = ProductVariantResponse.model_validate(variant)
             if getattr(product, "made_to_order", False):
                 response.is_available = True
+            else:
+                response.is_available = bool(response.is_available) and int(response.stock or 0) > 0
             variation = unique_variations_by_color(product.variations or []).get(
                 normalize_color_value(variant.color)
             )
@@ -119,6 +125,7 @@ def resolve_variant_response(
         if str(variation.id) == str(variant_id):
             if product.variants or (variation.is_active and bool(variation.size_stocks)):
                 return None
+            bare_stock = int(getattr(product, "total_stock", 0) or 0)
             return ProductVariantResponse.model_validate({
                 "id": variation.id,
                 "product_id": product.id,
@@ -126,9 +133,10 @@ def resolve_variant_response(
                 "color": None if str(getattr(variation, "type", "color")).casefold() == "size" else variation.title,
                 "color_hex": variation.color_hex,
                 "price": base_price,
-                "stock": 0,
+                "stock": bare_stock,
                 "sku": None,
-                "is_available": bool(variation.is_active),
+                "is_available": bool(variation.is_active)
+                and (bool(getattr(product, "made_to_order", False)) or bare_stock > 0),
                 "created_at": variation.created_at,
                 "updated_at": variation.updated_at,
             })
@@ -171,6 +179,32 @@ def resolve_variant_response(
     return None
 
 
+def _resolve_stock_subject(
+    product: Optional[Product],
+    variant_id: Optional[str],
+) -> tuple[Optional[str], Optional[uuid.UUID]]:
+    """Return the underlying (inventory_subject_kind, inventory_subject_id) for a cart item."""
+    if not product:
+        return None, None
+
+    variant_id_str = str(variant_id or "")
+    if not variant_id_str or variant_id_str.startswith("default-"):
+        return "product", cast_uuid(getattr(product, "id", None))
+
+    for variant in getattr(product, "variants", None) or []:
+        if str(variant.id) == variant_id_str:
+            return "product_variant", cast_uuid(variant.id)
+
+    for variation in getattr(product, "variations", None) or []:
+        if str(variation.id) == variant_id_str:
+            return "product", cast_uuid(getattr(product, "id", None))
+        for size_stock in getattr(variation, "size_stocks", None) or []:
+            if str(size_stock.id) == variant_id_str:
+                return "size_stock", cast_uuid(size_stock.id)
+
+    return None, None
+
+
 def resolve_cart_purchase_option(
     product: Optional[Product],
     variant_id: Optional[str],
@@ -188,6 +222,8 @@ def resolve_cart_purchase_option(
             "price": float(product.base_price),
             "stock": int(product.total_stock or 0),
             "is_available": True if product.made_to_order else int(product.total_stock or 0) > 0,
+            "stock_source": "product",
+            "stock_id": cast_uuid(getattr(product, "id", None)),
         }
 
     if not variant_id:
@@ -198,17 +234,22 @@ def resolve_cart_purchase_option(
             "price": float(product.base_price),
             "stock": int(product.total_stock or 0),
             "is_available": True if product.made_to_order else int(product.total_stock or 0) > 0,
+            "stock_source": "product",
+            "stock_id": cast_uuid(getattr(product, "id", None)),
         }
 
     variant_response = resolve_variant_response(product, variant_id)
     if not variant_response:
         return None
 
+    stock_source, stock_id = _resolve_stock_subject(product, variant_id)
     return {
         "normalized_variant_id": variant_id,
         "price": float(getattr(variant_response, "price", product.base_price)),
         "stock": int(getattr(variant_response, "stock", 0) or 0),
         "is_available": bool(getattr(variant_response, "is_available", False)),
+        "stock_source": stock_source,
+        "stock_id": stock_id,
     }
 
 
@@ -247,10 +288,19 @@ def calculate_cart_subtotal(items: list[CartItem]) -> float:
     return sum(resolve_cart_item_price(item) * item.quantity for item in items)
 
 
-def serialize_cart_item(cart_item: CartItem) -> CartItemResponse:
+def serialize_cart_item(
+    cart_item: CartItem,
+    *,
+    available_stock: Optional[int] = None,
+    is_in_stock: bool = True,
+    stock_issue: Optional[str] = None,
+) -> CartItemResponse:
     product = cart_item.product
     variant_id = str(cart_item.variant_id) if cart_item.variant_id else None
     variant_response = resolve_variant_response(product, variant_id) if variant_id else None
+    if variant_response is not None and available_stock is not None:
+        variant_response.stock = available_stock
+        variant_response.is_available = is_in_stock
     product_response = ProductResponse.model_validate(product) if product else None
     price = resolve_cart_item_price(cart_item)
 
@@ -266,7 +316,10 @@ def serialize_cart_item(cart_item: CartItem) -> CartItemResponse:
         created_at=cart_item.created_at,
         updated_at=cart_item.updated_at,
         product=product_response,
-        variant=variant_response
+        variant=variant_response,
+        available_stock=available_stock,
+        is_in_stock=is_in_stock,
+        stock_issue=stock_issue,
     )
 
 
@@ -326,6 +379,189 @@ async def fetch_cart_item_with_relations(
     return result.scalar_one_or_none()
 
 
+async def _evaluate_cart_items_stock(
+    db: AsyncSession,
+    entries: list[tuple[str, Optional[str], int, Optional[Product]]],
+) -> list[CartValidateItemResult]:
+    """Validate effective available stock (including active non-reclaimable reservations) for cart items."""
+    resolved: list[tuple[str, Optional[str], int, Optional[Product], Optional[dict]]] = []
+    subjects: set[tuple[str, uuid.UUID]] = set()
+    requested_by_subject: dict[tuple[str, uuid.UUID], int] = {}
+
+    for raw_product_id, raw_variant_id, quantity, product in entries:
+        purchase_option = (
+            resolve_cart_purchase_option(product, raw_variant_id)
+            if product is not None
+            else None
+        )
+        if (
+            product is not None
+            and purchase_option is not None
+            and not getattr(product, "made_to_order", False)
+            and purchase_option.get("stock_source")
+            and purchase_option.get("stock_id") is not None
+        ):
+            key = (purchase_option["stock_source"], purchase_option["stock_id"])
+            subjects.add(key)
+            requested_by_subject[key] = requested_by_subject.get(key, 0) + quantity
+        resolved.append((raw_product_id, raw_variant_id, quantity, product, purchase_option))
+
+    blocking_by_subject = await get_blocking_reserved_quantities(db, subjects)
+
+    results: list[CartValidateItemResult] = []
+    for raw_product_id, raw_variant_id, quantity, product, purchase_option in resolved:
+        product_title = getattr(product, "title", None) if product is not None else None
+        if (
+            product is None
+            or getattr(product, "status", None) != ProductStatus.ACTIVE
+            or purchase_option is None
+        ):
+            results.append(
+                CartValidateItemResult(
+                    product_id=raw_product_id,
+                    variant_id=raw_variant_id,
+                    product_title=product_title,
+                    requested_quantity=quantity,
+                    available_stock=0,
+                    is_in_stock=False,
+                    made_to_order=False,
+                    status="unavailable",
+                    message=(
+                        f"{product_title} is no longer available."
+                        if product_title
+                        else "This item is no longer available."
+                    ),
+                )
+            )
+            continue
+
+        made_to_order = bool(getattr(product, "made_to_order", False))
+        if made_to_order:
+            is_available = bool(purchase_option["is_available"])
+            results.append(
+                CartValidateItemResult(
+                    product_id=raw_product_id,
+                    variant_id=raw_variant_id,
+                    product_title=product_title,
+                    requested_quantity=quantity,
+                    available_stock=max(int(purchase_option["stock"]), quantity) if is_available else 0,
+                    is_in_stock=is_available,
+                    made_to_order=True,
+                    status="ok" if is_available else "unavailable",
+                    message=None if is_available else f"{product_title} is no longer available.",
+                )
+            )
+            continue
+
+        stock_source = purchase_option.get("stock_source")
+        stock_id = purchase_option.get("stock_id")
+        blocking = (
+            blocking_by_subject.get((stock_source, stock_id), 0)
+            if stock_source and stock_id is not None
+            else 0
+        )
+        effective_stock = max(0, int(purchase_option["stock"]) - blocking)
+        total_requested = (
+            requested_by_subject.get((stock_source, stock_id), quantity)
+            if stock_source and stock_id is not None
+            else quantity
+        )
+
+        if not purchase_option["is_available"] or effective_stock <= 0:
+            results.append(
+                CartValidateItemResult(
+                    product_id=raw_product_id,
+                    variant_id=raw_variant_id,
+                    product_title=product_title,
+                    requested_quantity=quantity,
+                    available_stock=0,
+                    is_in_stock=False,
+                    made_to_order=False,
+                    status="out_of_stock",
+                    message=f"{product_title} is out of stock.",
+                )
+            )
+        elif total_requested > effective_stock:
+            results.append(
+                CartValidateItemResult(
+                    product_id=raw_product_id,
+                    variant_id=raw_variant_id,
+                    product_title=product_title,
+                    requested_quantity=quantity,
+                    available_stock=effective_stock,
+                    is_in_stock=False,
+                    made_to_order=False,
+                    status="insufficient_stock",
+                    message=f"Only {effective_stock} of {product_title} available.",
+                )
+            )
+        else:
+            results.append(
+                CartValidateItemResult(
+                    product_id=raw_product_id,
+                    variant_id=raw_variant_id,
+                    product_title=product_title,
+                    requested_quantity=quantity,
+                    available_stock=effective_stock,
+                    is_in_stock=True,
+                    made_to_order=False,
+                    status="ok",
+                    message=None,
+                )
+            )
+
+    return results
+
+
+@router.post("/validate", response_model=CartValidateResponse)
+async def validate_cart_items(
+    payload: CartValidateRequest,
+    db: AsyncSession = Depends(get_db),
+):
+    """Validate current stock availability for cart items before checkout."""
+    if not payload.items:
+        return CartValidateResponse(is_valid=True, items=[], errors=[])
+
+    product_uuids = [
+        parsed
+        for parsed in (cast_uuid(item.product_id) for item in payload.items)
+        if parsed is not None
+    ]
+    products_by_id: dict[str, Product] = {}
+    if product_uuids:
+        products_result = await db.execute(
+            select(Product)
+            .options(
+                selectinload(Product.variants),
+                selectinload(Product.variations).selectinload(Variation.size_stocks),
+                selectinload(Product.vendor),
+            )
+            .where(
+                Product.id.in_(product_uuids),
+                customer_visible_vendor_product_filter(),
+            )
+        )
+        for product in products_result.scalars().all():
+            products_by_id[str(product.id)] = product
+
+    entries = [
+        (
+            item.product_id,
+            item.variant_id,
+            item.quantity,
+            products_by_id.get(item.product_id),
+        )
+        for item in payload.items
+    ]
+    results = await _evaluate_cart_items_stock(db, entries)
+    errors = [res.message for res in results if not res.is_in_stock and res.message]
+    return CartValidateResponse(
+        is_valid=all(res.is_in_stock for res in results),
+        items=results,
+        errors=errors,
+    )
+
+
 @router.get("", response_model=CartResponse)
 async def get_cart(
     current_user: Optional[User] = Depends(get_optional_user),
@@ -355,13 +591,57 @@ async def get_cart(
     if changed:
         await db.commit()
 
+    stock_checks = await _evaluate_cart_items_stock(
+        db,
+        [
+            (
+                str(item.product_id),
+                str(item.variant_id) if item.variant_id else None,
+                item.quantity,
+                item.product,
+            )
+            for item in items
+        ],
+    )
     summary = calculate_cart_summary(items)
 
     return CartResponse(
-        items=[serialize_cart_item(item) for item in items],
+        items=[
+            serialize_cart_item(
+                item,
+                available_stock=stock_check.available_stock,
+                is_in_stock=stock_check.is_in_stock,
+                stock_issue=stock_check.message,
+            )
+            for item, stock_check in zip(items, stock_checks)
+        ],
         summary=summary,
         last_updated=datetime.utcnow()
     )
+
+
+async def _assert_purchasable_stock(
+    db: AsyncSession,
+    product: Product,
+    purchase_option: dict,
+    requested_quantity: int,
+) -> int:
+    """Validate effective stock (physical minus active non-reclaimable reservations) for a cart mutation."""
+    if product.made_to_order:
+        return int(purchase_option["stock"])
+    stock_source = purchase_option.get("stock_source")
+    stock_id = purchase_option.get("stock_id")
+    subjects = {(stock_source, stock_id)} if stock_source and stock_id is not None else set()
+    blocking = (await get_blocking_reserved_quantities(db, subjects)).get((stock_source, stock_id), 0)
+    effective_stock = max(0, int(purchase_option["stock"]) - blocking)
+    if not purchase_option["is_available"] or effective_stock <= 0:
+        raise HTTPException(status_code=400, detail="Product is out of stock")
+    if requested_quantity > effective_stock:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Insufficient stock. Available: {effective_stock}",
+        )
+    return effective_stock
 
 
 @router.post("/items", response_model=CartItemResponse)
@@ -421,14 +701,7 @@ async def add_to_cart(
         existing_item = result.scalar_one_or_none()
 
         requested_quantity = item_data.quantity + (existing_item.quantity if existing_item else 0)
-        if not product.made_to_order:
-            if not purchase_option["is_available"] or purchase_option["stock"] <= 0:
-                raise HTTPException(status_code=400, detail="Product is out of stock")
-            if requested_quantity > purchase_option["stock"]:
-                raise HTTPException(
-                    status_code=400,
-                    detail=f"Insufficient stock. Available: {purchase_option['stock']}"
-                )
+        effective_stock = await _assert_purchasable_stock(db, product, purchase_option, requested_quantity)
 
         if existing_item:
             # Update quantity
@@ -438,7 +711,7 @@ async def add_to_cart(
             await db.commit()
             refreshed_item = await fetch_cart_item_with_relations(db, str(existing_item.id))
             print(f"[Cart API] add_to_cart existing id={existing_item.id} qty={existing_item.quantity} user={user_uuid}")
-            return serialize_cart_item(refreshed_item or existing_item)
+            return serialize_cart_item(refreshed_item or existing_item, available_stock=effective_stock)
 
         # Create new cart item with auto-generated UUID
         cart_item = CartItem(
@@ -457,7 +730,7 @@ async def add_to_cart(
         cart_with_relations = await fetch_cart_item_with_relations(db, str(cart_item.id))
         print(f"[Cart API] add_to_cart created id={cart_item.id} qty={cart_item.quantity} user={user_uuid} session={cart_item.session_id}")
 
-        return serialize_cart_item(cart_with_relations or cart_item)
+        return serialize_cart_item(cart_with_relations or cart_item, available_stock=effective_stock)
 
     except HTTPException:
         raise
@@ -521,14 +794,9 @@ async def update_cart_item(
         if not purchase_option:
             raise HTTPException(status_code=404, detail="Product variant not found")
 
-        if not cart_item.product.made_to_order:
-            if not purchase_option["is_available"] or purchase_option["stock"] <= 0:
-                raise HTTPException(status_code=400, detail="Product is out of stock")
-            if update_data.quantity > purchase_option["stock"]:
-                raise HTTPException(
-                    status_code=400,
-                    detail=f"Insufficient stock. Available: {purchase_option['stock']}"
-                )
+        effective_stock = await _assert_purchasable_stock(
+            db, cart_item.product, purchase_option, update_data.quantity
+        )
 
         cart_item.quantity = update_data.quantity
         cart_item.price = purchase_option["price"]
@@ -539,7 +807,7 @@ async def update_cart_item(
         updated_item = await fetch_cart_item_with_relations(db, str(cart_item.id))
         print(f"[Cart API] update_cart_item id={cart_item.id} qty={cart_item.quantity} user={user_uuid}")
 
-        return serialize_cart_item(updated_item or cart_item)
+        return serialize_cart_item(updated_item or cart_item, available_stock=effective_stock)
 
     except HTTPException:
         raise

@@ -7,6 +7,8 @@ import subprocess
 import tempfile
 import time
 from typing import List
+
+from pydantic import BaseModel
 from datetime import datetime, timezone
 from urllib.parse import urlparse
 
@@ -49,6 +51,12 @@ from app.services.commission import COMMISSION_SETTING_KEY, DEFAULT_COMMISSION_R
 from app.services.commerce_features import get_commerce_features
 
 from app.services.shipping.provider_settings import shipping_provider_settings
+from app.services.shipping.box_presets import (
+    ShippingBoxPreset,
+    ShippingBoxPresetList,
+    load_box_presets,
+    save_box_presets,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -743,3 +751,30 @@ async def update_commerce_features(
         await update_app_setting_value(db, key, str(enabled).lower(), commit=False)
     await db.commit()
     return await get_commerce_features(db)
+
+
+class ShippingBoxPresetsResponse(BaseModel):
+    presets: List[ShippingBoxPreset]
+    is_default: bool
+
+
+@router.get("/admin/shipping-boxes", response_model=ShippingBoxPresetsResponse)
+async def get_shipping_box_presets(
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(require_admin),
+):
+    """ShopSoma standard box catalogue used to pre-fill hub parcel measurements."""
+    presets, is_default = await load_box_presets(db)
+    return ShippingBoxPresetsResponse(presets=presets, is_default=is_default)
+
+
+@router.put("/admin/shipping-boxes", response_model=ShippingBoxPresetsResponse)
+async def update_shipping_box_presets(
+    payload: ShippingBoxPresetList,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(require_admin),
+):
+    """Replace the box catalogue. Each box must fit DHL Express piece limits."""
+    presets = await save_box_presets(db, payload, actor_id=current_user.id)
+    await db.commit()
+    return ShippingBoxPresetsResponse(presets=presets, is_default=False)

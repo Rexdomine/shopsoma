@@ -82,7 +82,7 @@ describe('VendorProductAdd Variable Product Combination Matrix', () => {
     // Shipping parcel dimensions
     for (const label of ['Weight (kg)', 'Length (cm)', 'Width (cm)', 'Height (cm)']) {
       fireEvent.change(
-        screen.getByText(`${label} *`).parentElement!.querySelector('input')!,
+        screen.getByText(label).parentElement!.querySelector('input')!,
         { target: { value: '1' } }
       );
     }

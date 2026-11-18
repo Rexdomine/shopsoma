@@ -98,6 +98,20 @@ def test_dhl_rejects_arbitrary_base_url_override() -> None:
         make_settings(DHL_BASE_URL="https://example.invalid")
 
 
+def test_dhl_accepts_official_base_url_from_env() -> None:
+    sandbox_cfg = make_settings(
+        DHL_ENVIRONMENT="sandbox",
+        DHL_BASE_URL="https://express.api.dhl.com/mydhlapi/test/",
+    )
+    assert sandbox_cfg.dhl_base_url == "https://express.api.dhl.com/mydhlapi/test"
+
+    prod_cfg = make_settings(
+        DHL_ENVIRONMENT="production",
+        DHL_BASE_URL="https://express.api.dhl.com/mydhlapi/",
+    )
+    assert prod_cfg.dhl_base_url == "https://express.api.dhl.com/mydhlapi"
+
+
 @pytest.mark.parametrize("timeout", [0, 0.5, 60.1])
 def test_dhl_rejects_timeout_outside_safe_bounds(timeout: float) -> None:
     with pytest.raises(ValidationError, match="DHL_REQUEST_TIMEOUT_SECONDS"):

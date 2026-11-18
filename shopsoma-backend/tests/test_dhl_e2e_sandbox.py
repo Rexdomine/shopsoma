@@ -395,7 +395,8 @@ async def test_dhl_full_fulfillment_workflow_webhook_and_live_map_simulator(
     assert len(dhl_ops["packages"]) == 1
     pkg_info = dhl_ops["packages"][0]
     assert pkg_info["package_state"] == "ready"
-    assert pkg_info["selection_eligible"] is True
+    # Catalog-estimated parcels cannot be booked until the hub measures them.
+    assert pkg_info["selection_blockers"] == ["parcel_not_measured"]
     assert pkg_info["seal_id"] is not None
     assert pkg_info["intent_id"] is not None
 
@@ -406,6 +407,17 @@ async def test_dhl_full_fulfillment_workflow_webhook_and_live_map_simulator(
     )
     assert prep_replay.status_code == 200
     assert prep_replay.json()["dhl_operations"]["packages"][0]["package_id"] == pkg_info["package_id"]
+
+    # Step 1b: Hub records the scale weight and box size of the sealed parcel.
+    measure_res = await client.post(
+        f"/api/v1/admin/orders/{order.id}/dhl/parcel-measurement",
+        json={"box_preset_code": "SS-M", "weight_kg": "1.6", "length_cm": 40, "width_cm": 30, "height_cm": 15},
+        headers={"Authorization": f"Bearer {admin_token}"},
+    )
+    assert measure_res.status_code == 200, measure_res.text
+    pkg_info = measure_res.json()["dhl_operations"]["packages"][0]
+    assert pkg_info["selection_eligible"] is True
+    assert pkg_info["parcel"]["measurement_source"] == "hub_measured"
 
     # Step 2: Book DHL Shipment via Admin API (with mocked adapter returning valid PDF label)
     fake_tracking_no = f"123456{uuid.uuid4().int % 10000:04d}"
@@ -791,6 +803,16 @@ async def test_dhl_live_mydhl_sandbox_end_to_end_rates_booking_label_and_trackin
     )
     assert prep_res.status_code == 200, prep_res.text
     pkg_info = prep_res.json()["dhl_operations"]["packages"][0]
+
+    # Hub weighs/measures the sealed parcel -> audited repack to a measured version.
+    measure_res = await client.post(
+        f"/api/v1/admin/orders/{order.id}/dhl/parcel-measurement",
+        json={"box_preset_code": "SS-M", "weight_kg": "1.6", "length_cm": 40, "width_cm": 30, "height_cm": 15},
+        headers={"Authorization": f"Bearer {admin_token}"},
+    )
+    assert measure_res.status_code == 200, measure_res.text
+    pkg_info = measure_res.json()["dhl_operations"]["packages"][0]
+    assert pkg_info["parcel"]["measurement_source"] == "hub_measured"
 
     # 3. Live MyDHL Sandbox Shipment Booking (POST /shipments)
     book_res = await client.post(

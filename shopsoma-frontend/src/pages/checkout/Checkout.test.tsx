@@ -20,6 +20,9 @@ const mocks = vi.hoisted(() => ({
   stripeFormProps: vi.fn(),
   stripeElementsProps: vi.fn(),
   clearCart: vi.fn(),
+  validateCartItemsWithServer: vi.fn(),
+  getLocalCartValidationIssues: vi.fn(),
+  removeItem: vi.fn(),
   auth: {
     isAuthenticated: true,
     user: { id: 'customer-1', email: 'buyer@example.com', full_name: 'Buyer', phone_number: '08012345678' },
@@ -65,9 +68,16 @@ vi.mock('../../store/currencyStore', () => ({
     selector(mocks.currencyState),
 }));
 vi.mock('../../store/cartStore', () => ({
-  useCartStore: (selector: (state: typeof mocks.cartState) => unknown) => selector(mocks.cartState),
+  useCartStore: (selector: (state: typeof mocks.cartState & { removeItem: typeof mocks.removeItem }) => unknown) =>
+    selector({ ...mocks.cartState, removeItem: mocks.removeItem }),
 }));
-vi.mock('../../services/cartService', () => ({ CartService: { clearCart: mocks.clearCart } }));
+vi.mock('../../services/cartService', () => ({
+  CartService: {
+    clearCart: mocks.clearCart,
+    validateCartItemsWithServer: mocks.validateCartItemsWithServer,
+    getLocalCartValidationIssues: mocks.getLocalCartValidationIssues,
+  },
+}));
 vi.mock('../../services/checkoutService', () => ({
   checkoutService: {
     getAddresses: mocks.getAddresses,
@@ -595,6 +605,8 @@ describe('Checkout M5 sequencing and recovery', () => {
       },
     };
     mocks.getShippingProviderSettings.mockResolvedValue({ provider: 'manual', checkout_estimates_required: false });
+    mocks.validateCartItemsWithServer.mockResolvedValue({ is_valid: true, items: [], errors: [] });
+    mocks.getLocalCartValidationIssues.mockReturnValue([]);
     mocks.getAddresses.mockResolvedValue({ addresses: [address] });
     mocks.calculateShipping.mockResolvedValue({ available_rates: [rate], recommended_rate: rate });
     mocks.reviewOrder.mockResolvedValue(review);
@@ -2542,5 +2554,54 @@ describe('Checkout M5 sequencing and recovery', () => {
       expect(screen.queryByText('Promo (SAVE10)')).not.toBeInTheDocument();
     });
     expect(screen.getByRole('button', { name: 'Apply' })).toBeInTheDocument();
+  });
+
+  it('blocks checkout with a clear stock alert before address/rate calculation when an item is out of stock', async () => {
+    mocks.getShippingProviderSettings.mockResolvedValue({ provider: 'shipbubble', checkout_estimates_required: true });
+    mocks.validateCartItemsWithServer.mockResolvedValue({
+      is_valid: false,
+      items: [{
+        product_id: 'product-1',
+        variant_id: null,
+        product_title: 'Kester Club Tee',
+        requested_quantity: 1,
+        available_stock: 0,
+        is_in_stock: false,
+        made_to_order: false,
+        status: 'out_of_stock',
+        message: 'Kester Club Tee is out of stock.',
+      }],
+      errors: ['Kester Club Tee is out of stock.'],
+    });
+
+    render(<MemoryRouter initialEntries={['/checkout']}><CheckoutTestRoutes /></MemoryRouter>);
+
+    expect(await screen.findByText('Kester Club Tee is out of stock.')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Continue' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Remove unavailable items' })).toBeEnabled();
+    expect(screen.getByRole('button', { name: 'Return to Bag' })).toBeEnabled();
+    expect(mocks.createOrder).not.toHaveBeenCalled();
+    expect(mocks.createCheckoutEstimate).not.toHaveBeenCalled();
+  });
+
+  it('stops delivery quote refresh loop and shows stock error when delivery selection returns 409 insufficient stock', async () => {
+    mocks.getShippingProviderSettings.mockResolvedValue({ provider: 'shipbubble', checkout_estimates_required: true });
+    mocks.selectCheckoutEstimateOption.mockRejectedValueOnce({
+      isAxiosError: true,
+      response: { status: 409, data: { detail: 'insufficient stock' } },
+    });
+
+    render(<MemoryRouter initialEntries={['/checkout']}><CheckoutTestRoutes /></MemoryRouter>);
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Continue' })).toBeEnabled());
+    fireEvent.click(screen.getByRole('button', { name: 'Continue' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Calculate live courier rates' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Select Standard delivery' }));
+
+    await waitFor(() => {
+      expect(screen.getByText(/out of stock or no longer available/i)).toBeInTheDocument();
+    });
+    expect(screen.queryByText(/Delivery options changed/i)).not.toBeInTheDocument();
+    expect(mocks.createCheckoutEstimate).toHaveBeenCalledTimes(1);
+    expect(mocks.cancelOrder).toHaveBeenCalledTimes(1);
   });
 });

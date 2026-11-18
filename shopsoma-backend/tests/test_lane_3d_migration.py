@@ -56,7 +56,7 @@ def _literal_assignment(name: str):
 
 def test_lane_3d_has_linear_phase_2b_child() -> None:
     graph = scripts()
-    assert graph.get_heads() == ["e2f3a4b5c6d8"]
+    assert graph.get_heads() == ["e7f8a9b0c1d2"]
     assert graph.get_revision("b9c0d1e2f3a4").down_revision == "a8b9c0d1e2f3"
     assert graph.get_revision("3d4e5f6a7b8c").down_revision == "n1o2p3q4r5s6"
     assert graph.get_revision("n1o2p3q4r5s6").down_revision == "m0n1o2p3q4r5"
@@ -238,15 +238,37 @@ def test_lane_3d_tables_and_indexes_have_exact_model_migration_parity() -> None:
     )
     historical_tables = _literal_assignment("_CREATE_TABLE_SQL")
     evolved_prefix = "CREATE TABLE outbound_shipment_intents"
+    versions_prefix = "CREATE TABLE hub_package_versions"
+    evolved = (evolved_prefix, versions_prefix)
     assert tuple(
         statement
         for statement in historical_tables
-        if not statement.startswith(evolved_prefix)
+        if not statement.startswith(evolved)
     ) == tuple(
         statement
         for statement in expected_tables
-        if not statement.startswith(evolved_prefix)
+        if not statement.startswith(evolved)
     )
+    # hub_package_versions gained hub-measurement provenance in e7f8a9b0c1d2;
+    # everything else about the table must still match lane 3d exactly.
+    historical_versions = next(
+        statement for statement in historical_tables if statement.startswith(versions_prefix)
+    )
+    current_versions = next(
+        statement for statement in expected_tables if statement.startswith(versions_prefix)
+    )
+    added_tokens = (
+        "measurement_source VARCHAR(20)",
+        "box_preset_code VARCHAR(50)",
+        "CONSTRAINT ck_hub_package_versions_measurement_source",
+    )
+    assert all(token not in historical_versions for token in added_tokens)
+    assert all(token in current_versions for token in added_tokens)
+    assert "\n".join(
+        line
+        for line in current_versions.splitlines()
+        if not any(token in line for token in added_tokens)
+    ) == historical_versions
     historical_intent = next(
         statement
         for statement in historical_tables
