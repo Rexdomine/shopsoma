@@ -314,6 +314,7 @@ describe('AdminOrderDetail DHL mutation safety', () => {
       idempotency_key: expect.any(String),
     });
     expect(localStorage.getItem('shopsoma:dhl:unresolved:order-1')).toBe('1');
+    expect(screen.queryByText(/An unresolved local shipment command/i)).not.toBeInTheDocument();
   });
 
   it('keeps a timed-out booking blocked after reload even when GET has no attempt and hides raw errors', async () => {
@@ -322,6 +323,7 @@ describe('AdminOrderDetail DHL mutation safety', () => {
     fireEvent.click(await screen.findByRole('button', { name: 'Create DHL shipment' }));
     fireEvent.click(within(screen.getByRole('dialog')).getByRole('button', { name: /^(Create DHL shipment|Record DHL handoff|Refresh DHL tracking)$/ }));
     await screen.findByText(/Operation could not be confirmed/);
+    expect(screen.getByText(/An unresolved local shipment command/i)).toBeInTheDocument();
     expect(screen.queryByText(/PRIVATE PROVIDER/)).not.toBeInTheDocument();
     first.unmount(); renderPage();
     expect(await screen.findByRole('button', { name: 'Create DHL shipment' })).toBeDisabled();
