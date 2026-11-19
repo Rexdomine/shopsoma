@@ -9,12 +9,15 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 from httpx import AsyncClient
+from pydantic import SecretStr
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
+from app.models.address import Address
 from app.models.app_setting import AppSetting
 from app.models.order import Order
+from app.services.checkout.estimates import _resolved_dhl_postal_code
 from app.services.shipbubble_service import ShipbubbleRateOption, ShipbubbleRatesResult
 from tests.test_dhl_e2e_sandbox import (
     _create_checkout_order_for_dhl,
@@ -624,3 +627,157 @@ async def test_combined_shipping_fallback_to_manual_only_when_live_couriers_fail
         assert sel_res.status_code == 200, sel_res.text
         await db_session.refresh(order)
         assert order.delivery_provider == "manual"
+
+
+@pytest.mark.asyncio
+async def test_production_dhl_live_enabled_clears_gate_and_allows_admin_selection(
+    client: AsyncClient,
+    admin_user: dict,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """DHL production mode requires DHL_LIVE_ENABLED=True; once enabled, admin can select DHL/combined."""
+    admin_token = admin_user["token"]
+    monkeypatch.setattr(settings, "ENVIRONMENT", "production")
+    monkeypatch.setattr(settings, "DHL_ENVIRONMENT", "production")
+    monkeypatch.setattr(settings, "DHL_LIVE_ENABLED", False)
+    monkeypatch.setattr(settings, "DHL_BASE_URL", "https://express.api.dhl.com/mydhlapi")
+    monkeypatch.setattr(settings, "SHIPBUBBLE_API_KEY", "sb_live_secret_key_12345")
+    for flag in (
+        "DHL_ENABLED",
+        "DHL_DOMESTIC_WORKFLOW_ENABLED",
+        "DHL_DOMESTIC_PROVIDER_CALLS_ENABLED",
+        "DHL_DOMESTIC_CHECKOUT_ENABLED",
+        "DOMESTIC_CHECKOUT_PREREQUISITES_ENABLED",
+    ):
+        monkeypatch.setattr(settings, flag, True)
+    monkeypatch.setattr(settings, "DOMESTIC_CHECKOUT_COHORT_PERCENTAGE", 100)
+    for credential in (
+        "DHL_API_USERNAME",
+        "DHL_API_PASSWORD",
+        "DHL_EXPORT_ACCOUNT_NUMBER",
+    ):
+        monkeypatch.setattr(settings, credential, SecretStr("live-test-cred"))
+
+    # Without DHL_LIVE_ENABLED=True, readiness.dhl fails closed ("Gate Active").
+    gated = await client.get(
+        "/api/v1/settings/shipping-provider",
+        headers={"Authorization": f"Bearer {admin_token}"},
+    )
+    assert gated.status_code == 200, gated.text
+    assert gated.json()["readiness"]["dhl"] is False
+
+    # Enabling DHL_LIVE_ENABLED=True unlocks readiness.dhl and admin selection.
+    monkeypatch.setattr(settings, "DHL_LIVE_ENABLED", True)
+    ready = await client.get(
+        "/api/v1/settings/shipping-provider",
+        headers={"Authorization": f"Bearer {admin_token}"},
+    )
+    assert ready.status_code == 200, ready.text
+    assert ready.json()["readiness"]["dhl"] is True
+
+    combined_res = await client.put(
+        "/api/v1/settings/shipping-provider",
+        headers={"Authorization": f"Bearer {admin_token}"},
+        json={"provider": "combined", "enabled_providers": ["dhl", "shipbubble"]},
+    )
+    assert combined_res.status_code == 200, combined_res.text
+    assert combined_res.json()["provider"] == "combined"
+    assert combined_res.json()["enabled_providers"] == ["dhl", "shipbubble"]
+
+    dhl_only_res = await client.put(
+        "/api/v1/settings/shipping-provider",
+        headers={"Authorization": f"Bearer {admin_token}"},
+        json={"provider": "dhl", "enabled_providers": ["dhl"]},
+    )
+    assert dhl_only_res.status_code == 200, dhl_only_res.text
+    assert dhl_only_res.json()["provider"] == "dhl"
+
+
+@pytest.mark.asyncio
+async def test_combined_shipping_includes_dhl_when_nigerian_address_lacks_postal_code(
+    client: AsyncClient,
+    db_session: AsyncSession,
+    customer_user: dict,
+    vendor_user: dict,
+    admin_user: dict,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """In combined mode, Nigerian addresses without a postal code still resolve state fallback for DHL."""
+    cohort_seed = uuid.UUID("30f204c5-ac27-4719-89fc-cc9208f19032")
+    monkeypatch.setattr(settings, "SHIPBUBBLE_API_KEY", "sb_live_secret_key_12345")
+    await _enable_dhl_checkout_settings(
+        db_session,
+        monkeypatch,
+        cohort_seed=cohort_seed,
+        actor_id=admin_user["user"].id,
+    )
+
+    provider_row = await db_session.scalar(
+        select(AppSetting).where(AppSetting.key == "shipping_provider")
+    )
+    provider_row.value = "combined"
+    enabled_row = await db_session.scalar(
+        select(AppSetting).where(AppSetting.key == "shipping_enabled_providers")
+    )
+    if enabled_row is None:
+        db_session.add(
+            AppSetting(
+                key="shipping_enabled_providers",
+                value=json.dumps(["dhl", "shipbubble"]),
+                value_type="json",
+            )
+        )
+    else:
+        enabled_row.value = json.dumps(["dhl", "shipbubble"])
+    await db_session.commit()
+
+    order = await _create_checkout_order_for_dhl(
+        db_session,
+        customer_user=customer_user,
+        vendor_user=vendor_user,
+        cohort_seed=cohort_seed,
+        currency="NGN",
+        subtotal=Decimal("50000.00"),
+    )
+    addr = await db_session.get(Address, order.shipping_address_id)
+    assert addr is not None
+    addr.city = "Goni Gora"
+    addr.state = "Kaduna"
+    addr.country = "Nigeria"
+    addr.postal_code = None
+    await db_session.commit()
+    await db_session.refresh(addr)
+
+    assert _resolved_dhl_postal_code(addr, "NG") == "800001"
+
+    dhl_mock = AsyncMock(return_value=_mock_dhl_offers())
+    sb_mock = AsyncMock(return_value=_mock_shipbubble_rates())
+    customer_token = customer_user["token"]
+
+    with patch(
+        "app.services.checkout.estimates._dhl_checkout_options",
+        new=dhl_mock,
+    ), patch(
+        "app.services.checkout.estimates._shipbubble_checkout_options",
+        new=sb_mock,
+    ):
+        est_res = await client.post(
+            f"/api/v1/orders/{order.id}/checkout-estimates",
+            headers={
+                "Authorization": f"Bearer {customer_token}",
+                "X-Idempotency-Key": f"comb-no-postal-{order.id.hex[:12]}",
+            },
+        )
+        assert est_res.status_code == 201, est_res.text
+        dhl_mock.assert_awaited_once()
+        options = est_res.json()["options"]
+        dhl_opts = [
+            o for o in options if o.get("provider_metadata", {}).get("provider") == "dhl"
+        ]
+        sb_opts = [
+            o
+            for o in options
+            if o.get("provider_metadata", {}).get("provider") == "shipbubble"
+        ]
+        assert len(dhl_opts) == 1
+        assert len(sb_opts) == 2

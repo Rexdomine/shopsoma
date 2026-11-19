@@ -70,7 +70,10 @@ from app.models.package_custody import (
 from app.models.product_logistics_profile import ProductLogisticsProfile
 from app.models.user import User, UserRole
 from app.services.admin_shadow_quote import _planned_ship_date_for_shadow_quote
-from app.services.dhl.rating import derive_sandbox_cohort_id
+from app.services.dhl.rating import (
+    derive_sandbox_cohort_id,
+    resolve_nigeria_dhl_state_fallback,
+)
 from app.services.fulfillment.contracts import resolve_country_code
 
 HUB_PREP_SOURCE_SYSTEM = "shopsoma_hub_prep"
@@ -1005,7 +1008,16 @@ async def _create_intent_and_selected_quote(
         )
     except ValueError:
         dest_country_code = "NG"
-    default_postal = "101241" if dest_country_code == "NG" else "00000"
+    ng_state_fallback = (
+        resolve_nigeria_dhl_state_fallback(dest_state)
+        if dest_country_code == "NG"
+        else None
+    )
+    default_postal = (
+        (ng_state_fallback[1] if ng_state_fallback is not None else "101241")
+        if dest_country_code == "NG"
+        else "00000"
+    )
     dest_postal_raw = (getattr(addr, "postal_code", None) if addr else None) or default_postal
     dest_postal = dest_postal_raw.strip()[:20] if dest_postal_raw and dest_postal_raw.strip() else default_postal
 

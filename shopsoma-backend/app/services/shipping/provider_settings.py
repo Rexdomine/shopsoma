@@ -9,6 +9,14 @@ from app.schemas.app_setting import ShippingProviderSettings
 from app.services.shipping.capabilities import domestic_shipping_capabilities
 
 
+def _dhl_env_ready(cfg) -> bool:
+    """Return True when DHL is configured for sandbox or live-enabled production."""
+    return cfg.DHL_ENVIRONMENT == "sandbox" or (
+        cfg.DHL_ENVIRONMENT == "production"
+        and bool(getattr(cfg, "DHL_LIVE_ENABLED", False))
+    )
+
+
 async def shipping_provider_settings(db):
     rows = dict((await db.execute(
         select(AppSetting.key, AppSetting.value).where(AppSetting.key.in_((
@@ -20,7 +28,7 @@ async def shipping_provider_settings(db):
     dhl_secure_checkout_routing = (
         settings.DOMESTIC_CHECKOUT_PREREQUISITES_ENABLED
         and settings.DOMESTIC_CHECKOUT_COHORT_PERCENTAGE == 100
-        and settings.DHL_ENVIRONMENT == "sandbox"
+        and _dhl_env_ready(settings)
     )
     combined_ready = bool(shipbubble_ready or (dhl_ready and dhl_secure_checkout_routing))
 
@@ -103,7 +111,7 @@ async def require_manual_order_pricing(db):
     secure_checkout_routing = (
         settings.DOMESTIC_CHECKOUT_PREREQUISITES_ENABLED
         and settings.DOMESTIC_CHECKOUT_COHORT_PERCENTAGE == 100
-        and settings.DHL_ENVIRONMENT == "sandbox"
+        and _dhl_env_ready(settings)
     )
     if provider == "dhl" and not secure_checkout_routing:
         provider = "manual"

@@ -50,7 +50,10 @@ from app.services.commission import COMMISSION_SETTING_KEY, DEFAULT_COMMISSION_R
 
 from app.services.commerce_features import get_commerce_features
 
-from app.services.shipping.provider_settings import shipping_provider_settings
+from app.services.shipping.provider_settings import (
+    _dhl_env_ready,
+    shipping_provider_settings,
+)
 from app.services.shipping.box_presets import (
     ShippingBoxPreset,
     ShippingBoxPresetList,
@@ -345,7 +348,7 @@ async def update_shipping_provider_settings(
     dhl_routing_ready = (
         app_settings.DOMESTIC_CHECKOUT_PREREQUISITES_ENABLED
         and app_settings.DOMESTIC_CHECKOUT_COHORT_PERCENTAGE == 100
-        and app_settings.DHL_ENVIRONMENT == "sandbox"
+        and _dhl_env_ready(app_settings)
     )
     if settings.enabled_providers is not None:
         for p in settings.enabled_providers:

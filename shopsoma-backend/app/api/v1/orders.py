@@ -1528,7 +1528,10 @@ async def create_order(
 
     await db.flush()  # Get order item IDs
 
-    if enforced_checkout and settings.dhl_domestic_sandbox_cohort_ids:
+    is_live_dhl_prod = settings.DHL_ENVIRONMENT == "production" and bool(
+        getattr(settings, "DHL_LIVE_ENABLED", False)
+    )
+    if enforced_checkout and (settings.dhl_domestic_sandbox_cohort_ids or is_live_dhl_prod):
         configured_cohort_ids = settings.dhl_domestic_sandbox_cohort_ids
         products = (
             await db.execute(
@@ -1537,7 +1540,11 @@ async def create_order(
         ).scalars().all()
         products_by_id = {product.id: product for product in products}
         cohorts_by_key = {}
-        cohort_namespace = tuple(configured_cohort_ids)[0]
+        cohort_namespace = (
+            tuple(configured_cohort_ids)[0]
+            if configured_cohort_ids
+            else UUID("30f204c5-ac27-4719-89fc-cc9208f19032")
+        )
         cohort_ordinals = {}
         for order_item in created_order_items:
             product = products_by_id[order_item.product_id]

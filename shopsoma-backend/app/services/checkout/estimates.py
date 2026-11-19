@@ -46,6 +46,7 @@ from app.services.dhl.rating import (
     DHLRateAdapterError,
     create_sandbox_domestic_rate_adapter,
     derive_sandbox_cohort_ids,
+    resolve_nigeria_dhl_state_fallback,
 )
 from app.services.fulfillment.contracts import (
     DomesticAddress,
@@ -91,6 +92,19 @@ def _expected_dhl_product_code(order: Order) -> str:
     return "N" if _order_destination_country_code(order) == "NG" else "P"
 
 
+def _resolved_dhl_postal_code(address, dest_country_code: str) -> str | None:
+    """Return an explicit postal code or the deterministic fallback for DHL rating."""
+    if address is None:
+        return None
+    raw_postal = getattr(address, "postal_code", None)
+    if isinstance(raw_postal, str) and raw_postal.strip():
+        return raw_postal.strip()
+    if dest_country_code == "NG":
+        fallback = resolve_nigeria_dhl_state_fallback(getattr(address, "state", None))
+        return fallback[1] if fallback is not None else None
+    return "00000"
+
+
 async def _rate_pre_payment_quote_subject(
     db, *, order: Order, planned_ship_date=None
 ):
@@ -110,13 +124,9 @@ async def _rate_pre_payment_quote_subject(
         raise HTTPException(
             status_code=422, detail="destination country is not supported for DHL shipping"
         )
-    if address is None or (dest_country_code == "NG" and not address.postal_code):
+    resolved_postal_code = _resolved_dhl_postal_code(address, dest_country_code)
+    if address is None or (dest_country_code == "NG" and not resolved_postal_code):
         raise HTTPException(status_code=422, detail="postal code required for DHL rating")
-    resolved_postal_code = (
-        address.postal_code.strip() or None
-        if address.postal_code
-        else ("00000" if dest_country_code != "NG" else None)
-    )
     hubs = (
         await db.execute(
             select(FulfillmentHub).where(FulfillmentHub.is_active.is_(True)).order_by(FulfillmentHub.id)
@@ -420,7 +430,7 @@ async def _dhl_checkout_options(db, *, order: Order, planned_ship_date=None):
         is_live_prod = settings.DHL_ENVIRONMENT == "production" and bool(
             getattr(settings, "DHL_LIVE_ENABLED", False)
         )
-        if not is_live_prod or configured_cohorts:
+        if not is_live_prod:
             if not configured_cohorts or not package_cohort_ids <= (
                 configured_cohorts
                 | derive_sandbox_cohort_ids(
@@ -1070,9 +1080,7 @@ async def create_estimate(
     capabilities = domestic_shipping_capabilities(settings)
     shipping_addr = getattr(order, "shipping_address", None)
     dest_country_code = _order_destination_country_code(order)
-    has_dhl_postal = bool(
-        shipping_addr and (getattr(shipping_addr, "postal_code", None) or dest_country_code != "NG")
-    )
+    has_dhl_postal = bool(_resolved_dhl_postal_code(shipping_addr, dest_country_code))
     manual_provider_enabled = (
         existing.source_kind == "static_domestic_rate" if existing
         else ("manual" in enabled_providers and provider_config.readiness["manual"])
