@@ -2585,12 +2585,22 @@ describe('Checkout M5 sequencing and recovery', () => {
 
     render(<MemoryRouter initialEntries={['/checkout']}><CheckoutTestRoutes /></MemoryRouter>);
 
-    expect(await screen.findByText('Kester Club Tee is out of stock.')).toBeInTheDocument();
+    const dialog = await screen.findByRole('dialog');
+    expect(dialog).toBeInTheDocument();
+    expect(screen.getByText('Some items in your bag are out of stock or no longer available.')).toBeInTheDocument();
+    expect(screen.getByText('Kester Club Tee is out of stock.')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Continue' })).toBeDisabled();
     expect(screen.getByRole('button', { name: 'Remove unavailable items' })).toBeEnabled();
     expect(screen.getByRole('button', { name: 'Return to Bag' })).toBeEnabled();
     expect(mocks.createOrder).not.toHaveBeenCalled();
     expect(mocks.createCheckoutEstimate).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Close stock notice' }));
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Continue' })).toBeDisabled();
+
+    fireEvent.click(screen.getByRole('button', { name: 'View unavailable items' }));
+    expect(screen.getByRole('dialog')).toBeInTheDocument();
   });
 
   it('stops delivery quote refresh loop and shows stock error when delivery selection returns 409 insufficient stock', async () => {
