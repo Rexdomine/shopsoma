@@ -1,4 +1,9 @@
-import { getShippingProviderSettings, type ShippingProviderSettings } from '../../services/settingsService';
+import {
+  getShippingProviderSettings,
+  getPublicCheckoutHoldSettings,
+  type ShippingProviderSettings,
+  type CheckoutHoldSettings,
+} from '../../services/settingsService';
 import { useCallback, useState, useEffect, useRef } from 'react';
 import { flushSync } from 'react-dom';
 import { buildPaystackWidgetConfig, type PaymentGateway, type InitializePaymentResponse } from '../../services/paymentService';
@@ -332,6 +337,17 @@ export default function Checkout() {
   const [shippingConfigLoaded, setShippingConfigLoaded] = useState(false);
   const [shippingConfigError, setShippingConfigError] = useState(false);
   const [shippingConfigRetry, setShippingConfigRetry] = useState(0);
+  const [checkoutHoldSettings, setCheckoutHoldSettings] = useState<CheckoutHoldSettings>({
+    reservation_ttl_minutes: 30,
+    authorization_grace_minutes: 15,
+    release_on_payment_close: false,
+  });
+  useEffect(() => {
+    if (typeof getPublicCheckoutHoldSettings !== 'function') return;
+    void getPublicCheckoutHoldSettings()
+      .then((holdConfig) => setCheckoutHoldSettings(holdConfig))
+      .catch(() => {});
+  }, []);
   useEffect(() => {
     setShippingConfigLoaded(false);
     setShippingConfigError(false);
@@ -1288,9 +1304,22 @@ export default function Checkout() {
       // Paystack callbacks may arrive after the iframe is dismissed.
       setCurrentPaymentGateway('paystack');
       if (typeof window !== 'undefined' && window.PaystackPop?.setup) {
+        let paystackCallbackHandled = false;
+        const finishCancelled = () => {
+          setIsCreatingOrder(false);
+          if (order.checkout_access_mode === 'guest_capability') {
+            setPaymentRetryAvailable(true);
+            alert('Payment cancelled. Your order is saved; retry payment when you are ready.');
+            return;
+          }
+          clearCheckoutCapability();
+          alert('Payment cancelled. You can retry payment from your orders page.');
+          navigate(`${ROUTES.ORDER_SUCCESS}?orderId=${order.id}&payment=cancelled`);
+        };
         const handler = window.PaystackPop.setup({
           ...widgetTruth,
           callback: (response: { reference: string }) => {
+            paystackCallbackHandled = true;
             paymentService.verifyPayment({
               reference: response.reference,
               payment_gateway: gateway,
@@ -1322,15 +1351,25 @@ export default function Checkout() {
             });
           },
           onClose: () => {
-            setIsCreatingOrder(false);
-            if (order.checkout_access_mode === 'guest_capability') {
-              setPaymentRetryAvailable(true);
-              alert('Payment cancelled. Your order is saved; retry payment when you are ready.');
+            if (paystackCallbackHandled) return;
+            if (checkoutHoldSettings.release_on_payment_close && paymentData.reference) {
+              paymentService.verifyPayment({
+                reference: paymentData.reference,
+                payment_gateway: gateway,
+              }).then((verification) => {
+                if (verification?.status === true && verification?.data?.status === 'success') {
+                  preserveCheckoutCapabilityForReadback(order.id, checkoutCapability);
+                  CartService.clearCart();
+                  navigate(`${ROUTES.ORDER_SUCCESS}?orderId=${order.id}&payment=success`);
+                  return;
+                }
+                finishCancelled();
+              }).catch(() => {
+                finishCancelled();
+              });
               return;
             }
-            clearCheckoutCapability();
-            alert('Payment cancelled. You can retry payment from your orders page.');
-            navigate(`${ROUTES.ORDER_SUCCESS}?orderId=${order.id}&payment=cancelled`);
+            finishCancelled();
           },
         });
         handler.openIframe();

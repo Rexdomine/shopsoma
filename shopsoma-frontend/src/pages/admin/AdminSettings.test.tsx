@@ -14,6 +14,13 @@ vi.mock('../../services/settingsService', () => ({
   ...mocks,
   getCommerceFeatures: vi.fn(async () => ({ stripe_enabled: false, usd_switching_enabled: false })),
   updateCommerceFeatures: vi.fn(),
+  getAdminCheckoutHoldSettings: vi.fn(async () => ({
+    reservation_ttl_minutes: 30,
+    authorization_grace_minutes: 15,
+    release_on_payment_close: false,
+    updated_at: null,
+  })),
+  updateCheckoutHoldSettings: vi.fn(),
   getExchangeRate: vi.fn(async () => ({ rate: 1600 })),
   getShippingProviderSettings: vi.fn(async () => ({ provider: 'manual', enabled_providers: ['manual'], readiness: { manual: true, shipbubble: false, dhl: false, combined: false }, checkout_estimates_required: false })),
   getPayoutHoldSettings: vi.fn(async () => ({ hold_days: 14 })),
@@ -330,5 +337,37 @@ it('renders independent provider toggles and calls updateShippingProviderSetting
   fireEvent.click(toggleShipbubble);
 
   expect(updateShippingProviderSettings).toHaveBeenCalledWith(['manual', 'dhl', 'shipbubble']);
+});
+
+it('switches to Checkout holds workspace and saves updated hold timers', async () => {
+  const { updateCheckoutHoldSettings } = await import('../../services/settingsService');
+  vi.mocked(updateCheckoutHoldSettings).mockResolvedValue({
+    reservation_ttl_minutes: 10,
+    authorization_grace_minutes: 5,
+    release_on_payment_close: true,
+    updated_at: '2026-11-21T19:30:00Z',
+  });
+
+  render(<AdminSettings />);
+  fireEvent.click(await screen.findByRole('button', { name: /Checkout holds/ }));
+  expect(await screen.findByRole('heading', { name: 'Checkout stock holds' })).toBeInTheDocument();
+
+  const ttlInput = screen.getByLabelText(/Stock reservation hold \(minutes\)/i);
+  const graceInput = screen.getByLabelText(/Payment authorization grace \(minutes\)/i);
+  const closeCheckbox = screen.getByLabelText(/Release stock when Paystack modal is closed without paying/i);
+
+  fireEvent.change(ttlInput, { target: { value: '10' } });
+  fireEvent.change(graceInput, { target: { value: '5' } });
+  fireEvent.click(closeCheckbox);
+  fireEvent.click(screen.getByRole('button', { name: 'Save changes' }));
+
+  await waitFor(() => {
+    expect(updateCheckoutHoldSettings).toHaveBeenCalledWith({
+      reservation_ttl_minutes: 10,
+      authorization_grace_minutes: 5,
+      release_on_payment_close: true,
+    });
+  });
+  expect(await screen.findByText('15 minutes')).toBeInTheDocument();
 });
 

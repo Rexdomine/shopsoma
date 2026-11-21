@@ -145,3 +145,18 @@ class CommerceFeatures(BaseModel):
 class CommerceFeaturesUpdate(BaseModel):
     stripe_enabled: bool = Field(strict=True)
     usd_switching_enabled: bool = Field(strict=True)
+
+
+class CheckoutHoldSettings(BaseModel):
+    """Admin-configurable stock hold duration and Paystack close behavior."""
+    reservation_ttl_minutes: int = Field(default=30, ge=1, le=30)
+    authorization_grace_minutes: int = Field(default=15, ge=0, le=15)
+    release_on_payment_close: bool = False
+    updated_at: Optional[datetime] = None
+
+
+class CheckoutHoldSettingsUpdate(BaseModel):
+    """Admin update for checkout stock hold duration and Paystack close behavior."""
+    reservation_ttl_minutes: int = Field(..., ge=1, le=30)
+    authorization_grace_minutes: int = Field(..., ge=0, le=15)
+    release_on_payment_close: bool = False

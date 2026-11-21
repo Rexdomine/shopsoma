@@ -295,3 +295,27 @@ export const getCommerceFeatures = async (): Promise<CommerceFeatures> =>
   (await api.get<CommerceFeatures>('/settings/public/commerce-features')).data;
 export const updateCommerceFeatures = async (flags: CommerceFeatures): Promise<CommerceFeatures> =>
   (await api.put<CommerceFeatures>('/settings/admin/commerce-features', flags)).data;
+
+export interface CheckoutHoldSettings {
+  reservation_ttl_minutes: number;
+  authorization_grace_minutes: number;
+  release_on_payment_close: boolean;
+  updated_at?: string | null;
+}
+
+export interface CheckoutHoldSettingsUpdate {
+  reservation_ttl_minutes: number;
+  authorization_grace_minutes: number;
+  release_on_payment_close: boolean;
+}
+
+export const getPublicCheckoutHoldSettings = async (): Promise<CheckoutHoldSettings> =>
+  (await api.get<CheckoutHoldSettings>('/settings/public/checkout-hold')).data;
+
+export const getAdminCheckoutHoldSettings = async (): Promise<CheckoutHoldSettings> =>
+  (await api.get<CheckoutHoldSettings>('/settings/admin/checkout-hold')).data;
+
+export const updateCheckoutHoldSettings = async (
+  settings: CheckoutHoldSettingsUpdate,
+): Promise<CheckoutHoldSettings> =>
+  (await api.put<CheckoutHoldSettings>('/settings/admin/checkout-hold', settings)).data;
