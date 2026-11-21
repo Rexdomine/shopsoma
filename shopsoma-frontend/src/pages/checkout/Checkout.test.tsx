@@ -2692,4 +2692,60 @@ describe('Checkout M5 sequencing and recovery', () => {
     });
     expect(await screen.findByRole('button', { name: 'Retry payment' })).toBeInTheDocument();
   });
+
+  it('discards superseded/cancelled order and opens stock modal when initializePayment returns 400 Order has been cancelled', async () => {
+    const alertSpy = vi.spyOn(window, 'alert').mockImplementation(() => {});
+    mocks.initializePayment.mockRejectedValueOnce({
+      response: { status: 400, data: { detail: 'Order has been cancelled' } },
+    });
+
+    await reachPaymentStep(false);
+    const selectDelivery = screen.queryByRole('button', { name: 'Select Standard delivery' });
+    if (selectDelivery) {
+      fireEvent.click(selectDelivery);
+    }
+
+    mocks.validateCartItemsWithServer.mockResolvedValue({
+      is_valid: false,
+      items: [{
+        product_id: 'product-1',
+        variant_id: null,
+        product_title: 'SOMA-29 QA Last Unit Item',
+        requested_quantity: 1,
+        available_stock: 0,
+        is_in_stock: false,
+        made_to_order: false,
+        status: 'out_of_stock',
+        message: 'SOMA-29 QA Last Unit Item is out of stock.',
+      }],
+      errors: ['SOMA-29 QA Last Unit Item is out of stock.'],
+    });
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Continue to payment' }));
+
+    const dialog = await screen.findByRole('dialog');
+    expect(dialog).toBeInTheDocument();
+    expect(screen.getByText('SOMA-29 QA Last Unit Item is out of stock.')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Retry payment' })).not.toBeInTheDocument();
+    expect(alertSpy).not.toHaveBeenCalledWith('Order has been cancelled');
+  });
+
+  it('discards dead order and opens stock modal when initializePayment returns 409 insufficient stock for payment retry', async () => {
+    mocks.initializePayment.mockRejectedValueOnce({
+      response: { status: 409, data: { detail: 'insufficient stock for payment retry' } },
+    });
+
+    await reachPaymentStep(false);
+    const selectDelivery = screen.queryByRole('button', { name: 'Select Standard delivery' });
+    if (selectDelivery) {
+      fireEvent.click(selectDelivery);
+    }
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Continue to payment' }));
+
+    const dialog = await screen.findByRole('dialog');
+    expect(dialog).toBeInTheDocument();
+    expect(screen.getByText(/out of stock or no longer available/i)).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Retry payment' })).not.toBeInTheDocument();
+  });
 });

@@ -1271,6 +1271,36 @@ export default function Checkout() {
     );
   };
 
+  const extractPaymentInitDetail = (error: any): { code: string; message: string } => {
+    const detail = error?.response?.data?.detail;
+    if (typeof detail === 'string') {
+      return { code: '', message: detail.trim() };
+    }
+    if (detail && typeof detail === 'object') {
+      const code = typeof detail.code === 'string' ? detail.code.trim().toLowerCase() : '';
+      const message = typeof detail.message === 'string' ? detail.message.trim() : '';
+      return { code, message };
+    }
+    return { code: '', message: '' };
+  };
+
+  const isCancelledOrderError = (error: any) => {
+    const status = error?.response?.status;
+    if (status !== 400 && status !== 409) return false;
+    const { code, message } = extractPaymentInitDetail(error);
+    return `${code} ${message}`.toLowerCase().includes('order has been cancelled');
+  };
+
+  const isPaymentInitStockConflict = (error: any) => {
+    const status = error?.response?.status;
+    if (status !== 400 && status !== 409) return false;
+    const { code, message } = extractPaymentInitDetail(error);
+    if (code === 'insufficient_stock' || code === 'inventory_subject_unavailable') {
+      return true;
+    }
+    return /insufficient stock|out of stock|inventory subject unavailable/i.test(message);
+  };
+
   const isAlreadyPaidConflict = (error: any) => {
     const detail = String(error?.response?.data?.detail || '').toLowerCase();
     return error?.response?.status === 400 && detail === 'order has already been paid';
@@ -1453,6 +1483,23 @@ export default function Checkout() {
         CartService.clearCart();
         navigate(`${ROUTES.ORDER_SUCCESS}?orderId=${order.id}&payment=success`);
         setIsCreatingOrder(false);
+        return;
+      }
+      if (isCancelledOrderError(error) || isPaymentInitStockConflict(error)) {
+        const stockConflict = isPaymentInitStockConflict(error);
+        discardExpiredCheckout();
+        setStep(selectedAddressId ? 'shipping' : 'address');
+        setIsCreatingOrder(false);
+        const issues = await validateCheckoutStock();
+        if (issues.length === 0) {
+          if (stockConflict) {
+            setStockConflictMessage(
+              'One or more items in your bag are out of stock or no longer available. Return to your bag to remove or update unavailable items.',
+            );
+          } else {
+            alert('Your previous checkout reservation expired or was superseded. Please select a delivery option again to continue.');
+          }
+        }
         return;
       }
       const terminalCheckout = error.response?.status === 404
