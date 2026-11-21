@@ -815,6 +815,15 @@ async def test_validate_cart_and_get_cart_flag_zero_stock_and_active_payment_res
     assert product_body["variants"][0]["stock"] == 0
     assert product_body["variants"][0]["is_available"] is False
 
+    # Storefront product list also reflects effective available stock (0) while held
+    list_res = await client.get("/api/v1/products", params={"search": "Kester Club Item"})
+    assert list_res.status_code == 200, list_res.text
+    listed_items = list_res.json()["products"]
+    assert len(listed_items) == 1
+    assert listed_items[0]["total_stock"] == 0
+    assert listed_items[0]["variants"][0]["stock"] == 0
+    assert listed_items[0]["variants"][0]["is_available"] is False
+
     # Adding another shopper's cart item against the locked stock is rejected
     second_add = await client.post(
         "/api/v1/cart/items",
