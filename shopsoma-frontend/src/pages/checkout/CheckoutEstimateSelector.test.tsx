@@ -92,6 +92,59 @@ describe('CheckoutEstimateSelector', () => {
     expect(screen.getAllByRole('button', { name: /^Select / })).toHaveLength(2);
   });
 
+  it.each(['stale_estimate', 'expired_estimate'])(
+    'refreshes options for structured %s 409 code without triggering stock conflict even if message wording mentions stock',
+    async (code) => {
+      const conflict = {
+        isAxiosError: true,
+        response: { status: 409, data: { detail: { code, message: 'quote invalidated after stock recheck' } } },
+      };
+      const selectOption = vi.fn().mockRejectedValue(conflict);
+      const refreshEstimate = vi.fn().mockResolvedValue(estimate(2));
+      const onStockConflict = vi.fn();
+      const { onSelectionConfirmed } = renderSelector({ selectOption, refreshEstimate, onStockConflict });
+
+      fireEvent.click(screen.getByRole('button', { name: 'Select Standard delivery' }));
+
+      expect(await screen.findByText(/Delivery options changed/)).toBeInTheDocument();
+      expect(refreshEstimate).toHaveBeenCalledTimes(1);
+      expect(onStockConflict).not.toHaveBeenCalled();
+      expect(onSelectionConfirmed).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each([
+    { code: 'insufficient_stock', message: 'Reworded stock failure text' },
+    { code: 'inventory_subject_unavailable', message: 'Item gone' },
+  ])(
+    'halts quote refresh and shows stock error for structured $code 409 code regardless of message wording',
+    async (detail) => {
+      const conflict = { isAxiosError: true, response: { status: 409, data: { detail } } };
+      const selectOption = vi.fn().mockRejectedValue(conflict);
+      const refreshEstimate = vi.fn().mockResolvedValue(estimate(2));
+      const onStockConflict = vi.fn();
+      const onReturnToBag = vi.fn();
+      const { onSelectionConfirmed } = renderSelector({
+        selectOption,
+        refreshEstimate,
+        onStockConflict,
+        onReturnToBag,
+      });
+
+      fireEvent.click(screen.getByRole('button', { name: 'Select Standard delivery' }));
+
+      expect(await screen.findByText(/out of stock or no longer available/i)).toBeInTheDocument();
+      expect(screen.queryByText(/Delivery options changed/i)).not.toBeInTheDocument();
+      expect(refreshEstimate).not.toHaveBeenCalled();
+      expect(onSelectionConfirmed).not.toHaveBeenCalled();
+      expect(onStockConflict).toHaveBeenCalledTimes(1);
+      expect(screen.getByRole('button', { name: 'Select Standard delivery' })).toBeDisabled();
+      expect(screen.getByRole('button', { name: 'Continue to payment' })).toBeDisabled();
+      fireEvent.click(screen.getByRole('button', { name: 'Return to Bag' }));
+      expect(onReturnToBag).toHaveBeenCalledTimes(1);
+    },
+  );
+
   it.each(['insufficient stock', 'inventory subject unavailable'])(
     'halts quote refresh and shows a clear stock error after a %s 409',
     async (detail) => {

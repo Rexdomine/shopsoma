@@ -138,14 +138,26 @@ export default function ProductCard({
     e.stopPropagation();
 
     const variant = resolveVariant();
-    addItem({
+    const result = addItem({
       product,
       variant,
       quantity: 1,
     });
 
-    setIsAdded(true);
-    setTimeout(() => setIsAdded(false), 1800);
+    const markAdded = () => {
+      setIsAdded(true);
+      setTimeout(() => setIsAdded(false), 1800);
+    };
+
+    if (result && typeof (result as Promise<boolean>).then === 'function') {
+      void (result as Promise<boolean>).then((added) => {
+        if (added !== false) {
+          markAdded();
+        }
+      });
+    } else if ((result as unknown) !== false) {
+      markAdded();
+    }
   };
 
   const handleToggleFavorite = (e: React.MouseEvent) => {

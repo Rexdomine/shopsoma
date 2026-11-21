@@ -15,6 +15,9 @@ const wishlistMocks = vi.hoisted(() => ({
 }));
 
 const addItemMock = vi.hoisted(() => vi.fn());
+const cartStoreMocks = vi.hoisted(() => ({
+  error: null as string | null,
+}));
 
 vi.mock('../../services/productService', () => ({
   productService: productMocks,
@@ -25,11 +28,19 @@ vi.mock('../../services/wishlistService', () => ({
 }));
 
 vi.mock('../../store/cartStore', () => ({
-  useCartStore: (selector: any) =>
-    selector({
-      addItem: addItemMock,
-      error: null,
-    }),
+  useCartStore: Object.assign(
+    (selector: any) =>
+      selector({
+        addItem: addItemMock,
+        error: cartStoreMocks.error,
+      }),
+    {
+      getState: () => ({
+        addItem: addItemMock,
+        error: cartStoreMocks.error,
+      }),
+    }
+  ),
 }));
 
 vi.mock('../../store/currencyStore', () => ({
@@ -45,7 +56,7 @@ vi.mock('../../components/layout/Layout', () => ({
 }));
 
 vi.mock('../../components/modals/AddToBagModal', () => ({
-  default: () => <div data-testid="add-to-bag-modal" />,
+  default: ({ open }: { open?: boolean }) => (open ? <div data-testid="add-to-bag-modal" /> : null),
 }));
 
 vi.mock('../../components/product', () => ({
@@ -59,6 +70,7 @@ vi.mock('../../components/product/ProductReviews', () => ({
 describe('ProductDetail per-size pricing and default main size selection', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    cartStoreMocks.error = null;
     productMocks.getProducts.mockResolvedValue({ products: [], total: 0 });
   });
 
@@ -193,5 +205,43 @@ describe('ProductDetail per-size pricing and default main size selection', () =>
     expect(kesterLink).toHaveAttribute('href', '/designers/kester-club-id');
     fireEvent.click(kesterLink);
     expect(await screen.findByTestId('kester-storefront')).toBeInTheDocument();
+  });
+
+  it('does not open AddToBagModal and shows an alert when addItem rejects the add', async () => {
+    productMocks.getProduct.mockResolvedValue({
+      id: 'prod-last-unit',
+      vendor_id: 'kester-club-id',
+      vendor_name: 'Kester Club',
+      title: 'SOMA-29 QA Last Unit Item',
+      description: 'Held unit',
+      base_price: 4000,
+      currency: 'NGN',
+      total_stock: 1,
+      status: 'active',
+      moderation_status: 'approved',
+      product_type: 'single',
+      made_to_order: false,
+      images: [],
+      variations: [],
+      variants: [],
+    });
+    addItemMock.mockImplementationOnce(async () => {
+      cartStoreMocks.error = 'Product is out of stock';
+      return false;
+    });
+
+    render(
+      <MemoryRouter initialEntries={['/products/prod-last-unit']}>
+        <Routes>
+          <Route path="/products/:id" element={<ProductDetail />} />
+        </Routes>
+      </MemoryRouter>
+    );
+
+    const addBtn = await screen.findByRole('button', { name: /Add to Bag/i });
+    fireEvent.click(addBtn);
+
+    expect(await screen.findByRole('alert')).toHaveTextContent('Product is out of stock');
+    expect(screen.queryByTestId('add-to-bag-modal')).toBeNull();
   });
 });

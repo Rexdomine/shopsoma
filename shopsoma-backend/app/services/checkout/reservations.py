@@ -34,6 +34,11 @@ from app.services.checkout.estimates import (
 )
 
 _CENT = Decimal("0.01")
+
+
+def _conflict(code: str, message: str, **extra) -> HTTPException:
+    """Build a 409 conflict with a stable machine-readable code alongside message."""
+    return HTTPException(status_code=409, detail={"code": code, "message": message, **extra})
 _EFFECTIVE_CLAIM_SQL = text(
     """
     SELECT COALESCE(sum(sr.quantity),0)
@@ -100,7 +105,16 @@ async def _lock_and_available(db, item) -> int:
             .with_for_update()
         )
     if physical is None:
-        raise HTTPException(status_code=409, detail="inventory subject unavailable")
+        product_id = getattr(item, "inventory_source_product_id", None) or getattr(
+            item, "product_id", None
+        )
+        raise _conflict(
+            "inventory_subject_unavailable",
+            "inventory subject unavailable",
+            product_id=str(product_id) if product_id is not None else None,
+            subject_kind=item.inventory_subject_kind,
+            subject_id=str(item.inventory_subject_id),
+        )
     claimed = await db.scalar(
         _EFFECTIVE_CLAIM_SQL,
         {"kind": item.inventory_subject_kind, "subject_id": item.inventory_subject_id},
@@ -364,7 +378,7 @@ async def select_estimate_option(
             )
         )
     ):
-        raise HTTPException(status_code=409, detail="stale checkout estimate")
+        raise _conflict("stale_estimate", "stale checkout estimate")
 
     stock_items = [
         item for item in order.items if item.inventory_policy == "stock_managed"
@@ -412,8 +426,20 @@ async def select_estimate_option(
                 subject_examples[key],
                 current_order_id=order.id,
             )
-            if await _lock_and_available(db, subject_examples[key]) < required_quantity:
-                raise HTTPException(status_code=409, detail="insufficient stock")
+            available = await _lock_and_available(db, subject_examples[key])
+            if available < required_quantity:
+                product_id = getattr(
+                    subject_examples[key], "inventory_source_product_id", None
+                ) or getattr(subject_examples[key], "product_id", None)
+                raise _conflict(
+                    "insufficient_stock",
+                    "insufficient stock",
+                    product_id=str(product_id) if product_id is not None else None,
+                    subject_kind=key[0],
+                    subject_id=str(key[1]),
+                    requested_quantity=required_quantity,
+                    available_stock=max(0, available),
+                )
 
     # Coordinator and inventory locks can wait. Re-read immutable quote truth
     # under lock and sample the database clock only after the final lock.
@@ -446,12 +472,12 @@ async def select_estimate_option(
         or estimate.order_id != order.id
         or option.estimate_id != estimate.id
     ):
-        raise HTTPException(status_code=409, detail="expired checkout estimate")
+        raise _conflict("expired_estimate", "expired checkout estimate")
     if (
         estimate.destination_snapshot_hash != destination_hash
         or estimate.order_snapshot_hash != snapshot_hash
     ):
-        raise HTTPException(status_code=409, detail="stale checkout estimate")
+        raise _conflict("stale_estimate", "stale checkout estimate")
     if estimate.source_kind == "sandbox_normalized":
         parcel_snapshot_hash = await _prepayment_parcel_snapshot(
             db, order, for_update=True
@@ -464,9 +490,9 @@ async def select_estimate_option(
             # through the final fingerprint check.
             await dhl_subject_snapshot(db, order, for_update=True),
         ):
-            raise HTTPException(status_code=409, detail="stale checkout estimate")
+            raise _conflict("stale_estimate", "stale checkout estimate")
     if estimate.expires_at <= database_now:
-        raise HTTPException(status_code=409, detail="expired checkout estimate")
+        raise _conflict("expired_estimate", "expired checkout estimate")
 
     selection = CheckoutShippingEstimateSelection(
         estimate_id=estimate.id,

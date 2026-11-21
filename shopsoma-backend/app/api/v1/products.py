@@ -75,8 +75,63 @@ from app.services.variation_persistence import (
     delete_single_variation,
     create_single_variation,
 )
+from app.services.checkout.reservations import get_blocking_reserved_quantities
 
 logger = logging.getLogger(__name__)
+
+
+async def _serialize_storefront_product_with_available_stock(
+    db: AsyncSession, product: Product
+) -> ProductResponse:
+    """Serialize a storefront product with active non-reclaimable stock holds subtracted."""
+    response = ProductResponse.model_validate(product)
+    if getattr(product, "made_to_order", False):
+        return response
+
+    legacy_variant_ids = {variant.id for variant in (product.variants or [])}
+    size_stock_ids = {
+        size_stock.id
+        for variation in (product.variations or [])
+        for size_stock in (variation.size_stocks or [])
+    }
+    subjects: set[tuple[str, UUID]] = {("product", product.id)}
+    subjects.update(("product_variant", vid) for vid in legacy_variant_ids)
+    subjects.update(("size_stock", sid) for sid in size_stock_ids)
+
+    blocking = await get_blocking_reserved_quantities(db, subjects)
+    if not blocking:
+        return response
+
+    for variation in response.variations:
+        for size_stock in variation.size_stocks:
+            reserved = blocking.get(("size_stock", size_stock.id), 0)
+            if reserved > 0:
+                size_stock.stock = max(0, int(size_stock.stock or 0) - reserved)
+
+    product_reserved = blocking.get(("product", product.id), 0)
+    for variant in response.variants:
+        if variant.id in legacy_variant_ids:
+            reserved = blocking.get(("product_variant", variant.id), 0)
+        elif variant.id in size_stock_ids:
+            reserved = blocking.get(("size_stock", variant.id), 0)
+        else:
+            reserved = product_reserved
+        if reserved > 0:
+            variant.stock = max(0, int(variant.stock or 0) - reserved)
+            variant.is_available = bool(variant.is_available) and variant.stock > 0
+
+    if product_reserved > 0:
+        response.total_stock = max(0, int(response.total_stock or 0) - product_reserved)
+    else:
+        subject_reserved = sum(
+            qty
+            for (kind, _), qty in blocking.items()
+            if kind in ("product_variant", "size_stock")
+        )
+        if subject_reserved > 0:
+            response.total_stock = max(0, int(response.total_stock or 0) - subject_reserved)
+
+    return response
 
 router = APIRouter(prefix="/products", tags=["products"])
 
@@ -1220,7 +1275,7 @@ async def get_product(
     )
     product = result.scalar_one()
 
-    return product
+    return await _serialize_storefront_product_with_available_stock(db, product)
 
 
 @router.put("/{product_id}", response_model=ProductResponse)

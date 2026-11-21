@@ -947,7 +947,10 @@ async def test_selection_rechecks_database_clock_after_waiting_for_estimate_lock
         await blocker.close()
 
     assert response.status_code == 409, response.text
-    assert response.json()["detail"] == "expired checkout estimate"
+    assert response.json()["detail"] == {
+        "code": "expired_estimate",
+        "message": "expired checkout estimate",
+    }
     db_session.expire_all()
     order = await db_session.get(Order, uuid.UUID(order_id))
     assert order.checkout_estimate_selection_id is None
@@ -1038,7 +1041,12 @@ async def test_insufficient_stock_rolls_back_every_prerequisite_write(
     )
 
     assert response.status_code == 409, response.text
-    assert response.json()["detail"] == "insufficient stock"
+    stock_detail = response.json()["detail"]
+    assert stock_detail["code"] == "insufficient_stock"
+    assert stock_detail["message"] == "insufficient stock"
+    assert stock_detail["available_stock"] == 0
+    assert stock_detail["requested_quantity"] == 1
+    assert stock_detail["product_id"] == str(product.id)
     await _assert_no_prerequisite_writes(db_session, order_id)
 
 
@@ -1063,7 +1071,10 @@ async def test_stale_destination_snapshot_rolls_back_through_selection_route(
     )
 
     assert response.status_code == 409, response.text
-    assert response.json()["detail"] == "stale checkout estimate"
+    assert response.json()["detail"] == {
+        "code": "stale_estimate",
+        "message": "stale checkout estimate",
+    }
     await _assert_no_prerequisite_writes(db_session, order_id)
 
 
@@ -1140,7 +1151,10 @@ async def test_address_change_committed_during_selection_lock_wait_fails_closed(
         await blocker.close()
 
     assert response.status_code == 409, response.text
-    assert response.json()["detail"] == "stale checkout estimate"
+    assert response.json()["detail"] == {
+        "code": "stale_estimate",
+        "message": "stale checkout estimate",
+    }
     await _assert_no_prerequisite_writes(db_session, order_id)
 
 
@@ -1222,7 +1236,10 @@ async def test_item_change_committed_during_selection_lock_wait_fails_closed(
         await blocker.close()
 
     assert response.status_code == 409, response.text
-    assert response.json()["detail"] == "stale checkout estimate"
+    assert response.json()["detail"] == {
+        "code": "stale_estimate",
+        "message": "stale checkout estimate",
+    }
     await _assert_no_prerequisite_writes(db_session, order_id)
 
 
@@ -1537,7 +1554,12 @@ async def test_selecting_estimate_option_does_not_reclaim_reservation_with_activ
         },
     )
     assert second_select.status_code == 409, second_select.text
-    assert second_select.json()["detail"] == "insufficient stock"
+    second_detail = second_select.json()["detail"]
+    assert second_detail["code"] == "insufficient_stock"
+    assert second_detail["message"] == "insufficient stock"
+    assert second_detail["available_stock"] == 0
+    assert second_detail["requested_quantity"] == 1
+    assert second_detail["product_id"] == str(product_id)
 
     db_session.expire_all()
     await db_session.refresh(first_order)

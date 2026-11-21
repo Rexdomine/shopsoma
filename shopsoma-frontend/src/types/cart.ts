@@ -79,7 +79,7 @@ export interface CartState {
   error: string | null;
 
   // Actions
-  addItem: (params: AddToCartParams) => void;
+  addItem: (params: AddToCartParams) => Promise<boolean>;
   removeItem: (itemId: string) => void;
   updateQuantity: (params: UpdateCartItemParams) => void;
   updateVariant: (params: UpdateVariantParams) => void;

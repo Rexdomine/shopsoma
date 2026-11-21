@@ -807,6 +807,14 @@ async def test_validate_cart_and_get_cart_flag_zero_stock_and_active_payment_res
     assert cart_item["available_stock"] == 0
     assert "out of stock" in cart_item["stock_issue"].lower()
 
+    # Storefront product detail reflects effective available stock (0) while held
+    product_res = await client.get(f"/api/v1/products/{product_id}")
+    assert product_res.status_code == 200, product_res.text
+    product_body = product_res.json()
+    assert product_body["total_stock"] == 0
+    assert product_body["variants"][0]["stock"] == 0
+    assert product_body["variants"][0]["is_available"] is False
+
     # Adding another shopper's cart item against the locked stock is rejected
     second_add = await client.post(
         "/api/v1/cart/items",

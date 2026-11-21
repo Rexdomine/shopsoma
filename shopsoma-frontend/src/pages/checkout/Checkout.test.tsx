@@ -2604,4 +2604,48 @@ describe('Checkout M5 sequencing and recovery', () => {
     expect(mocks.createCheckoutEstimate).toHaveBeenCalledTimes(1);
     expect(mocks.cancelOrder).toHaveBeenCalledTimes(1);
   });
+
+  it('stops delivery quote refresh loop and flags unavailable items for structured 409 insufficient_stock code', async () => {
+    mocks.getShippingProviderSettings.mockResolvedValue({ provider: 'shipbubble', checkout_estimates_required: true });
+    mocks.selectCheckoutEstimateOption.mockRejectedValueOnce({
+      isAxiosError: true,
+      response: {
+        status: 409,
+        data: { detail: { code: 'insufficient_stock', message: 'Reworded conflict' } },
+      },
+    });
+
+    render(<MemoryRouter initialEntries={['/checkout']}><CheckoutTestRoutes /></MemoryRouter>);
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Continue' })).toBeEnabled());
+    fireEvent.click(screen.getByRole('button', { name: 'Continue' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Calculate live courier rates' }));
+    const selectBtn = await screen.findByRole('button', { name: 'Select Standard delivery' });
+
+    mocks.validateCartItemsWithServer.mockResolvedValue({
+      is_valid: false,
+      items: [
+        {
+          product_id: 'prod-1',
+          variant_id: 'var-1',
+          product_title: 'Kester Club Tee',
+          requested_quantity: 1,
+          available_stock: 0,
+          is_in_stock: false,
+          made_to_order: false,
+          status: 'out_of_stock',
+          message: 'Kester Club Tee is out of stock.',
+        },
+      ],
+      errors: ['Kester Club Tee is out of stock.'],
+    });
+    fireEvent.click(selectBtn);
+
+    await waitFor(() => {
+      expect(screen.getByText(/out of stock or no longer available/i)).toBeInTheDocument();
+    });
+    expect(await screen.findByText('Kester Club Tee is out of stock.')).toBeInTheDocument();
+    expect(screen.queryByText(/Delivery options changed/i)).not.toBeInTheDocument();
+    expect(mocks.createCheckoutEstimate).toHaveBeenCalledTimes(1);
+    expect(mocks.cancelOrder).toHaveBeenCalledTimes(1);
+  });
 });
