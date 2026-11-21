@@ -24,6 +24,7 @@ from app.models.stock_payment_persistence import (
     PaymentAttemptReservation,
     StockReservation,
 )
+from app.services.checkout.hold_settings import get_checkout_hold_settings
 from app.services.checkout.estimates import (
     _estimate_request_fingerprint,
     _planned_ship_date,
@@ -555,7 +556,9 @@ async def select_estimate_option(
     await db.flush()
 
 
-    expiry = database_now + timedelta(seconds=1800)
+    hold_settings = await get_checkout_hold_settings(db)
+    reservation_ttl_seconds = hold_settings.reservation_ttl_minutes * 60
+    expiry = database_now + timedelta(seconds=reservation_ttl_seconds)
     creation_txid = await db.scalar(select(text("txid_current()")))
     for item, reservation_id in reservation_pairs:
         reservation = StockReservation(
@@ -582,7 +585,7 @@ async def select_estimate_option(
             unit_price=Decimal(item.unit_price).quantize(_CENT, rounding=ROUND_HALF_UP),
             line_amount=Decimal(item.subtotal).quantize(_CENT, rounding=ROUND_HALF_UP),
             currency=item.currency,
-            ttl_seconds=1800,
+            ttl_seconds=reservation_ttl_seconds,
             expires_at=expiry,
             state="active",
             source_command="select_checkout_estimate",

@@ -5,6 +5,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const mocks = vi.hoisted(() => ({
   getShippingProviderSettings: vi.fn(),
+  getPublicCheckoutHoldSettings: vi.fn(),
   getAddresses: vi.fn(),
   calculateShipping: vi.fn(),
   reviewOrder: vi.fn(),
@@ -92,7 +93,10 @@ vi.mock('../../services/checkoutService', () => ({
     validatePromoCode: vi.fn(),
   },
 }));
-vi.mock('../../services/settingsService', () => ({ getShippingProviderSettings: mocks.getShippingProviderSettings }));
+vi.mock('../../services/settingsService', () => ({
+  getShippingProviderSettings: mocks.getShippingProviderSettings,
+  getPublicCheckoutHoldSettings: mocks.getPublicCheckoutHoldSettings,
+}));
 vi.mock('../../services/paymentService', () => ({
   paymentService: {
     initializePayment: mocks.initializePayment,
@@ -605,6 +609,11 @@ describe('Checkout M5 sequencing and recovery', () => {
       },
     };
     mocks.getShippingProviderSettings.mockResolvedValue({ provider: 'manual', checkout_estimates_required: false });
+    mocks.getPublicCheckoutHoldSettings.mockResolvedValue({
+      reservation_ttl_minutes: 30,
+      authorization_grace_minutes: 15,
+      release_on_payment_close: false,
+    });
     mocks.validateCartItemsWithServer.mockResolvedValue({ is_valid: true, items: [], errors: [] });
     mocks.getLocalCartValidationIssues.mockReturnValue([]);
     mocks.getAddresses.mockResolvedValue({ addresses: [address] });
@@ -2647,5 +2656,30 @@ describe('Checkout M5 sequencing and recovery', () => {
     expect(screen.queryByText(/Delivery options changed/i)).not.toBeInTheDocument();
     expect(mocks.createCheckoutEstimate).toHaveBeenCalledTimes(1);
     expect(mocks.cancelOrder).toHaveBeenCalledTimes(1);
+  });
+
+  it('verifies abandoned Paystack payment on modal close when release_on_payment_close is enabled', async () => {
+    mocks.getPublicCheckoutHoldSettings.mockResolvedValue({
+      reservation_ttl_minutes: 10,
+      authorization_grace_minutes: 2,
+      release_on_payment_close: true,
+    });
+    mockGuestCapability('release-on-close-capability');
+    mocks.verifyPayment.mockResolvedValueOnce({
+      status: true,
+      message: 'Payment verification successful',
+      data: { status: 'abandoned', reference: 'canonical-ref' },
+    });
+
+    const { getConfig } = await openEnforcedPaystack();
+    getConfig().onClose();
+
+    await waitFor(() => {
+      expect(mocks.verifyPayment).toHaveBeenCalledWith({
+        reference: 'canonical-ref',
+        payment_gateway: 'paystack',
+      });
+    });
+    expect(await screen.findByRole('button', { name: 'Retry payment' })).toBeInTheDocument();
   });
 });
