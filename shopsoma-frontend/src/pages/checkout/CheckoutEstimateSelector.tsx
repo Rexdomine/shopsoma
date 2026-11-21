@@ -17,6 +17,27 @@ interface Props {
 const money = (amount: string, currency: string) =>
   `${currency} ${new Intl.NumberFormat('en-NG', { minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(Number(amount))}`;
 
+const STOCK_CONFLICT_CODES = new Set([
+  'insufficient_stock',
+  'inventory_subject_unavailable',
+  'stock_unavailable',
+  'out_of_stock',
+]);
+
+function extractConflictCode(caught: unknown): string | null {
+  if (!axios.isAxiosError(caught)) return null;
+  const detail = (
+    caught.response?.data as
+      | { detail?: string | { message?: unknown; code?: unknown } }
+      | undefined
+  )?.detail;
+  if (detail && typeof detail === 'object' && typeof detail.code === 'string') {
+    const normalized = detail.code.trim().toLowerCase();
+    return normalized || null;
+  }
+  return null;
+}
+
 function extractConflictDetail(caught: unknown): string {
   if (!axios.isAxiosError(caught)) return '';
   const detail = (
@@ -35,6 +56,10 @@ function extractConflictDetail(caught: unknown): string {
 function isStockConflictError(caught: unknown): boolean {
   if (!axios.isAxiosError(caught) || caught.response?.status !== 409) {
     return false;
+  }
+  const code = extractConflictCode(caught);
+  if (code) {
+    return STOCK_CONFLICT_CODES.has(code);
   }
   return /insufficient stock|out of stock|inventory subject unavailable|stock_unavailable/i.test(
     extractConflictDetail(caught),

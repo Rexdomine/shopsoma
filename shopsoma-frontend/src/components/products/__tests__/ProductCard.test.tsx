@@ -256,4 +256,44 @@ describe('ProductCard pricing resolution', () => {
       quantity: 1,
     });
   });
+
+  it('does not show Added to bag when addItem resolves to false', async () => {
+    mockAddItem.mockResolvedValueOnce(false);
+    const product: Product = {
+      id: 'prod-last-unit',
+      vendor_id: 'vendor-1',
+      title: 'Last Unit Dress',
+      vendor_name: 'Kester Club',
+      base_price: 4000,
+      currency: 'NGN',
+      status: 'active',
+      product_type: 'single',
+      inventory_quantity: 1,
+      total_stock: 1,
+      is_featured: false,
+      made_to_order: false,
+      views_count: 0,
+      orders_count: 0,
+      moderation_status: 'approved',
+      images: [],
+      variations: [],
+      variants: [],
+      created_at: '2026-01-01',
+      updated_at: '2026-01-01',
+    };
+
+    render(
+      <MemoryRouter>
+        <ProductCard product={product} />
+      </MemoryRouter>
+    );
+
+    const addToBagBtn = screen.getByRole('button', { name: /add to bag/i });
+    fireEvent.click(addToBagBtn);
+
+    await Promise.resolve();
+    expect(mockAddItem).toHaveBeenCalledTimes(1);
+    expect(screen.queryByRole('button', { name: /added to bag/i })).toBeNull();
+    expect(screen.getByRole('button', { name: /add to bag/i })).toBeInTheDocument();
+  });
 });
