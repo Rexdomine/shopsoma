@@ -287,6 +287,19 @@ class FeaturedStorefrontUpdate(BaseModel):
     is_featured_storefront: bool
 
 
+class VendorBrandNameUpdate(BaseModel):
+    """Admin correction of a vendor's public brand (business) name."""
+    business_name: str = Field(..., max_length=255)
+
+    @model_validator(mode="after")
+    def _normalize_business_name(self):
+        name = " ".join(self.business_name.split())
+        if len(name) < 2:
+            raise ValueError("Brand name must be at least 2 characters")
+        self.business_name = name
+        return self
+
+
 class TestAccountClassificationRequest(BaseModel):
     apply: bool = False
 
@@ -1237,6 +1250,126 @@ async def update_vendor_featured_storefront(
     return {
         "vendor_id": str(vendor.id),
         "is_featured_storefront": vendor.is_featured_storefront,
+        "updated_by": str(current_admin.id),
+    }
+
+
+async def _get_vendor_or_404(db: AsyncSession, vendor_id: UUID) -> Vendor:
+    vendor = await db.scalar(select(Vendor).where(Vendor.id == vendor_id))
+    if not vendor:
+        raise HTTPException(status_code=404, detail="Vendor not found")
+    return vendor
+
+
+@router.put("/vendors/{vendor_id}/brand-name")
+async def update_vendor_brand_name(
+    vendor_id: UUID,
+    payload: VendorBrandNameUpdate,
+    current_admin: User = Depends(get_current_admin),
+    db: AsyncSession = Depends(get_db),
+):
+    """Rename a vendor's public brand. Product pages and the designer
+    directory read the name live from the vendor record, so it applies everywhere."""
+    vendor = await _get_vendor_or_404(db, vendor_id)
+    previous_name = vendor.business_name
+    if payload.business_name != previous_name:
+        vendor.business_name = payload.business_name
+        db.add(
+            AuditLog(
+                user_id=current_admin.id,
+                action="vendor_brand_name_updated",
+                entity_type="vendor",
+                entity_id=vendor.id,
+                old_values={"business_name": previous_name},
+                new_values={"business_name": payload.business_name},
+            )
+        )
+        await db.commit()
+        await db.refresh(vendor)
+    return {
+        "vendor_id": str(vendor.id),
+        "business_name": vendor.business_name,
+        "updated_by": str(current_admin.id),
+    }
+
+
+@router.post("/vendors/{vendor_id}/storefront-image")
+async def upload_vendor_storefront_image(
+    vendor_id: UUID,
+    file: UploadFile = File(...),
+    current_admin: User = Depends(get_current_admin),
+    db: AsyncSession = Depends(get_db),
+):
+    """Replace the designer storefront banner (featured storefront image).
+    Stored in the vendor's own featured-storefront folder, as the vendor flow does."""
+    vendor = await _get_vendor_or_404(db, vendor_id)
+    uploaded = await image_service.upload_image(
+        file,
+        folder=f"vendors/{vendor.user_id}/featured-storefront",
+        generate_variants=False,
+    )
+    previous_url = vendor.featured_storefront_image_url
+    vendor.featured_storefront_image_url = uploaded["original"]
+    db.add(
+        AuditLog(
+            user_id=current_admin.id,
+            action="vendor_storefront_image_updated",
+            entity_type="vendor",
+            entity_id=vendor.id,
+            old_values={"featured_storefront_image_url": previous_url},
+            new_values={"featured_storefront_image_url": uploaded["original"]},
+        )
+    )
+    try:
+        await db.commit()
+    except Exception:
+        await db.rollback()
+        storage_keys = list(uploaded.get("_storage_keys") or [])
+        if storage_keys:
+            try:
+                await image_service.delete_images(storage_keys)
+            except Exception:
+                logger.exception("Failed to clean up storefront image after a failed save")
+        raise
+    await db.refresh(vendor)
+    return {
+        "vendor_id": str(vendor.id),
+        "featured_storefront_image_url": vendor.featured_storefront_image_url,
+        "updated_by": str(current_admin.id),
+    }
+
+
+@router.delete("/vendors/{vendor_id}/storefront-image")
+async def remove_vendor_storefront_image(
+    vendor_id: UUID,
+    current_admin: User = Depends(get_current_admin),
+    db: AsyncSession = Depends(get_db),
+):
+    """Clear the storefront banner override; the storefront falls back to the
+    vendor's banner asset, first published product image, then logo."""
+    vendor = await _get_vendor_or_404(db, vendor_id)
+    if vendor.is_featured_storefront:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Remove this vendor from the featured storefront rotation before removing its image",
+        )
+    previous_url = vendor.featured_storefront_image_url
+    if previous_url:
+        vendor.featured_storefront_image_url = None
+        db.add(
+            AuditLog(
+                user_id=current_admin.id,
+                action="vendor_storefront_image_removed",
+                entity_type="vendor",
+                entity_id=vendor.id,
+                old_values={"featured_storefront_image_url": previous_url},
+                new_values={"featured_storefront_image_url": None},
+            )
+        )
+        await db.commit()
+    return {
+        "vendor_id": str(vendor.id),
+        "featured_storefront_image_url": None,
         "updated_by": str(current_admin.id),
     }
 
