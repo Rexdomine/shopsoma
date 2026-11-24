@@ -106,7 +106,8 @@ describe('public storefront eligibility', () => {
     vi.mocked(designerService.listDesigners).mockResolvedValue(list); storefront('k');
     expect(await screen.findByTestId('vendor-products')).toHaveTextContent('k');
     expect(screen.getByRole('heading', { name: 'Kester Club' })).toBeInTheDocument();
-    expect(screen.getByText('Contemporary Lagos menswear.')).toBeInTheDocument();
+    // Storefronts intentionally omit the brand description (client direction, matching AMUJ).
+    expect(screen.queryByText('Contemporary Lagos menswear.')).not.toBeInTheDocument();
     expect(screen.getByRole('link', { name: 'All designers' })).toHaveAttribute('href', '/designers');
   });
   it('does not render products for an unavailable vendor', async () => {

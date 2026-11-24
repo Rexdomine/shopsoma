@@ -232,6 +232,28 @@ export const adminService = {
     return response.data;
   },
 
+  async updateVendorBrandName(vendorId: string, businessName: string): Promise<{ business_name: string }> {
+    const response = await api.put(`/admin/vendors/${vendorId}/brand-name`, {
+      business_name: businessName,
+    });
+    return response.data;
+  },
+
+  async uploadVendorStorefrontImage(vendorId: string, file: File): Promise<{ featured_storefront_image_url: string }> {
+    const formData = new FormData();
+    formData.append('file', file);
+    const response = await api.post(`/admin/vendors/${vendorId}/storefront-image`, formData, {
+      headers: { 'Content-Type': 'multipart/form-data' },
+      timeout: 60000,
+    });
+    return response.data;
+  },
+
+  async removeVendorStorefrontImage(vendorId: string): Promise<{ featured_storefront_image_url: null }> {
+    const response = await api.delete(`/admin/vendors/${vendorId}/storefront-image`);
+    return response.data;
+  },
+
   // ==================== VENDOR APPLICATIONS ====================
 
   // List vendor applications

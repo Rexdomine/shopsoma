@@ -26,14 +26,13 @@ export default function DesignerStorefront() {
   if(state.error) return <Layout><div className="designer-page"><DesignerMessage eyebrow="Load error" title="We couldn’t load this designer"><p>Please check your connection and try again.</p><button type="button" onClick={() => setAttempt(n => n+1)}>Try again</button></DesignerMessage></div></Layout>;
   if(!state.designer) return <Layout><div className="designer-page"><DesignerMessage eyebrow="Designer unavailable" title="Designer unavailable"><p>This storefront is not available. Discover other designers on SHOPSOMA.</p><Link to="/designers">Browse designers</Link></DesignerMessage></div></Layout>;
   const designer = state.designer;
-  const description = designer.business_description?.trim();
   return <ProductList key={designer.id} initialParams={initialParams} categoryNavAsTabs designerMode
     designerName={designer.business_name}
     storefrontHeader={<div className="designer-page">
       <DesignerHero key={designer.id} designer={designer}/>
       <div className="designer-intro max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+        {/* Client direction (Nov 2026): storefronts match AMUJ — banner, name and catalogue only, no brand description. */}
         <Link to="/designers" className="designer-back-link"><ChevronLeft aria-hidden="true" size={14} />All designers</Link>
-        {description && <p>{description}</p>}
       </div>
     </div>}
     emptyCatalogState={<div className="designer-page"><DesignerMessage eyebrow="Published catalogue is empty" title="New pieces are on their way"><p>There are no published pieces available from {designer.business_name} right now.</p><Link to="/designers">Browse designers</Link></DesignerMessage></div>}
