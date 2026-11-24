@@ -1,6 +1,7 @@
 import { useRef, useState, type ChangeEvent } from 'react';
 import { ExternalLink, ImageIcon, Pencil, Trash2, Upload } from 'lucide-react';
 import { adminService } from '../../services/adminService';
+import { DesignerBannerMedia } from '../../pages/designers/DesignerVisuals';
 
 export type BrandControlsVendor = {
   id: string;
@@ -199,23 +200,13 @@ export default function AdminVendorBrandControls({ vendor, onUpdated, onMessage 
         {/* Storefront banner */}
         <div>
           <p className="text-xs text-gray-500 uppercase tracking-wide mb-2">Storefront Banner</p>
-          <div className="relative w-full aspect-[16/5] rounded-xl overflow-hidden bg-[#105E53]/10 border border-gray-200">
+          <div className="designer-banner relative w-full aspect-[16/5] rounded-xl overflow-hidden bg-[#105E53]/10 border border-gray-200">
             {imageUrl && !imageFailed ? (
-              <>
-                {/* Mirrors the storefront hero: full image fitted, blurred copy fills the band. */}
-                <img
-                  src={imageUrl}
-                  alt=""
-                  aria-hidden="true"
-                  className="absolute inset-0 w-full h-full object-cover blur-xl scale-110 opacity-90"
-                />
-                <img
-                  src={imageUrl}
-                  alt={`Current storefront banner for ${vendor.business_name}`}
-                  className="absolute inset-0 w-full h-full object-contain object-right"
-                  onError={() => setImageFailed(true)}
-                />
-              </>
+              <DesignerBannerMedia
+                src={imageUrl}
+                alt={`Current storefront banner for ${vendor.business_name}`}
+                onError={() => setImageFailed(true)}
+              />
             ) : (
               <div className="absolute inset-0 flex flex-col items-center justify-center text-center px-4 text-[#105E53]">
                 <ImageIcon className="w-6 h-6 mb-1" aria-hidden="true" />
@@ -226,7 +217,7 @@ export default function AdminVendorBrandControls({ vendor, onUpdated, onMessage 
             )}
           </div>
           <p className="text-xs text-gray-500 mt-2">
-            The whole photo is always shown, never cropped. Wide landscape photos fill the banner best; others sit on the right over a soft blurred fill.
+            The whole photo is always shown, never cropped. Wide landscape photos fill the banner best; others sit on the right and fade into a soft blurred reflection of the photo.
           </p>
           <div className="flex flex-wrap gap-2 mt-3">
             <input
