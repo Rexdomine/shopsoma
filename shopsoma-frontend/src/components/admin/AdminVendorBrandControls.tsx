@@ -201,13 +201,21 @@ export default function AdminVendorBrandControls({ vendor, onUpdated, onMessage 
           <p className="text-xs text-gray-500 uppercase tracking-wide mb-2">Storefront Banner</p>
           <div className="relative w-full aspect-[16/5] rounded-xl overflow-hidden bg-[#105E53]/10 border border-gray-200">
             {imageUrl && !imageFailed ? (
-              <img
-                src={imageUrl}
-                alt={`Current storefront banner for ${vendor.business_name}`}
-                className="absolute inset-0 w-full h-full object-cover"
-                style={{ objectPosition: 'center 32%' }}
-                onError={() => setImageFailed(true)}
-              />
+              <>
+                {/* Mirrors the storefront hero: full image fitted, blurred copy fills the band. */}
+                <img
+                  src={imageUrl}
+                  alt=""
+                  aria-hidden="true"
+                  className="absolute inset-0 w-full h-full object-cover blur-xl scale-110 opacity-90"
+                />
+                <img
+                  src={imageUrl}
+                  alt={`Current storefront banner for ${vendor.business_name}`}
+                  className="absolute inset-0 w-full h-full object-contain object-right"
+                  onError={() => setImageFailed(true)}
+                />
+              </>
             ) : (
               <div className="absolute inset-0 flex flex-col items-center justify-center text-center px-4 text-[#105E53]">
                 <ImageIcon className="w-6 h-6 mb-1" aria-hidden="true" />
@@ -218,7 +226,7 @@ export default function AdminVendorBrandControls({ vendor, onUpdated, onMessage 
             )}
           </div>
           <p className="text-xs text-gray-500 mt-2">
-            Use a wide landscape photo (about 1600 × 500 or larger). Keep the subject clear of the left side, where the brand name sits.
+            The whole photo is always shown, never cropped. Wide landscape photos fill the banner best; others sit on the right over a soft blurred fill.
           </p>
           <div className="flex flex-wrap gap-2 mt-3">
             <input
