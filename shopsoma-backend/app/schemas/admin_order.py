@@ -23,6 +23,7 @@ class OrderStatusUpdate(BaseModel):
     """Update order fulfillment status"""
     fulfillment_status: FulfillmentStatus
     admin_notes: Optional[str] = None
+    confirm_backward: bool = False
 
     # Pickup window fields (for PICKUP_SCHEDULED status)
     pickup_window_start: Optional[str] = None
@@ -59,6 +60,7 @@ class BulkStatusUpdate(BaseModel):
     order_ids: List[UUID] = Field(..., min_length=1)
     fulfillment_status: FulfillmentStatus
     admin_notes: Optional[str] = None
+    confirm_backward: bool = False
 
 
 class RefundRequest(BaseModel):

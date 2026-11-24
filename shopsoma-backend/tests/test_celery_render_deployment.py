@@ -11,6 +11,7 @@ TASK_NAMES = {
     "app.tasks.checkout_outbox.dispatch_checkout_outbox",
     "app.tasks.product_image_storage_cleanup.reconcile_product_image_storage_cleanup",
     "app.tasks.pending_payment_reminders.dispatch_pending_payment_reminders",
+    "app.tasks.carrier_tracking_reconciliation.reconcile_carrier_tracking",
 }
 ROOT = Path(__file__).resolve().parents[2]
 
@@ -176,4 +177,18 @@ def test_render_blueprint_wires_worker_email_delivery_configuration() -> None:
         "type": "web",
         "name": "shopsoma-staging-api",
         "envVarKey": "FRONTEND_BASE_URL",
+    }
+
+
+def test_render_blueprint_wires_worker_carrier_reconciliation_configuration() -> None:
+    blueprint = yaml.safe_load((ROOT / "render.yaml").read_text(encoding="utf-8"))
+    services = {service["name"]: service for service in blueprint["services"]}
+    worker = services["shopsoma-staging-checkout-outbox-worker"]
+
+    env = env_by_key(worker)
+    assert "SHIPBUBBLE_API_KEY" in env
+    assert env["SHIPBUBBLE_API_KEY"]["fromService"] == {
+        "type": "web",
+        "name": "shopsoma-staging-api",
+        "envVarKey": "SHIPBUBBLE_API_KEY",
     }

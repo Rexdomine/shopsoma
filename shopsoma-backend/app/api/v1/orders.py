@@ -2295,17 +2295,41 @@ async def sync_order_tracking(
         sync_dhl_shipment_status,
     )
     if await is_dhl_order(db, order=order):
-        await sync_dhl_shipment_status(db, order=order)
+        booking = await sync_dhl_shipment_status(db, order=order)
+        if booking is None or not booking.tracking_number:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=f"Order {order.order_number} has no booked DHL shipment to sync",
+            )
     else:
-        from app.services.shipping.shipbubble_tracking import sync_shipbubble_shipment_status
-        await sync_shipbubble_shipment_status(db, order=order)
+        from app.services.shipping.shipbubble_tracking import (
+            ShipbubbleSyncProviderError,
+            ShipbubbleSyncUnbookedError,
+            sync_shipbubble_shipment_status,
+        )
 
-    return await get_order_tracking(
+        try:
+            await sync_shipbubble_shipment_status(db, order=order, strict=True)
+        except ShipbubbleSyncUnbookedError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=str(exc),
+            ) from exc
+        except ShipbubbleSyncProviderError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_502_BAD_GATEWAY,
+                detail=str(exc),
+            ) from exc
+
+    tracking_payload = await get_order_tracking(
         order_ref=str(order.id),
         capability=capability,
         current_user=current_user,
         db=db,
     )
+    if isinstance(tracking_payload, dict):
+        tracking_payload["sync_result"] = {"synced": True}
+    return tracking_payload
 
 
 @router.post("/{order_ref}/tracking/simulate")
@@ -2386,9 +2410,28 @@ async def simulate_order_tracking_step(
 
     old_status = order.fulfillment_status
     fulfillment_enum, sb_status = step_map[target_status]
+    from app.services.orders.fulfillment_sync import (
+        can_apply_carrier_status_transition,
+        sync_vendor_items_and_pickups_for_order_status,
+    )
+
+    if fulfillment_enum != old_status and not can_apply_carrier_status_transition(
+        old_status,
+        fulfillment_enum,
+        is_webhook=False,
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=(
+                f"Cannot simulate non-forward transition from '{old_status.value}' "
+                f"to '{fulfillment_enum.value}'"
+            ),
+        )
+
+    now_utc = datetime.now(timezone.utc)
     order.fulfillment_status = fulfillment_enum
     if fulfillment_enum == FulfillmentStatus.DELIVERED and order.delivered_at is None:
-        order.delivered_at = datetime.now(timezone.utc)
+        order.delivered_at = now_utc
 
     from app.models.shipbubble_shipment import ShipbubbleShipment
     from app.services.shipbubble_service import get_shipbubble_service
@@ -2398,7 +2441,7 @@ async def simulate_order_tracking_step(
     )
     if shipment:
         shipment.status = sb_status
-        shipment.updated_at = datetime.now(timezone.utc)
+        shipment.updated_at = now_utc
         if (shipment.tracking_code or shipment.shipbubble_order_id) and not order.tracking_number:
             order.tracking_number = shipment.tracking_code or shipment.shipbubble_order_id
         db.add(shipment)
@@ -2408,6 +2451,13 @@ async def simulate_order_tracking_step(
                 await svc.simulate_webhook(shipment.shipbubble_order_id, sb_status)
             except Exception as exc:
                 logger.info("[ShipBubble] Sandbox webhook simulation call note: %s", exc)
+
+    await sync_vendor_items_and_pickups_for_order_status(
+        db,
+        order=order,
+        new_status=fulfillment_enum,
+        now_utc=now_utc,
+    )
 
     db.add(order)
     await db.commit()

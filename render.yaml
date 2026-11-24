@@ -157,6 +157,11 @@ services:
           type: web
           name: shopsoma-staging-api
           envVarKey: FRONTEND_BASE_URL
+      - key: SHIPBUBBLE_API_KEY
+        fromService:
+          type: web
+          name: shopsoma-staging-api
+          envVarKey: SHIPBUBBLE_API_KEY
 
   - type: worker
     name: shopsoma-staging-checkout-outbox-beat

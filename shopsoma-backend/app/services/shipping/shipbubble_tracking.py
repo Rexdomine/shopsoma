@@ -30,6 +30,14 @@ from app.services.shipping.shipbubble_booking import book_shipbubble_shipment_if
 
 logger = logging.getLogger(__name__)
 
+
+class ShipbubbleSyncUnbookedError(Exception):
+    """Raised when manual tracking sync is requested without a booked ShipBubble shipment."""
+
+
+class ShipbubbleSyncProviderError(Exception):
+    """Raised when the ShipBubble tracking API fails or returns no shipment payload."""
+
 # Comprehensive coordinates for Nigerian states and major cities
 NIGERIA_COORDINATES: Dict[str, Tuple[float, float]] = {
     "lagos": (6.5244, 3.3792),
@@ -416,12 +424,21 @@ async def sync_shipbubble_shipment_status(
     db: AsyncSession,
     *,
     order: Order,
+    strict: bool = False,
 ) -> Optional[ShipbubbleShipment]:
     """Query ShipBubble GET /shipping/labels/list/:order_id and sync order fulfillment status."""
     shipment = await db.scalar(
         select(ShipbubbleShipment).where(ShipbubbleShipment.order_id == order.id)
     )
     if not shipment or not shipment.shipbubble_order_id:
+        logger.warning(
+            "[ShipBubble] Cannot sync order %s: no booked ShipBubble shipment or provider order_id",
+            order.order_number,
+        )
+        if strict:
+            raise ShipbubbleSyncUnbookedError(
+                f"Order {order.order_number} has no booked ShipBubble shipment to sync"
+            )
         return shipment
 
     service = get_shipbubble_service()
@@ -496,8 +513,22 @@ async def sync_shipbubble_shipment_status(
                     await _broadcast_order_update(order)
                 except Exception as notify_exc:
                     logger.warning("[ShipBubble] Sync notification note for %s: %s", order.id, notify_exc)
+        else:
+            logger.warning(
+                "[ShipBubble] Empty tracking response from provider for %s (order %s)",
+                shipment.shipbubble_order_id,
+                order.order_number,
+            )
+            if strict:
+                raise ShipbubbleSyncProviderError(
+                    f"ShipBubble returned no tracking data for shipment {shipment.shipbubble_order_id}"
+                )
     except ShipBubbleError as exc:
         logger.warning("[ShipBubble] Live tracking poll failed for %s: %s", shipment.shipbubble_order_id, exc)
+        if strict:
+            raise ShipbubbleSyncProviderError(
+                f"ShipBubble tracking poll failed for {shipment.shipbubble_order_id}: {exc}"
+            ) from exc
 
     return shipment
 

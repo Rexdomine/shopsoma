@@ -111,6 +111,8 @@ class Settings(BaseSettings):
     SHIPBUBBLE_TIMEOUT_SECONDS: float = Field(default=30.0, ge=1, le=60)
     SHIPBUBBLE_SENDER_EMAIL: str = "shipping@shopsoma.com"
     SHIPBUBBLE_CATEGORY_ID: Optional[int] = None
+    CARRIER_RECONCILIATION_INTERVAL_SECONDS: int = Field(default=600, ge=60)
+    CARRIER_RECONCILIATION_BATCH_SIZE: int = Field(default=50, ge=1, le=500)
 
     # DHL Express MyDHL API
     # Docs: https://developer.dhl.com/api-reference/dhl-express-mydhl-api

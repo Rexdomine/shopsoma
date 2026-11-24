@@ -25,6 +25,7 @@ from app.models.payment import Payment
 from app.models.setting import Setting
 from app.models.package_custody import HubPackage, CustodyEvent
 from app.services.orders.fulfillment_sync import (
+    is_backward_admin_status_transition,
     resolve_effective_item_fulfillment_status,
     sync_vendor_items_and_pickups_for_order_status,
 )
@@ -757,6 +758,27 @@ async def update_order_status(
     old_status = order.fulfillment_status
     new_status = update_data.fulfillment_status
 
+    is_backward = is_backward_admin_status_transition(old_status, new_status)
+    if is_backward:
+        if not update_data.confirm_backward or not (
+            update_data.admin_notes and update_data.admin_notes.strip()
+        ):
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=(
+                    f"Backward status change from '{old_status.value}' to '{new_status.value}' "
+                    "is blocked unless confirm_backward=true and admin_notes reason are provided."
+                ),
+            )
+        logger.warning(
+            "[Order Status] Confirmed backward transition order=%s admin=%s from=%s to=%s notes=%s",
+            order.order_number,
+            admin.id,
+            old_status.value,
+            new_status.value,
+            update_data.admin_notes.strip(),
+        )
+
     if new_status == FulfillmentStatus.CANCELLED:
         try:
             await ensure_order_cancellation_allowed(db, order_id=order.id)
@@ -835,6 +857,7 @@ async def update_order_status(
         db,
         order=order,
         new_status=new_status,
+        allow_backward=is_backward,
     )
 
     # Update vendor pickups with pickup window data if provided
@@ -1099,13 +1122,9 @@ async def update_pickup_status(
 
     if is_scheduling and not update_data.pickup_status:
         pickup.status = PickupStatus.SCHEDULED
-        # Avoid mutating order_items on paid domestic_checkout_v1 orders because
-        # trg_order_items_checkout_completion enforces active stock_reservations,
-        # whereas paid orders have consumed reservations.
         if (
             order_item
             and order_item.fulfillment_status != FulfillmentStatus.CANCELLED
-            and getattr(order, "workflow_cohort", None) != "domestic_checkout_v1"
         ):
             order_item.fulfillment_status = FulfillmentStatus.PICKUP_SCHEDULED
 
@@ -1392,6 +1411,31 @@ async def bulk_update_status(
                     detail=str(exc),
                 ) from exc
         previous_status = order.fulfillment_status
+        is_backward = is_backward_admin_status_transition(
+            previous_status,
+            update_data.fulfillment_status,
+        )
+        if is_backward:
+            if not update_data.confirm_backward or not (
+                update_data.admin_notes and update_data.admin_notes.strip()
+            ):
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail=(
+                        f"Backward status change on order {order.order_number} from "
+                        f"'{previous_status.value}' to '{update_data.fulfillment_status.value}' "
+                        "is blocked unless confirm_backward=true and admin_notes reason are provided."
+                    ),
+                )
+            logger.warning(
+                "[Order Status] Confirmed bulk backward transition order=%s admin=%s from=%s to=%s notes=%s",
+                order.order_number,
+                admin.id,
+                previous_status.value,
+                update_data.fulfillment_status.value,
+                update_data.admin_notes.strip(),
+            )
+
         order.fulfillment_status = update_data.fulfillment_status
 
         if update_data.admin_notes:
@@ -1419,6 +1463,7 @@ async def bulk_update_status(
             db,
             order=order,
             new_status=update_data.fulfillment_status,
+            allow_backward=is_backward,
         )
 
         if previous_status != update_data.fulfillment_status:

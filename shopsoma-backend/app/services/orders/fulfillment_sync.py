@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+from types import SimpleNamespace
 from typing import Optional
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import selectinload
 
 from app.models.order import FulfillmentStatus, Order, OrderItem
 from app.models.vendor_pickup import PickupStatus, VendorPickup
@@ -14,6 +16,7 @@ from app.services.orders.made_to_order_readiness import (
     is_made_to_order_item,
     is_picked_up,
     is_pickup_scheduled,
+    pickups_by_order_item,
 )
 
 # Monotonic forward progression ranks for active fulfillment stages.
@@ -82,6 +85,44 @@ def can_apply_carrier_status_transition(
     return target_rank > current_rank
 
 
+def is_backward_admin_status_transition(
+    current: FulfillmentStatus,
+    target: FulfillmentStatus,
+) -> bool:
+    """Return True when an admin status change moves backwards or exits a terminal state."""
+    if target == current:
+        return False
+
+    if current in (FulfillmentStatus.CANCELLED, FulfillmentStatus.RETURNED):
+        return True
+
+    if current == FulfillmentStatus.DELIVERED:
+        return target != FulfillmentStatus.RETURNED
+
+    if current == FulfillmentStatus.DELIVERY_FAILED:
+        return target in {
+            FulfillmentStatus.ORDER_RECEIVED,
+            FulfillmentStatus.PREPARING_FOR_PICKUP,
+            FulfillmentStatus.PICKUP_SCHEDULED,
+            FulfillmentStatus.PICKED_UP,
+            FulfillmentStatus.IN_TRANSIT,
+        }
+
+    if target in {
+        FulfillmentStatus.DELIVERY_FAILED,
+        FulfillmentStatus.RETURNED,
+        FulfillmentStatus.CANCELLED,
+    }:
+        return False
+
+    current_rank = FORWARD_FULFILLMENT_RANK.get(current)
+    target_rank = FORWARD_FULFILLMENT_RANK.get(target)
+    if current_rank is None or target_rank is None:
+        return False
+
+    return target_rank < current_rank
+
+
 def _pickup_implied_fulfillment_status(
     item: OrderItem,
     pickup: Optional[VendorPickup],
@@ -99,7 +140,10 @@ def _pickup_implied_fulfillment_status(
         return FulfillmentStatus.PICKED_UP
 
     mto_unready = is_made_to_order_item(item) and pickup.ready_for_pickup_at is None
-    if not mto_unready and is_pickup_scheduled(pickup):
+    explicitly_scheduled = pickup.pickup_window_start is not None or (
+        pickup.ready_for_pickup_at is not None and is_pickup_scheduled(pickup)
+    )
+    if not mto_unready and explicitly_scheduled:
         return FulfillmentStatus.PICKUP_SCHEDULED
     if pickup.ready_for_pickup_at is not None:
         return FulfillmentStatus.PREPARING_FOR_PICKUP
@@ -169,9 +213,12 @@ async def sync_vendor_items_and_pickups_for_order_status(
     order: Order,
     new_status: FulfillmentStatus,
     now_utc: Optional[datetime] = None,
+    allow_backward: bool = False,
 ) -> None:
-    """Keep VendorPickup and (when mutable) OrderItem statuses aligned with Order status."""
+    """Keep VendorPickup and OrderItem statuses aligned with Order status."""
     effective_now = now_utc or datetime.now(timezone.utc)
+    if order.fulfillment_status != new_status:
+        order.fulfillment_status = new_status
 
     pickups = (
         await db.scalars(select(VendorPickup).where(VendorPickup.order_id == order.id))
@@ -179,6 +226,8 @@ async def sync_vendor_items_and_pickups_for_order_status(
     for pickup in pickups:
         if new_status == FulfillmentStatus.DELIVERED:
             if pickup.status != PickupStatus.CANCELLED:
+                if pickup.actual_pickup_date is None:
+                    pickup.actual_pickup_date = effective_now
                 pickup.status = PickupStatus.COMPLETED
                 if pickup.completed_at is None:
                     pickup.completed_at = effective_now
@@ -186,39 +235,83 @@ async def sync_vendor_items_and_pickups_for_order_status(
         elif new_status in (
             FulfillmentStatus.IN_TRANSIT,
             FulfillmentStatus.OUT_FOR_DELIVERY,
+            FulfillmentStatus.DELIVERY_FAILED,
         ):
-            if (
-                pickup.status not in (PickupStatus.COMPLETED, PickupStatus.CANCELLED, PickupStatus.SHIPPED_TO_CUSTOMER)
-                and is_picked_up(pickup)
-            ):
-                pickup.status = PickupStatus.SHIPPED_TO_CUSTOMER
+            if pickup.status != PickupStatus.CANCELLED:
+                if pickup.actual_pickup_date is None:
+                    pickup.actual_pickup_date = effective_now
+                if pickup.status not in (
+                    PickupStatus.COMPLETED,
+                    PickupStatus.SHIPPED_TO_CUSTOMER,
+                ) or (allow_backward and pickup.status == PickupStatus.COMPLETED):
+                    pickup.status = PickupStatus.SHIPPED_TO_CUSTOMER
+                    if allow_backward:
+                        pickup.completed_at = None
+                db.add(pickup)
+        elif new_status == FulfillmentStatus.PICKED_UP:
+            if pickup.status != PickupStatus.CANCELLED:
+                if pickup.actual_pickup_date is None:
+                    pickup.actual_pickup_date = effective_now
+                if pickup.status == PickupStatus.SCHEDULED or (
+                    allow_backward
+                    and pickup.status
+                    in (
+                        PickupStatus.DELIVERED_TO_QC,
+                        PickupStatus.QC_APPROVED,
+                        PickupStatus.QC_REJECTED,
+                        PickupStatus.SHIPPED_TO_CUSTOMER,
+                        PickupStatus.COMPLETED,
+                    )
+                ):
+                    pickup.status = PickupStatus.IN_TRANSIT
+                    if allow_backward:
+                        pickup.completed_at = None
+                db.add(pickup)
+        elif allow_backward and new_status in (
+            FulfillmentStatus.ORDER_RECEIVED,
+            FulfillmentStatus.PREPARING_FOR_PICKUP,
+            FulfillmentStatus.PICKUP_SCHEDULED,
+        ):
+            if pickup.status != PickupStatus.CANCELLED:
+                pickup.status = PickupStatus.SCHEDULED
+                pickup.actual_pickup_date = None
+                pickup.completed_at = None
                 db.add(pickup)
         elif new_status == FulfillmentStatus.CANCELLED:
-            if pickup.status not in (PickupStatus.COMPLETED, PickupStatus.CANCELLED):
+            if pickup.status != PickupStatus.CANCELLED and (
+                pickup.status != PickupStatus.COMPLETED or allow_backward
+            ):
                 pickup.status = PickupStatus.CANCELLED
+                if allow_backward:
+                    pickup.completed_at = None
                 if pickup.cancelled_at is None:
                     pickup.cancelled_at = effective_now
                 db.add(pickup)
 
-    # Avoid mutating order_items on domestic_checkout_v1 orders with completed checkout
-    # prerequisites because trg_order_items_checkout_completion enforces active
-    # stock_reservations whereas paid orders have consumed reservations.
-    can_mutate_order_items = (
-        getattr(order, "workflow_cohort", None) != "domestic_checkout_v1"
-        or getattr(order, "checkout_prerequisites_completed_at", None) is None
-    )
-    if not can_mutate_order_items:
-        return
-
     items = (
-        await db.scalars(select(OrderItem).where(OrderItem.order_id == order.id))
+        await db.scalars(
+            select(OrderItem)
+            .options(selectinload(OrderItem.product))
+            .where(OrderItem.order_id == order.id)
+        )
     ).all()
-    pickup_by_item = {p.order_item_id: p for p in pickups}
+    pickup_by_item = pickups_by_order_item(pickups)
     for item in items:
-        if item.fulfillment_status == FulfillmentStatus.CANCELLED:
+        if item.fulfillment_status == FulfillmentStatus.CANCELLED and not (
+            allow_backward and new_status != FulfillmentStatus.CANCELLED
+        ):
             continue
+        item_for_eval = (
+            SimpleNamespace(
+                fulfillment_status=FulfillmentStatus.ORDER_RECEIVED,
+                inventory_policy=item.inventory_policy,
+                product=item.__dict__.get("product"),
+            )
+            if allow_backward
+            else item
+        )
         target_item_status = resolve_effective_item_fulfillment_status(
-            item,
+            item_for_eval,
             order,
             pickup_by_item.get(item.id),
         )

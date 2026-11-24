@@ -237,7 +237,8 @@ AFTER INSERT OR UPDATE OR DELETE ON checkout_shipping_estimate_selections
 DEFERRABLE INITIALLY DEFERRED FOR EACH ROW
 EXECUTE FUNCTION validate_checkout_prerequisite_completion();
 CREATE CONSTRAINT TRIGGER trg_order_items_checkout_completion
-AFTER INSERT OR UPDATE OR DELETE ON order_items
+AFTER INSERT OR DELETE OR UPDATE OF id,order_id,product_id,variant_id,vendor_id,inventory_policy,inventory_subject_kind,inventory_subject_id,inventory_source_product_id,inventory_source_catalogue_version,inventory_source_evidence_hash,inventory_policy_snapshot_at,quantity,unit_price,subtotal,currency
+ON order_items
 DEFERRABLE INITIALLY DEFERRED FOR EACH ROW
 EXECUTE FUNCTION validate_checkout_prerequisite_completion();
 

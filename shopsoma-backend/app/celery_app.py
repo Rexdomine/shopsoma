@@ -3,6 +3,7 @@
 from celery import Celery
 
 from app.core.config import Settings, settings
+from app.tasks.carrier_tracking_reconciliation import reconcile_carrier_tracking
 from app.tasks.checkout_outbox import dispatch_checkout_outbox
 from app.tasks.pending_payment_reminders import dispatch_pending_payment_reminders
 from app.tasks.product_image_storage_cleanup import reconcile_product_image_storage_cleanup
@@ -55,6 +56,10 @@ celery_app.conf.update(
             "task": "app.tasks.pending_payment_reminders.dispatch_pending_payment_reminders",
             "schedule": 300.0,
         },
+        "reconcile-carrier-tracking": {
+            "task": "app.tasks.carrier_tracking_reconciliation.reconcile_carrier_tracking",
+            "schedule": float(settings.CARRIER_RECONCILIATION_INTERVAL_SECONDS),
+        },
     },
 )
 celery_app.task(
@@ -69,3 +74,7 @@ celery_app.task(
     name="app.tasks.pending_payment_reminders.dispatch_pending_payment_reminders",
     ignore_result=True,
 )(dispatch_pending_payment_reminders)
+celery_app.task(
+    name="app.tasks.carrier_tracking_reconciliation.reconcile_carrier_tracking",
+    ignore_result=True,
+)(reconcile_carrier_tracking)

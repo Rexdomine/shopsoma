@@ -218,6 +218,7 @@ export interface OrderFilterParams {
 export interface OrderStatusUpdate {
   fulfillment_status: FulfillmentStatus;
   admin_notes?: string;
+  confirm_backward?: boolean;
   pickup_window_start?: string;
   pickup_window_end?: string;
   courier_name?: string;
@@ -249,6 +250,7 @@ export interface BulkStatusUpdate {
   order_ids: string[];
   fulfillment_status: FulfillmentStatus;
   admin_notes?: string;
+  confirm_backward?: boolean;
 }
 
 export interface RefundRequest {

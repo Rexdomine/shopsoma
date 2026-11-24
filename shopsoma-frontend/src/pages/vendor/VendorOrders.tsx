@@ -10,6 +10,48 @@ import { useCurrencyStore } from '../../store/currencyStore';
 import { formatPriceWithConversion } from '../../utils/pricing';
 import { Search, Loader2, Filter, ArrowUpDown, ChevronLeft, ChevronRight, ChevronsLeft, ChevronsRight, Download } from 'lucide-react';
 
+const PENDING_VENDOR_STATUSES = new Set([
+  'order_received',
+  'preparing_for_pickup',
+  'pickup_scheduled',
+  'pending',
+  'confirmed',
+  'processing',
+]);
+
+const IN_TRANSIT_VENDOR_STATUSES = new Set([
+  'picked_up',
+  'in_transit',
+  'out_for_delivery',
+]);
+
+const COMPLETED_VENDOR_STATUSES = new Set([
+  'delivered',
+  'returned',
+  'cancelled',
+]);
+
+export function countVendorOrderBuckets(
+  orders: Array<Pick<VendorOrder, 'fulfillment_status'>>
+) {
+  let pendingCount = 0;
+  let inTransitCount = 0;
+  let completedCount = 0;
+
+  for (const order of orders) {
+    const normalized = (order.fulfillment_status || '').toLowerCase();
+    if (PENDING_VENDOR_STATUSES.has(normalized)) {
+      pendingCount += 1;
+    } else if (IN_TRANSIT_VENDOR_STATUSES.has(normalized)) {
+      inTransitCount += 1;
+    } else if (COMPLETED_VENDOR_STATUSES.has(normalized)) {
+      completedCount += 1;
+    }
+  }
+
+  return { pendingCount, inTransitCount, completedCount };
+}
+
 export default function VendorOrders() {
   const { toasts, hideToast } = useToast();
   const navigate = useNavigate();
@@ -22,13 +64,8 @@ export default function VendorOrders() {
   const [error, setError] = useState<string | null>(null);
   const { currentCurrency, setCurrency, exchangeRates, fetchExchangeRate } = useCurrencyStore();
 
-  // Calculate order stats
-  const pendingCount = orders.filter((o) =>
-    ['order_received', 'preparing_for_pickup', 'pickup_scheduled', 'picked_up', 'in_transit', 'out_for_delivery'].includes(o.fulfillment_status)
-  ).length;
-  const completedCount = orders.filter((o) =>
-    ['delivered', 'returned', 'cancelled'].includes(o.fulfillment_status)
-  ).length;
+  // Calculate order stats: only pre-pickup vendor/scheduling work counts as Pending
+  const { pendingCount, inTransitCount, completedCount } = countVendorOrderBuckets(orders);
 
   useEffect(() => {
     fetchExchangeRate();
@@ -237,6 +274,10 @@ export default function VendorOrders() {
                 <span className="text-amber-600">
                   <span className="inline-block w-2 h-2 bg-amber-500 rounded-full mr-2"></span>
                   Pending Orders: {pendingCount}
+                </span>
+                <span className="text-blue-600">
+                  <span className="inline-block w-2 h-2 bg-blue-500 rounded-full mr-2"></span>
+                  In Transit: {inTransitCount}
                 </span>
                 <span className="text-[#19984B]">
                   <span className="inline-block w-2 h-2 bg-[#19984B] rounded-full mr-2"></span>

@@ -14,6 +14,7 @@ from app.models.checkout_shipping_estimate import (
 )
 from app.models.order import FulfillmentStatus, Order, PaymentStatus
 from app.models.shipbubble_shipment import ShipbubbleShipment
+from app.services.orders.fulfillment_sync import sync_vendor_items_and_pickups_for_order_status
 from app.services.shipbubble_service import get_shipbubble_service, ShipBubbleError
 
 logger = logging.getLogger(__name__)
@@ -274,6 +275,11 @@ async def book_shipbubble_shipment_if_selected(session, *, order_id: UUID) -> Op
         FulfillmentStatus.PREPARING_FOR_PICKUP,
     ):
         order.fulfillment_status = FulfillmentStatus.PICKUP_SCHEDULED
+        await sync_vendor_items_and_pickups_for_order_status(
+            session,
+            order=order,
+            new_status=FulfillmentStatus.PICKUP_SCHEDULED,
+        )
     session.add(order)
     await session.flush()
     await session.refresh(order)

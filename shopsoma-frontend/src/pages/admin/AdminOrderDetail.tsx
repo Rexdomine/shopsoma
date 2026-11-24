@@ -138,7 +138,8 @@ export default function AdminOrderDetail() {
       setStatusNotes('');
     } catch (err) {
       console.error('Failed to update status:', err);
-      error('Failed to update order status');
+      const detail = (err as { response?: { data?: { detail?: unknown } } })?.response?.data?.detail;
+      error(typeof detail === 'string' && detail ? detail : 'Failed to update order status');
       return;
     } finally {
       setUpdating(false);
@@ -344,7 +345,8 @@ export default function AdminOrderDetail() {
       success('Synced latest shipment status from ShipBubble');
     } catch (err) {
       console.error('Failed to sync from ShipBubble:', err);
-      error('Failed to sync shipment status from ShipBubble');
+      const detail = (err as { response?: { data?: { detail?: unknown } } })?.response?.data?.detail;
+      error(typeof detail === 'string' && detail ? detail : 'Failed to sync shipment status from ShipBubble');
     } finally {
       setSyncingShipbubble(false);
     }
