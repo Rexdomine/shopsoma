@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState, useRef, type SVGProps } from 'react';
 import { Link, useLocation, useNavigate, useParams } from 'react-router-dom';
-import { ArrowLeft, Bookmark, Minus, Plus, X } from 'lucide-react';
+import { ArrowLeft, Bookmark, ChevronRight, Minus, Plus, X } from 'lucide-react';
 import { designerPath } from '../designers/designerUtils';
 import type { Product, ProductVariant, SizeGuide } from '../../types';
 import { productService } from '../../services/productService';
@@ -920,9 +920,10 @@ export default function ProductDetail() {
                 product.vendor_id ? (
                   <Link
                     to={designerPath(product.vendor_id)}
-                    className="font-ui text-sm uppercase tracking-[0.25em] text-primary underline underline-offset-4"
+                    className="group inline-flex min-h-11 items-center gap-1.5 border-b border-primary/40 pr-10 font-ui text-xs sm:text-sm uppercase tracking-[0.25em] text-primary hover:border-primary focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-primary"
                   >
                     {product.vendor_name}
+                    <ChevronRight aria-hidden="true" className="h-3.5 w-3.5 transition-transform group-hover:translate-x-0.5" />
                   </Link>
                 ) : (
                   <p className="font-ui text-sm uppercase tracking-[0.25em] text-primary/60">

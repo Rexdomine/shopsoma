@@ -97,6 +97,10 @@ type ProductListProps = {
   heroOverride?: HeroContent;
   storefrontHeader?: ReactNode;
   designerMode?: boolean;
+  /** Display name used in designer-scoped empty states. */
+  designerName?: string;
+  /** Replaces the controls and grid when a designer has no published products. */
+  emptyCatalogState?: ReactNode;
   categoryNav?: Category[];
   categoryNavAsTabs?: boolean;
   childCategoryOverrides?: Record<string, Category[]>;
@@ -226,6 +230,8 @@ export default function ProductList({
   heroOverride,
   storefrontHeader,
   designerMode = false,
+  designerName,
+  emptyCatalogState,
   categoryNav,
   categoryNavAsTabs = false,
   childCategoryOverrides,
@@ -1094,6 +1100,31 @@ export default function ProductList({
     location.search,
   ]);
 
+  const clearAllFilters = () => {
+    const defaultCat = presetCategory && !categoryNavAsTabs ? presetCategory : 'All';
+    setFilters({ category: defaultCat, color: 'All', price: 'all' });
+    setSelectedCategoryId(null);
+    setCustomPriceInputs({ min: '', max: '' });
+    setCustomPriceRange(null);
+    setPage(1);
+    setSearchParams((prev) => {
+      const next = new URLSearchParams(prev);
+      next.delete('category');
+      next.delete('color');
+      next.delete('price');
+      next.delete('min_price');
+      next.delete('max_price');
+      next.delete('page');
+      return next;
+    });
+  };
+
+  // A designer with no published pieces keeps its identity but hides shopping controls.
+  const showEmptyCatalog = Boolean(
+    designerMode && emptyCatalogState && !loading && !error && isCurrentParamsLoaded &&
+    allProducts.length === 0 && !searchQuery
+  );
+
   const emptyStateMessage =
     presetCategory === 'Men'
       ? 'No menswear products available yet. Please check back soon.'
@@ -1329,12 +1360,15 @@ export default function ProductList({
         </section>
       )}
 
+      {showEmptyCatalog ? emptyCatalogState : <>
       {/* Filter Bar + Search Row */}
       <section className="bg-[var(--color-page-bg)] border-b border-gray-200 w-full overflow-hidden">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-3 sm:py-6">
           <div className="flex flex-wrap items-center justify-between gap-y-3 gap-x-3 sm:gap-x-6">
             {/* Left side: Tabs */}
-            <div className="order-1 flex items-center gap-3 sm:gap-6 min-w-0 flex-wrap sm:flex-nowrap">
+            <div className={designerMode
+              ? 'order-1 flex flex-1 items-center gap-5 sm:gap-6 min-w-0 flex-nowrap overflow-x-auto designer-tabs-scroll pb-1'
+              : 'order-1 flex items-center gap-3 sm:gap-6 min-w-0 flex-wrap sm:flex-nowrap'}>
               {categoryNavAsTabs ? (
                 <>
                   <button
@@ -1738,24 +1772,7 @@ export default function ProductList({
             <div className="sticky bottom-0 bg-white border-t border-gray-200 px-6 py-4 flex items-center justify-between">
               <button
                 type="button"
-                onClick={() => {
-                  const defaultCat = presetCategory && !categoryNavAsTabs ? presetCategory : 'All';
-                  setFilters({ category: defaultCat, color: 'All', price: 'all' });
-                  setSelectedCategoryId(null);
-                  setCustomPriceInputs({ min: '', max: '' });
-                  setCustomPriceRange(null);
-                  setPage(1);
-                  setSearchParams((prev) => {
-                    const next = new URLSearchParams(prev);
-                    next.delete('category');
-                    next.delete('color');
-                    next.delete('price');
-                    next.delete('min_price');
-                    next.delete('max_price');
-                    next.delete('page');
-                    return next;
-                  });
-                }}
+                onClick={clearAllFilters}
                 className="text-sm font-ui text-gray-600 hover:text-primary underline"
               >
                 Clear All
@@ -1852,9 +1869,26 @@ export default function ProductList({
                   <p className="text-sm text-red-500">{error}</p>
                 </div>
               ) : paginatedProducts.length === 0 ? (
-                <div className="py-16 text-center">
-                  <p className="text-sm text-gray-500">{emptyStateMessage}</p>
-                </div>
+                designerMode ? (
+                  <div className="py-16 text-center text-primary">
+                    <p className="font-ui text-[11px] uppercase tracking-[0.2em] text-primary/70 mb-4">No products match filters</p>
+                    <h2 className="font-display text-2xl sm:text-3xl mb-3">No pieces match your filters</h2>
+                    <p className="font-serif text-base sm:text-lg text-[#222424] mb-6">
+                      Try another colour or price range to explore more from {designerName || 'this designer'}.
+                    </p>
+                    <button
+                      type="button"
+                      onClick={clearAllFilters}
+                      className="px-8 py-3 bg-primary text-white text-[11px] font-ui uppercase tracking-[0.2em] hover:bg-primary-dark transition"
+                    >
+                      Clear filters
+                    </button>
+                  </div>
+                ) : (
+                  <div className="py-16 text-center">
+                    <p className="text-sm text-gray-500">{emptyStateMessage}</p>
+                  </div>
+                )
               ) : (
                 <>
                   {/* Page 1: 4 rows with vendor showcases */}
@@ -2096,6 +2130,7 @@ export default function ProductList({
           </div>
         </div>
       </section>
+      </>}
     </Layout>
   );
 }
