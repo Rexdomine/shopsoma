@@ -1,5 +1,11 @@
-import { getShippingProviderSettings, type ShippingProviderSettings } from '../../services/settingsService';
+import {
+  getShippingProviderSettings,
+  getPublicCheckoutHoldSettings,
+  type ShippingProviderSettings,
+  type CheckoutHoldSettings,
+} from '../../services/settingsService';
 import { useCallback, useState, useEffect, useRef } from 'react';
+import { AlertTriangle, X } from 'lucide-react';
 import { flushSync } from 'react-dom';
 import { buildPaystackWidgetConfig, type PaymentGateway, type InitializePaymentResponse } from '../../services/paymentService';
 import { Link, useLocation, useNavigate } from 'react-router-dom';
@@ -150,6 +156,7 @@ export default function Checkout() {
   const removeItem = useCartStore((state) => state.removeItem);
   const [stockIssues, setStockIssues] = useState<CartValidationItem[]>([]);
   const [stockConflictMessage, setStockConflictMessage] = useState('');
+  const [stockModalDismissed, setStockModalDismissed] = useState(false);
   const [isValidatingStock, setIsValidatingStock] = useState(false);
 
   // Address state
@@ -332,6 +339,17 @@ export default function Checkout() {
   const [shippingConfigLoaded, setShippingConfigLoaded] = useState(false);
   const [shippingConfigError, setShippingConfigError] = useState(false);
   const [shippingConfigRetry, setShippingConfigRetry] = useState(0);
+  const [checkoutHoldSettings, setCheckoutHoldSettings] = useState<CheckoutHoldSettings>({
+    reservation_ttl_minutes: 30,
+    authorization_grace_minutes: 15,
+    release_on_payment_close: false,
+  });
+  useEffect(() => {
+    if (typeof getPublicCheckoutHoldSettings !== 'function') return;
+    void getPublicCheckoutHoldSettings()
+      .then((holdConfig) => setCheckoutHoldSettings(holdConfig))
+      .catch(() => {});
+  }, []);
   useEffect(() => {
     setShippingConfigLoaded(false);
     setShippingConfigError(false);
@@ -486,6 +504,21 @@ export default function Checkout() {
     if (isPaymentLocked || enforcedOrder) return;
     void validateCheckoutStock(false);
   }, [cart.items, isPaymentLocked, enforcedOrder, validateCheckoutStock]);
+
+  useEffect(() => {
+    setStockModalDismissed(false);
+  }, [stockIssues, stockConflictMessage]);
+
+  useEffect(() => {
+    if (!hasStockIssues || stockModalDismissed) return;
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        setStockModalDismissed(true);
+      }
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, [hasStockIssues, stockModalDismissed]);
 
   const handleRemoveUnavailableItems = () => {
     if (typeof removeItem !== 'function') return;
@@ -1238,6 +1271,36 @@ export default function Checkout() {
     );
   };
 
+  const extractPaymentInitDetail = (error: any): { code: string; message: string } => {
+    const detail = error?.response?.data?.detail;
+    if (typeof detail === 'string') {
+      return { code: '', message: detail.trim() };
+    }
+    if (detail && typeof detail === 'object') {
+      const code = typeof detail.code === 'string' ? detail.code.trim().toLowerCase() : '';
+      const message = typeof detail.message === 'string' ? detail.message.trim() : '';
+      return { code, message };
+    }
+    return { code: '', message: '' };
+  };
+
+  const isCancelledOrderError = (error: any) => {
+    const status = error?.response?.status;
+    if (status !== 400 && status !== 409) return false;
+    const { code, message } = extractPaymentInitDetail(error);
+    return `${code} ${message}`.toLowerCase().includes('order has been cancelled');
+  };
+
+  const isPaymentInitStockConflict = (error: any) => {
+    const status = error?.response?.status;
+    if (status !== 400 && status !== 409) return false;
+    const { code, message } = extractPaymentInitDetail(error);
+    if (code === 'insufficient_stock' || code === 'inventory_subject_unavailable') {
+      return true;
+    }
+    return /insufficient stock|out of stock|inventory subject unavailable/i.test(message);
+  };
+
   const isAlreadyPaidConflict = (error: any) => {
     const detail = String(error?.response?.data?.detail || '').toLowerCase();
     return error?.response?.status === 400 && detail === 'order has already been paid';
@@ -1288,9 +1351,22 @@ export default function Checkout() {
       // Paystack callbacks may arrive after the iframe is dismissed.
       setCurrentPaymentGateway('paystack');
       if (typeof window !== 'undefined' && window.PaystackPop?.setup) {
+        let paystackCallbackHandled = false;
+        const finishCancelled = () => {
+          setIsCreatingOrder(false);
+          if (order.checkout_access_mode === 'guest_capability') {
+            setPaymentRetryAvailable(true);
+            alert('Payment cancelled. Your order is saved; retry payment when you are ready.');
+            return;
+          }
+          clearCheckoutCapability();
+          alert('Payment cancelled. You can retry payment from your orders page.');
+          navigate(`${ROUTES.ORDER_SUCCESS}?orderId=${order.id}&payment=cancelled`);
+        };
         const handler = window.PaystackPop.setup({
           ...widgetTruth,
           callback: (response: { reference: string }) => {
+            paystackCallbackHandled = true;
             paymentService.verifyPayment({
               reference: response.reference,
               payment_gateway: gateway,
@@ -1322,15 +1398,25 @@ export default function Checkout() {
             });
           },
           onClose: () => {
-            setIsCreatingOrder(false);
-            if (order.checkout_access_mode === 'guest_capability') {
-              setPaymentRetryAvailable(true);
-              alert('Payment cancelled. Your order is saved; retry payment when you are ready.');
+            if (paystackCallbackHandled) return;
+            if (checkoutHoldSettings.release_on_payment_close && paymentData.reference) {
+              paymentService.verifyPayment({
+                reference: paymentData.reference,
+                payment_gateway: gateway,
+              }).then((verification) => {
+                if (verification?.status === true && verification?.data?.status === 'success') {
+                  preserveCheckoutCapabilityForReadback(order.id, checkoutCapability);
+                  CartService.clearCart();
+                  navigate(`${ROUTES.ORDER_SUCCESS}?orderId=${order.id}&payment=success`);
+                  return;
+                }
+                finishCancelled();
+              }).catch(() => {
+                finishCancelled();
+              });
               return;
             }
-            clearCheckoutCapability();
-            alert('Payment cancelled. You can retry payment from your orders page.');
-            navigate(`${ROUTES.ORDER_SUCCESS}?orderId=${order.id}&payment=cancelled`);
+            finishCancelled();
           },
         });
         handler.openIframe();
@@ -1397,6 +1483,23 @@ export default function Checkout() {
         CartService.clearCart();
         navigate(`${ROUTES.ORDER_SUCCESS}?orderId=${order.id}&payment=success`);
         setIsCreatingOrder(false);
+        return;
+      }
+      if (isCancelledOrderError(error) || isPaymentInitStockConflict(error)) {
+        const stockConflict = isPaymentInitStockConflict(error);
+        discardExpiredCheckout();
+        setStep(selectedAddressId ? 'shipping' : 'address');
+        setIsCreatingOrder(false);
+        const issues = await validateCheckoutStock();
+        if (issues.length === 0) {
+          if (stockConflict) {
+            setStockConflictMessage(
+              'One or more items in your bag are out of stock or no longer available. Return to your bag to remove or update unavailable items.',
+            );
+          } else {
+            alert('Your previous checkout reservation expired or was superseded. Please select a delivery option again to continue.');
+          }
+        }
         return;
       }
       const terminalCheckout = error.response?.status === 404
@@ -2040,40 +2143,18 @@ export default function Checkout() {
                 <h2 className="text-center text-lg font-semibold uppercase tracking-[0.2em] text-gray-700">Checkout</h2>
               </div>
 
-              {hasStockIssues && (
-                <div role="alert" className="rounded-sm border border-red-300 bg-red-50 p-4 space-y-2.5 text-red-900">
-                  <p className="text-sm font-semibold">
-                    {stockIssues.length > 0
-                      ? 'Some items in your bag are out of stock or no longer available.'
-                      : stockConflictMessage}
+              {hasStockIssues && stockModalDismissed && (
+                <div className="flex flex-wrap items-center justify-between gap-3 rounded-sm border border-red-300 bg-red-50 px-4 py-2.5 text-red-900">
+                  <p className="text-xs sm:text-sm font-medium">
+                    Checkout is paused while unavailable items are in your bag.
                   </p>
-                  {stockIssues.length > 0 && (
-                    <ul className="list-disc pl-5 text-sm space-y-1">
-                      {stockIssues.map((issue) => (
-                        <li key={`${issue.product_id}-${issue.variant_id || 'base'}`}>
-                          {issue.message || `${issue.product_title || 'Item'} is out of stock.`}
-                        </li>
-                      ))}
-                    </ul>
-                  )}
-                  <div className="flex flex-wrap items-center gap-3 pt-1">
-                    {stockIssues.length > 0 && typeof removeItem === 'function' && (
-                      <button
-                        type="button"
-                        onClick={handleRemoveUnavailableItems}
-                        className="px-3.5 py-1.5 rounded-sm bg-red-700 text-white text-xs font-semibold hover:bg-red-800 transition"
-                      >
-                        Remove unavailable items
-                      </button>
-                    )}
-                    <button
-                      type="button"
-                      onClick={goBackToBag}
-                      className="px-3.5 py-1.5 rounded-sm border border-red-300 bg-white text-red-900 text-xs font-semibold hover:bg-red-100 transition"
-                    >
-                      Return to Bag
-                    </button>
-                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setStockModalDismissed(false)}
+                    className="px-3 py-1 rounded-sm bg-red-700 text-white text-xs font-semibold hover:bg-red-800 transition"
+                  >
+                    View unavailable items
+                  </button>
                 </div>
               )}
 
@@ -3277,6 +3358,80 @@ export default function Checkout() {
           </div>
         </div>
       </section>
+
+      {/* Stock Conflict / Unavailable Items Modal */}
+      {hasStockIssues && !stockModalDismissed && (
+        <div
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="stock-conflict-modal-title"
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4"
+          onClick={(event) => {
+            if (event.target === event.currentTarget) {
+              setStockModalDismissed(true);
+            }
+          }}
+        >
+          <div
+            role="alert"
+            className="w-full max-w-md rounded-sm border border-red-200 bg-white p-6 shadow-xl space-y-4"
+          >
+            <div className="flex items-start justify-between gap-3">
+              <div className="flex items-center gap-2.5 text-red-800">
+                <span className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-red-100 text-red-700">
+                  <AlertTriangle className="h-4 w-4" />
+                </span>
+                <h2 id="stock-conflict-modal-title" className="text-base font-semibold text-gray-900">
+                  Item unavailable
+                </h2>
+              </div>
+              <button
+                type="button"
+                aria-label="Close stock notice"
+                onClick={() => setStockModalDismissed(true)}
+                className="text-gray-400 hover:text-gray-600 transition"
+              >
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+
+            <p className="text-sm font-medium text-red-900">
+              {stockIssues.length > 0
+                ? 'Some items in your bag are out of stock or no longer available.'
+                : stockConflictMessage}
+            </p>
+
+            {stockIssues.length > 0 && (
+              <ul className="list-disc rounded-sm border border-red-200 bg-red-50 py-2.5 pl-8 pr-4 text-sm text-red-900 space-y-1">
+                {stockIssues.map((issue) => (
+                  <li key={`${issue.product_id}-${issue.variant_id || 'base'}`}>
+                    {issue.message || `${issue.product_title || 'Item'} is out of stock.`}
+                  </li>
+                ))}
+              </ul>
+            )}
+
+            <div className="flex flex-wrap items-center justify-end gap-3 pt-2">
+              <button
+                type="button"
+                onClick={goBackToBag}
+                className="px-4 py-2 rounded-sm border border-red-300 bg-white text-red-900 text-xs font-semibold hover:bg-red-50 transition"
+              >
+                Return to Bag
+              </button>
+              {stockIssues.length > 0 && typeof removeItem === 'function' && (
+                <button
+                  type="button"
+                  onClick={handleRemoveUnavailableItems}
+                  className="px-4 py-2 rounded-sm bg-red-700 text-white text-xs font-semibold hover:bg-red-800 transition"
+                >
+                  Remove unavailable items
+                </button>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Stripe Payment Modal */}
       {showStripePaymentModal && stripeClientSecret && (

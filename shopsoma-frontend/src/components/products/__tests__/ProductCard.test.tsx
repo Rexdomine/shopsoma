@@ -256,4 +256,171 @@ describe('ProductCard pricing resolution', () => {
       quantity: 1,
     });
   });
+
+  it('does not show Added to bag when addItem resolves to false', async () => {
+    mockAddItem.mockResolvedValueOnce(false);
+    const product: Product = {
+      id: 'prod-last-unit',
+      vendor_id: 'vendor-1',
+      title: 'Last Unit Dress',
+      vendor_name: 'Kester Club',
+      base_price: 4000,
+      currency: 'NGN',
+      status: 'active',
+      product_type: 'single',
+      inventory_quantity: 1,
+      total_stock: 1,
+      is_featured: false,
+      made_to_order: false,
+      views_count: 0,
+      orders_count: 0,
+      moderation_status: 'approved',
+      images: [],
+      variations: [],
+      variants: [],
+      created_at: '2026-01-01',
+      updated_at: '2026-01-01',
+    };
+
+    render(
+      <MemoryRouter>
+        <ProductCard product={product} />
+      </MemoryRouter>
+    );
+
+    const addToBagBtn = screen.getByRole('button', { name: /add to bag/i });
+    fireEvent.click(addToBagBtn);
+
+    await Promise.resolve();
+    expect(mockAddItem).toHaveBeenCalledTimes(1);
+    expect(screen.queryByRole('button', { name: /added to bag/i })).toBeNull();
+    expect(screen.getByRole('button', { name: /add to bag/i })).toBeInTheDocument();
+  });
+
+  it('disables and greys out button with OUT OF STOCK for single product with zero stock', () => {
+    const product: Product = {
+      id: 'prod-zero-stock',
+      vendor_id: 'vendor-1',
+      title: 'SOMA-29 QA Last Unit Item',
+      vendor_name: 'Kester Club',
+      base_price: 4000,
+      currency: 'NGN',
+      status: 'active',
+      product_type: 'single',
+      inventory_quantity: 0,
+      total_stock: 0,
+      is_featured: false,
+      made_to_order: false,
+      views_count: 0,
+      orders_count: 0,
+      moderation_status: 'approved',
+      images: [],
+      variations: [],
+      variants: [],
+      created_at: '2026-01-01',
+      updated_at: '2026-01-01',
+    };
+
+    render(
+      <MemoryRouter>
+        <ProductCard product={product} />
+      </MemoryRouter>
+    );
+
+    const button = screen.getByRole('button', { name: /out of stock/i });
+    expect(button).toBeDisabled();
+    expect(button.className).toContain('bg-gray-300');
+    expect(button.className).toContain('cursor-not-allowed');
+
+    fireEvent.click(button);
+    expect(mockAddItem).not.toHaveBeenCalled();
+  });
+
+  it('updates OUT OF STOCK state dynamically when switching between out-of-stock and in-stock variants', () => {
+    const product: Product = {
+      id: 'prod-mixed-stock',
+      vendor_id: 'vendor-1',
+      title: 'Variable Dress',
+      vendor_name: 'Kester Club',
+      base_price: 15000,
+      currency: 'NGN',
+      status: 'active',
+      product_type: 'variable',
+      inventory_quantity: 3,
+      total_stock: 3,
+      is_featured: false,
+      made_to_order: false,
+      views_count: 0,
+      orders_count: 0,
+      moderation_status: 'approved',
+      images: [],
+      variations: [],
+      variants: [
+        {
+          id: 'var-s',
+          product_id: 'prod-mixed-stock',
+          size: 'S',
+          price: 15000,
+          stock: 0,
+          is_available: false,
+        },
+        {
+          id: 'var-m',
+          product_id: 'prod-mixed-stock',
+          size: 'M',
+          price: 15000,
+          stock: 3,
+          is_available: true,
+        },
+      ],
+      created_at: '2026-01-01',
+      updated_at: '2026-01-01',
+    };
+
+    render(
+      <MemoryRouter>
+        <ProductCard product={product} />
+      </MemoryRouter>
+    );
+
+    expect(screen.getByRole('button', { name: /out of stock/i })).toBeDisabled();
+
+    fireEvent.click(screen.getByRole('button', { name: 'M' }));
+    const addBtn = screen.getByRole('button', { name: /add to bag/i });
+    expect(addBtn).toBeEnabled();
+  });
+
+  it('keeps ADD TO BAG enabled for made-to-order products even when total_stock is 0', () => {
+    const product: Product = {
+      id: 'prod-mto',
+      vendor_id: 'vendor-1',
+      title: 'Bespoke Gown',
+      vendor_name: 'Kester Club',
+      base_price: 50000,
+      currency: 'NGN',
+      status: 'active',
+      product_type: 'single',
+      inventory_quantity: 0,
+      total_stock: 0,
+      is_featured: false,
+      made_to_order: true,
+      views_count: 0,
+      orders_count: 0,
+      moderation_status: 'approved',
+      images: [],
+      variations: [],
+      variants: [],
+      created_at: '2026-01-01',
+      updated_at: '2026-01-01',
+    };
+
+    render(
+      <MemoryRouter>
+        <ProductCard product={product} />
+      </MemoryRouter>
+    );
+
+    const addBtn = screen.getByRole('button', { name: /add to bag/i });
+    expect(addBtn).toBeEnabled();
+  });
 });

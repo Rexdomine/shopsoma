@@ -75,8 +75,87 @@ from app.services.variation_persistence import (
     delete_single_variation,
     create_single_variation,
 )
+from app.services.checkout.reservations import get_blocking_reserved_quantities
 
 logger = logging.getLogger(__name__)
+
+
+async def _serialize_storefront_products_with_available_stock(
+    db: AsyncSession, products: List[Product]
+) -> List[ProductResponse]:
+    """Serialize storefront products with active non-reclaimable stock holds subtracted."""
+    if not products:
+        return []
+
+    prepared: list[tuple[Product, ProductResponse, set[UUID], set[UUID]]] = []
+    subjects: set[tuple[str, UUID]] = set()
+
+    for product in products:
+        response = ProductResponse.model_validate(product)
+        if getattr(product, "made_to_order", False):
+            prepared.append((product, response, set(), set()))
+            continue
+
+        legacy_variant_ids = {variant.id for variant in (product.variants or [])}
+        size_stock_ids = {
+            size_stock.id
+            for variation in (product.variations or [])
+            for size_stock in (variation.size_stocks or [])
+        }
+        subjects.add(("product", product.id))
+        subjects.update(("product_variant", vid) for vid in legacy_variant_ids)
+        subjects.update(("size_stock", sid) for sid in size_stock_ids)
+        prepared.append((product, response, legacy_variant_ids, size_stock_ids))
+
+    blocking = await get_blocking_reserved_quantities(db, subjects)
+    if not blocking:
+        return [response for _, response, _, _ in prepared]
+
+    results: List[ProductResponse] = []
+    for product, response, legacy_variant_ids, size_stock_ids in prepared:
+        if getattr(product, "made_to_order", False):
+            results.append(response)
+            continue
+
+        for variation in response.variations:
+            for size_stock in variation.size_stocks:
+                reserved = blocking.get(("size_stock", size_stock.id), 0)
+                if reserved > 0:
+                    size_stock.stock = max(0, int(size_stock.stock or 0) - reserved)
+
+        product_reserved = blocking.get(("product", product.id), 0)
+        for variant in response.variants:
+            if variant.id in legacy_variant_ids:
+                reserved = blocking.get(("product_variant", variant.id), 0)
+            elif variant.id in size_stock_ids:
+                reserved = blocking.get(("size_stock", variant.id), 0)
+            else:
+                reserved = product_reserved
+            if reserved > 0:
+                variant.stock = max(0, int(variant.stock or 0) - reserved)
+                variant.is_available = bool(variant.is_available) and variant.stock > 0
+
+        if product_reserved > 0:
+            response.total_stock = max(0, int(response.total_stock or 0) - product_reserved)
+        else:
+            subject_reserved = sum(
+                blocking.get(("product_variant", vid), 0) for vid in legacy_variant_ids
+            ) + sum(
+                blocking.get(("size_stock", sid), 0) for sid in size_stock_ids
+            )
+            if subject_reserved > 0:
+                response.total_stock = max(0, int(response.total_stock or 0) - subject_reserved)
+
+        results.append(response)
+
+    return results
+
+
+async def _serialize_storefront_product_with_available_stock(
+    db: AsyncSession, product: Product
+) -> ProductResponse:
+    """Serialize one storefront product with active non-reclaimable stock holds subtracted."""
+    return (await _serialize_storefront_products_with_available_stock(db, [product]))[0]
 
 router = APIRouter(prefix="/products", tags=["products"])
 
@@ -1163,7 +1242,7 @@ async def list_products(
     total_pages = (total + page_size - 1) // page_size
 
     return ProductListResponse(
-        products=products,
+        products=await _serialize_storefront_products_with_available_stock(db, list(products)),
         total=total,
         page=page,
         page_size=page_size,
@@ -1220,7 +1299,7 @@ async def get_product(
     )
     product = result.scalar_one()
 
-    return product
+    return await _serialize_storefront_product_with_available_stock(db, product)
 
 
 @router.put("/{product_id}", response_model=ProductResponse)

@@ -9,54 +9,78 @@ export const useCartStore = create<CartState>((set, get) => ({
   error: null,
 
   /**
-   * Add item to cart
+   * Add item to cart after server acceptance
    */
-  addItem: ({ product, variant, quantity }: AddToCartParams) => {
-    const { cart } = get();
-    const itemId = CartService.generateCartItemId(product.id, variant.id);
+  addItem: async ({ product, variant, quantity }: AddToCartParams): Promise<boolean> => {
+    set({ error: null });
 
-    // Check if item already exists
-    const existingItemIndex = cart.items.findIndex(item => item.id === itemId);
-
-    let updatedItems: CartItem[];
-
-    if (existingItemIndex > -1) {
-      // Update quantity if item exists
-      updatedItems = [...cart.items];
-      updatedItems[existingItemIndex].quantity += quantity;
-      updatedItems[existingItemIndex].subtotal = calculateItemSubtotal(
-        updatedItems[existingItemIndex].price,
-        updatedItems[existingItemIndex].quantity
-      );
-    } else {
-      // Add new item
-      const price = getVariantPrice(variant.price, product.base_price);
-      const newItem: CartItem = {
-        id: itemId,
-        product_id: product.id,
-        product,
-        variant,
-        quantity,
-        price,
-        subtotal: calculateItemSubtotal(price, quantity),
+    // Always wait for server confirmation before mutating local cart or localStorage
+    try {
+      const serverItem = await CartService.addItemToServer(product.id, variant.id, quantity);
+      const { cart } = get();
+      const itemId = CartService.generateCartItemId(product.id, variant.id);
+      const existingItemIndex = cart.items.findIndex(item => item.id === itemId);
+      const serverStockMeta = {
+        ...(typeof serverItem?.available_stock === 'number'
+          ? { available_stock: serverItem.available_stock }
+          : {}),
+        is_in_stock:
+          typeof serverItem?.is_in_stock === 'boolean' ? serverItem.is_in_stock : true,
+        stock_issue: serverItem?.stock_issue ?? null,
       };
-      updatedItems = [...cart.items, newItem];
-    }
 
-    const updatedCart: Cart = {
-      ...cart,
-      items: updatedItems,
-      summary: calculateCartSummary(updatedItems, cart.summary.discount),
-    };
+      let updatedItems: CartItem[];
 
-    CartService.saveCart(updatedCart);
-    set({ cart: updatedCart, error: null });
+      if (existingItemIndex > -1) {
+        const existingItem = cart.items[existingItemIndex];
+        const nextQuantity =
+          typeof serverItem?.quantity === 'number'
+            ? serverItem.quantity
+            : existingItem.quantity + quantity;
+        const nextPrice =
+          typeof serverItem?.price === 'number' ? serverItem.price : existingItem.price;
+        updatedItems = cart.items.map((item, idx) =>
+          idx === existingItemIndex
+            ? {
+                ...item,
+                quantity: nextQuantity,
+                price: nextPrice,
+                subtotal: calculateItemSubtotal(nextPrice, nextQuantity),
+                ...serverStockMeta,
+              }
+            : item
+        );
+      } else {
+        const price =
+          typeof serverItem?.price === 'number'
+            ? serverItem.price
+            : getVariantPrice(variant.price, product.base_price);
+        const newItem: CartItem = {
+          id: itemId,
+          product_id: product.id,
+          product,
+          variant,
+          quantity,
+          price,
+          subtotal: calculateItemSubtotal(price, quantity),
+          ...serverStockMeta,
+        };
+        updatedItems = [...cart.items, newItem];
+      }
 
-    // Always sync to server for both authenticated users AND guests
-    CartService.addItemToServer(product.id, variant.id, quantity).catch((error: any) => {
+      const updatedCart: Cart = {
+        ...cart,
+        items: updatedItems,
+        summary: calculateCartSummary(updatedItems, cart.summary.discount),
+      };
+
+      CartService.saveCart(updatedCart);
+      set({ cart: updatedCart, error: null });
+      return true;
+    } catch (error: any) {
+      const detail = error?.response?.data?.detail;
       const serverMessage =
-        error?.response?.data?.detail?.message ||
-        error?.response?.data?.detail ||
+        (typeof detail === 'object' ? detail?.message || detail?.code : detail) ||
         error?.message ||
         'Unknown cart sync error';
 
@@ -69,7 +93,8 @@ export const useCartStore = create<CartState>((set, get) => ({
       });
 
       set({ error: serverMessage });
-    });
+      return false;
+    }
   },
 
   /**

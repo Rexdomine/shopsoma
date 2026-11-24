@@ -5,6 +5,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const mocks = vi.hoisted(() => ({
   getShippingProviderSettings: vi.fn(),
+  getPublicCheckoutHoldSettings: vi.fn(),
   getAddresses: vi.fn(),
   calculateShipping: vi.fn(),
   reviewOrder: vi.fn(),
@@ -92,7 +93,10 @@ vi.mock('../../services/checkoutService', () => ({
     validatePromoCode: vi.fn(),
   },
 }));
-vi.mock('../../services/settingsService', () => ({ getShippingProviderSettings: mocks.getShippingProviderSettings }));
+vi.mock('../../services/settingsService', () => ({
+  getShippingProviderSettings: mocks.getShippingProviderSettings,
+  getPublicCheckoutHoldSettings: mocks.getPublicCheckoutHoldSettings,
+}));
 vi.mock('../../services/paymentService', () => ({
   paymentService: {
     initializePayment: mocks.initializePayment,
@@ -605,6 +609,11 @@ describe('Checkout M5 sequencing and recovery', () => {
       },
     };
     mocks.getShippingProviderSettings.mockResolvedValue({ provider: 'manual', checkout_estimates_required: false });
+    mocks.getPublicCheckoutHoldSettings.mockResolvedValue({
+      reservation_ttl_minutes: 30,
+      authorization_grace_minutes: 15,
+      release_on_payment_close: false,
+    });
     mocks.validateCartItemsWithServer.mockResolvedValue({ is_valid: true, items: [], errors: [] });
     mocks.getLocalCartValidationIssues.mockReturnValue([]);
     mocks.getAddresses.mockResolvedValue({ addresses: [address] });
@@ -2576,12 +2585,22 @@ describe('Checkout M5 sequencing and recovery', () => {
 
     render(<MemoryRouter initialEntries={['/checkout']}><CheckoutTestRoutes /></MemoryRouter>);
 
-    expect(await screen.findByText('Kester Club Tee is out of stock.')).toBeInTheDocument();
+    const dialog = await screen.findByRole('dialog');
+    expect(dialog).toBeInTheDocument();
+    expect(screen.getByText('Some items in your bag are out of stock or no longer available.')).toBeInTheDocument();
+    expect(screen.getByText('Kester Club Tee is out of stock.')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Continue' })).toBeDisabled();
     expect(screen.getByRole('button', { name: 'Remove unavailable items' })).toBeEnabled();
     expect(screen.getByRole('button', { name: 'Return to Bag' })).toBeEnabled();
     expect(mocks.createOrder).not.toHaveBeenCalled();
     expect(mocks.createCheckoutEstimate).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Close stock notice' }));
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Continue' })).toBeDisabled();
+
+    fireEvent.click(screen.getByRole('button', { name: 'View unavailable items' }));
+    expect(screen.getByRole('dialog')).toBeInTheDocument();
   });
 
   it('stops delivery quote refresh loop and shows stock error when delivery selection returns 409 insufficient stock', async () => {
@@ -2603,5 +2622,130 @@ describe('Checkout M5 sequencing and recovery', () => {
     expect(screen.queryByText(/Delivery options changed/i)).not.toBeInTheDocument();
     expect(mocks.createCheckoutEstimate).toHaveBeenCalledTimes(1);
     expect(mocks.cancelOrder).toHaveBeenCalledTimes(1);
+  });
+
+  it('stops delivery quote refresh loop and flags unavailable items for structured 409 insufficient_stock code', async () => {
+    mocks.getShippingProviderSettings.mockResolvedValue({ provider: 'shipbubble', checkout_estimates_required: true });
+    mocks.selectCheckoutEstimateOption.mockRejectedValueOnce({
+      isAxiosError: true,
+      response: {
+        status: 409,
+        data: { detail: { code: 'insufficient_stock', message: 'Reworded conflict' } },
+      },
+    });
+
+    render(<MemoryRouter initialEntries={['/checkout']}><CheckoutTestRoutes /></MemoryRouter>);
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Continue' })).toBeEnabled());
+    fireEvent.click(screen.getByRole('button', { name: 'Continue' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Calculate live courier rates' }));
+    const selectBtn = await screen.findByRole('button', { name: 'Select Standard delivery' });
+
+    mocks.validateCartItemsWithServer.mockResolvedValue({
+      is_valid: false,
+      items: [
+        {
+          product_id: 'prod-1',
+          variant_id: 'var-1',
+          product_title: 'Kester Club Tee',
+          requested_quantity: 1,
+          available_stock: 0,
+          is_in_stock: false,
+          made_to_order: false,
+          status: 'out_of_stock',
+          message: 'Kester Club Tee is out of stock.',
+        },
+      ],
+      errors: ['Kester Club Tee is out of stock.'],
+    });
+    fireEvent.click(selectBtn);
+
+    await waitFor(() => {
+      expect(screen.getByText(/out of stock or no longer available/i)).toBeInTheDocument();
+    });
+    expect(await screen.findByText('Kester Club Tee is out of stock.')).toBeInTheDocument();
+    expect(screen.queryByText(/Delivery options changed/i)).not.toBeInTheDocument();
+    expect(mocks.createCheckoutEstimate).toHaveBeenCalledTimes(1);
+    expect(mocks.cancelOrder).toHaveBeenCalledTimes(1);
+  });
+
+  it('verifies abandoned Paystack payment on modal close when release_on_payment_close is enabled', async () => {
+    mocks.getPublicCheckoutHoldSettings.mockResolvedValue({
+      reservation_ttl_minutes: 10,
+      authorization_grace_minutes: 2,
+      release_on_payment_close: true,
+    });
+    mockGuestCapability('release-on-close-capability');
+    mocks.verifyPayment.mockResolvedValueOnce({
+      status: true,
+      message: 'Payment verification successful',
+      data: { status: 'abandoned', reference: 'canonical-ref' },
+    });
+
+    const { getConfig } = await openEnforcedPaystack();
+    getConfig().onClose();
+
+    await waitFor(() => {
+      expect(mocks.verifyPayment).toHaveBeenCalledWith({
+        reference: 'canonical-ref',
+        payment_gateway: 'paystack',
+      });
+    });
+    expect(await screen.findByRole('button', { name: 'Retry payment' })).toBeInTheDocument();
+  });
+
+  it('discards superseded/cancelled order and opens stock modal when initializePayment returns 400 Order has been cancelled', async () => {
+    const alertSpy = vi.spyOn(window, 'alert').mockImplementation(() => {});
+    mocks.initializePayment.mockRejectedValueOnce({
+      response: { status: 400, data: { detail: 'Order has been cancelled' } },
+    });
+
+    await reachPaymentStep(false);
+    const selectDelivery = screen.queryByRole('button', { name: 'Select Standard delivery' });
+    if (selectDelivery) {
+      fireEvent.click(selectDelivery);
+    }
+
+    mocks.validateCartItemsWithServer.mockResolvedValue({
+      is_valid: false,
+      items: [{
+        product_id: 'product-1',
+        variant_id: null,
+        product_title: 'SOMA-29 QA Last Unit Item',
+        requested_quantity: 1,
+        available_stock: 0,
+        is_in_stock: false,
+        made_to_order: false,
+        status: 'out_of_stock',
+        message: 'SOMA-29 QA Last Unit Item is out of stock.',
+      }],
+      errors: ['SOMA-29 QA Last Unit Item is out of stock.'],
+    });
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Continue to payment' }));
+
+    const dialog = await screen.findByRole('dialog');
+    expect(dialog).toBeInTheDocument();
+    expect(screen.getByText('SOMA-29 QA Last Unit Item is out of stock.')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Retry payment' })).not.toBeInTheDocument();
+    expect(alertSpy).not.toHaveBeenCalledWith('Order has been cancelled');
+  });
+
+  it('discards dead order and opens stock modal when initializePayment returns 409 insufficient stock for payment retry', async () => {
+    mocks.initializePayment.mockRejectedValueOnce({
+      response: { status: 409, data: { detail: 'insufficient stock for payment retry' } },
+    });
+
+    await reachPaymentStep(false);
+    const selectDelivery = screen.queryByRole('button', { name: 'Select Standard delivery' });
+    if (selectDelivery) {
+      fireEvent.click(selectDelivery);
+    }
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Continue to payment' }));
+
+    const dialog = await screen.findByRole('dialog');
+    expect(dialog).toBeInTheDocument();
+    expect(screen.getByText(/out of stock or no longer available/i)).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Retry payment' })).not.toBeInTheDocument();
   });
 });

@@ -39,7 +39,7 @@ describe('designer discovery', () => {
     const ready=readyDesigners([...list, designer('x','',{logo_url:null}), designer('y','No Image',{logo_url:null})]);
     expect(ready).toHaveLength(4);
     expect(ready.some(d => d.id === 'k')).toBe(true);
-    expect(featuredDesigners([...ready,designer('f','Featured',{is_featured_storefront:true})]).map(d=>d.id)).toEqual(['f']);
+    expect(featuredDesigners([...ready,designer('f','Featured',{is_featured_storefront:true})]).map(d=>d.id)).toEqual(['f','n','a','k']);
   });
   it('renders Featured Designers section and Designers A–Z directory cards with Kester Club search and K filter', async () => {
     vi.mocked(designerService.listDesigners).mockResolvedValue(list);
@@ -51,18 +51,18 @@ describe('designer discovery', () => {
     expect(within(directoryRegion).getAllByRole('link')).toHaveLength(4);
 
     fireEvent.change(screen.getByRole('searchbox'), { target: { value: 'Kester Club' } });
-    expect(screen.getByRole('heading', { name: 'Results for “Kester Club”' })).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: '1 designer matches “Kester Club”' })).toBeInTheDocument();
     expect(within(directoryRegion).getByRole('link', { name: /Kester Club/i })).toHaveAttribute('href', '/designers/k');
 
     fireEvent.click(screen.getByRole('button', { name: 'Clear designer search' }));
     fireEvent.click(screen.getByRole('button', { name: 'K' }));
-    expect(screen.getByRole('heading', { name: 'Designers: K' })).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: 'Designers beginning with K' })).toBeInTheDocument();
     expect(within(directoryRegion).getByRole('link', { name: /Kester Club/i })).toHaveAttribute('href', '/designers/k');
   });
   it('restores search from URL and clears it through alphabetical navigation', async () => {
     vi.mocked(designerService.listDesigners).mockResolvedValue(list);
     directory('/designers?q=leme');
-    expect(await screen.findByRole('heading',{name:'Results for “leme”'})).toBeInTheDocument();
+    expect(await screen.findByRole('heading',{name:'1 designer matches “leme”'})).toBeInTheDocument();
     const results=screen.getByRole('region',{name:'Designers A–Z'});
     expect(within(results).getAllByRole('link')).toHaveLength(1);
     expect(within(results).getByRole('link')).toHaveAttribute('href','/designers/l');
@@ -75,7 +75,28 @@ describe('designer discovery', () => {
     directory('/designers?q=missing');
     fireEvent.click(await screen.findByRole('button',{name:'Try again'}));
     expect(await screen.findByRole('heading',{name:'No designers found'})).toBeInTheDocument();
-    fireEvent.click(screen.getByRole('button',{name:'Browse all designers'}));
+    fireEvent.click(screen.getByRole('button',{name:'Clear search'}));
+    expect(screen.getByRole('heading',{name:'All designers'})).toBeInTheDocument();
+  });
+});
+
+describe('featured selection', () => {
+  it('leads with curated designers and fills the four-card row alphabetically, preferring stocked catalogues', () => {
+    const items = [
+      designer('z','Zed',{published_products_count:3}),
+      designer('b','Bee',{published_products_count:0}),
+      designer('c','Cee',{is_featured_storefront:true}),
+      designer('d','Dee',{published_products_count:1}),
+      designer('e','Eee',{published_products_count:2}),
+    ];
+    expect(featuredDesigners(items).map(d=>d.id)).toEqual(['c','z','d','e']);
+    expect(featuredDesigners(items.slice(0,2)).map(d=>d.id)).toEqual(['z','b']);
+  });
+  it('shows the approved no-match copy with a clear-search reset', async () => {
+    vi.mocked(designerService.listDesigners).mockResolvedValue(list);
+    directory('/designers?q=zora');
+    expect(await screen.findByText('We couldn’t find a designer named “zora”. Try another name or browse all designers.')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button',{name:'Clear search'}));
     expect(screen.getByRole('heading',{name:'All designers'})).toBeInTheDocument();
   });
 });
@@ -85,8 +106,9 @@ describe('public storefront eligibility', () => {
     vi.mocked(designerService.listDesigners).mockResolvedValue(list); storefront('k');
     expect(await screen.findByTestId('vendor-products')).toHaveTextContent('k');
     expect(screen.getByRole('heading', { name: 'Kester Club' })).toBeInTheDocument();
-    expect(screen.getByText('Contemporary Lagos menswear.')).toBeInTheDocument();
-    expect(screen.getByRole('link', { name: '← All designers' })).toHaveAttribute('href', '/designers');
+    // Storefronts intentionally omit the brand description (client direction, matching AMUJ).
+    expect(screen.queryByText('Contemporary Lagos menswear.')).not.toBeInTheDocument();
+    expect(screen.getByRole('link', { name: 'All designers' })).toHaveAttribute('href', '/designers');
   });
   it('does not render products for an unavailable vendor', async () => {
     vi.mocked(designerService.listDesigners).mockResolvedValue(list); storefront('private-vendor');

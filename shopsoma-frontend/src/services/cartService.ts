@@ -462,11 +462,11 @@ export class CartService {
     }
   }
 
-  static async addItemToServer(productId: string, variantId: string, quantity: number): Promise<void> {
+  static async addItemToServer(productId: string, variantId: string, quantity: number): Promise<any> {
     // Always send to server for both authenticated users AND guests (using session_id)
     // Guests need server cart for merge after login
     try {
-      await this.request({
+      const data = await this.request({
         method: 'post',
         url: '/cart/items',
         data: {
@@ -476,6 +476,7 @@ export class CartService {
         },
       });
       console.info('[CartAPI] Added to server cart:', productId, variantId, 'qty', quantity);
+      return data;
     } catch (error) {
       console.error('[CartAPI] Failed to add item to server cart:', error);
       throw error;

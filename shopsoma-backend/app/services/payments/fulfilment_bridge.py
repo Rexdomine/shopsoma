@@ -41,6 +41,7 @@ from app.models.stock_payment_persistence import (
     PaymentAttemptReservation,
     StockReservation,
 )
+from app.services.checkout.hold_settings import get_checkout_hold_settings
 from app.services.checkout.outbox import enqueue_checkout_event
 from app.services.checkout.estimates import order_snapshot, reload_checkout_order
 from app.services.checkout.reservations import (
@@ -386,6 +387,7 @@ async def _ensure_bridge_attempt(
     ):
         raise PaymentBridgeError("payment attempt subject binding is invalid")
 
+    hold_settings = await get_checkout_hold_settings(session)
     attempt_id = uuid.uuid4()
     attempt = PaymentAttempt(
         id=attempt_id,
@@ -399,6 +401,8 @@ async def _ensure_bridge_attempt(
         currency=locked_order.currency,
         provider=provider,
         provider_reference=f"shopsoma-{provider}-{attempt_id.hex}",
+        payment_window_seconds=hold_settings.reservation_ttl_minutes * 60,
+        authorization_grace_seconds=hold_settings.authorization_grace_minutes * 60,
         supersedes_attempt_id=attempt.id if attempt is not None else None,
         source_command="initialize_checkout_payment",
         idempotency_key=f"initialize:{locked_order.id}:{provider}:{attempt_id.hex}",
@@ -511,6 +515,10 @@ async def _ensure_domestic_bridge_attempt(
     if len(set(reservation_ids)) != len(reservation_ids):
         raise PaymentBridgeError("payment attempt subject binding is invalid")
 
+    hold_settings = await get_checkout_hold_settings(session)
+    reservation_ttl_seconds = hold_settings.reservation_ttl_minutes * 60
+    authorization_grace_seconds = hold_settings.authorization_grace_minutes * 60
+
     if predecessor is not None and predecessor.state in {"failed", "expired"}:
         predecessor_reservation_ids = list(
             await session.scalars(
@@ -606,8 +614,8 @@ async def _ensure_domestic_bridge_attempt(
                     unit_price=item.unit_price,
                     line_amount=item.subtotal,
                     currency=item.currency,
-                    ttl_seconds=1800,
-                    expires_at=database_now + timedelta(seconds=1800),
+                    ttl_seconds=reservation_ttl_seconds,
+                    expires_at=database_now + timedelta(seconds=reservation_ttl_seconds),
                     state="active",
                     source_command="retry_checkout_payment",
                     idempotency_key=f"retry:{predecessor.id}:{item.id}",
@@ -651,6 +659,8 @@ async def _ensure_domestic_bridge_attempt(
         currency=order.currency,
         provider=provider,
         provider_reference=f"shopsoma-{provider}-{attempt_id.hex}",
+        payment_window_seconds=reservation_ttl_seconds,
+        authorization_grace_seconds=authorization_grace_seconds,
         supersedes_attempt_id=predecessor.id if predecessor is not None else None,
         source_command="initialize_checkout_payment",
         idempotency_key=f"initialize:{order.id}:{provider}:{attempt_id.hex}",

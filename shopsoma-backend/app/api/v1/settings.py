@@ -49,6 +49,8 @@ from app.api.dependencies import require_admin
 from app.services.commission import COMMISSION_SETTING_KEY, DEFAULT_COMMISSION_RATE, normalize_commission_rate
 
 from app.services.commerce_features import get_commerce_features
+from app.schemas.app_setting import CheckoutHoldSettings, CheckoutHoldSettingsUpdate
+from app.services.checkout.hold_settings import get_checkout_hold_settings, save_checkout_hold_settings
 
 from app.services.shipping.provider_settings import (
     _dhl_env_ready,
@@ -781,3 +783,39 @@ async def update_shipping_box_presets(
     presets = await save_box_presets(db, payload, actor_id=current_user.id)
     await db.commit()
     return ShippingBoxPresetsResponse(presets=presets, is_default=False)
+
+
+@router.get("/public/checkout-hold", response_model=CheckoutHoldSettings)
+async def get_public_checkout_hold_settings(
+    db: AsyncSession = Depends(get_db),
+) -> CheckoutHoldSettings:
+    """Return effective checkout stock hold timers and modal-close release policy."""
+    return await get_checkout_hold_settings(db)
+
+
+@router.get("/admin/checkout-hold", response_model=CheckoutHoldSettings)
+async def get_admin_checkout_hold_settings(
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(require_admin),
+) -> CheckoutHoldSettings:
+    """Return saved checkout stock hold settings (admin only)."""
+    _ = current_user
+    return await get_checkout_hold_settings(db)
+
+
+@router.put("/admin/checkout-hold", response_model=CheckoutHoldSettings)
+async def update_admin_checkout_hold_settings(
+    payload: CheckoutHoldSettingsUpdate,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(require_admin),
+) -> CheckoutHoldSettings:
+    """Update checkout stock hold duration and Paystack modal-close policy (admin only)."""
+    saved = await save_checkout_hold_settings(db, payload)
+    logger.info(
+        "[Settings] Admin %s updated checkout hold settings: ttl=%sm grace=%sm release_on_close=%s",
+        current_user.email,
+        saved.reservation_ttl_minutes,
+        saved.authorization_grace_minutes,
+        saved.release_on_payment_close,
+    )
+    return saved

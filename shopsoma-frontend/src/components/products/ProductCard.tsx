@@ -133,19 +133,38 @@ export default function ProductCard({
     };
   };
 
+  const activeVariant = resolveVariant();
+  const isOutOfStock =
+    !product.made_to_order &&
+    (activeVariant.is_available === false || (activeVariant.stock ?? 0) <= 0);
+
   const handleAddToBag = (e: React.MouseEvent) => {
     e.preventDefault();
     e.stopPropagation();
 
-    const variant = resolveVariant();
-    addItem({
+    if (isOutOfStock) return;
+
+    const variant = activeVariant;
+    const result = addItem({
       product,
       variant,
       quantity: 1,
     });
 
-    setIsAdded(true);
-    setTimeout(() => setIsAdded(false), 1800);
+    const markAdded = () => {
+      setIsAdded(true);
+      setTimeout(() => setIsAdded(false), 1800);
+    };
+
+    if (result && typeof (result as Promise<boolean>).then === 'function') {
+      void (result as Promise<boolean>).then((added) => {
+        if (added !== false) {
+          markAdded();
+        }
+      });
+    } else if ((result as unknown) !== false) {
+      markAdded();
+    }
   };
 
   const handleToggleFavorite = (e: React.MouseEvent) => {
@@ -320,14 +339,17 @@ export default function ProductCard({
             {/* Add to Bag Button */}
             <button
               type="button"
+              disabled={isOutOfStock}
               onClick={handleAddToBag}
               className={`w-full py-2.5 text-[10px] font-serif uppercase tracking-[0.15em] transition-colors ${
-                isAdded
-                  ? 'bg-green-700 text-white font-semibold'
-                  : 'bg-primary text-white hover:bg-primary-dark'
+                isOutOfStock
+                  ? 'bg-gray-300 text-gray-600 cursor-not-allowed'
+                  : isAdded
+                    ? 'bg-green-700 text-white font-semibold'
+                    : 'bg-primary text-white hover:bg-primary-dark'
               }`}
             >
-              {isAdded ? 'ADDED TO BAG ✓' : 'ADD TO BAG'}
+              {isOutOfStock ? 'OUT OF STOCK' : isAdded ? 'ADDED TO BAG ✓' : 'ADD TO BAG'}
             </button>
           </div>
         </div>

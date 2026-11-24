@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState, useRef, type SVGProps } from 'react';
 import { Link, useLocation, useNavigate, useParams } from 'react-router-dom';
-import { ArrowLeft, Bookmark, Minus, Plus, X } from 'lucide-react';
+import { ArrowLeft, Bookmark, ChevronRight, Minus, Plus, X } from 'lucide-react';
 import { designerPath } from '../designers/designerUtils';
 import type { Product, ProductVariant, SizeGuide } from '../../types';
 import { productService } from '../../services/productService';
@@ -94,6 +94,7 @@ export default function ProductDetail() {
   const [sizeGuideOpen, setSizeGuideOpen] = useState(false);
   const [sizeMenuOpen, setSizeMenuOpen] = useState(false);
   const [bagModalOpen, setBagModalOpen] = useState(false);
+  const [isAddingToBag, setIsAddingToBag] = useState(false);
   const [addToBagError, setAddToBagError] = useState<string | null>(null);
   const [addedVariant, setAddedVariant] = useState<ProductVariant | null>(null);
   const sizeDropdownRef = useRef<HTMLDivElement>(null);
@@ -514,7 +515,8 @@ export default function ProductDetail() {
     }
   };
 
-  const handleAddToBag = () => {
+  const handleAddToBag = async () => {
+    if (isAddingToBag) return;
     setAddToBagError(null);
 
     if (missingSelection) {
@@ -571,13 +573,23 @@ export default function ProductDetail() {
       return;
     }
 
+    setIsAddingToBag(true);
     try {
-      // Add to cart using Zustand store
-      addItem({
+      // Wait for server acceptance before confirming the item in bag
+      const added = await addItem({
         product,
         variant: selectedVariant,
         quantity,
       });
+
+      if (added === false) {
+        const storeState =
+          typeof (useCartStore as unknown as { getState?: () => { error?: string | null } }).getState === 'function'
+            ? useCartStore.getState()
+            : undefined;
+        setAddToBagError(storeState?.error || cartError || 'Unable to add to bag. Please try again.');
+        return;
+      }
 
       setAddedVariant(selectedVariant);
       setBagModalOpen(true);
@@ -588,6 +600,8 @@ export default function ProductDetail() {
         err,
       });
       setAddToBagError('Unable to add to bag. Check console logs for details.');
+    } finally {
+      setIsAddingToBag(false);
     }
   };
 
@@ -906,9 +920,10 @@ export default function ProductDetail() {
                 product.vendor_id ? (
                   <Link
                     to={designerPath(product.vendor_id)}
-                    className="font-ui text-sm uppercase tracking-[0.25em] text-primary underline underline-offset-4"
+                    className="group inline-flex min-h-11 items-center gap-1.5 border-b border-primary/40 pr-10 font-ui text-xs sm:text-sm uppercase tracking-[0.25em] text-primary hover:border-primary focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-primary"
                   >
                     {product.vendor_name}
+                    <ChevronRight aria-hidden="true" className="h-3.5 w-3.5 transition-transform group-hover:translate-x-0.5" />
                   </Link>
                 ) : (
                   <p className="font-ui text-sm uppercase tracking-[0.25em] text-primary/60">
@@ -1142,15 +1157,15 @@ export default function ProductDetail() {
 
             <button
               type="button"
-              disabled={missingSelection || isOutOfStock || quantity < 1}
+              disabled={missingSelection || isOutOfStock || quantity < 1 || isAddingToBag}
               className={`w-full py-4 font-ui text-sm uppercase tracking-[0.2em] transition-colors ${
-                missingSelection || isOutOfStock || quantity < 1
+                missingSelection || isOutOfStock || quantity < 1 || isAddingToBag
                   ? 'cursor-not-allowed bg-primary/15 text-primary/45'
                   : 'bg-primary text-white hover:bg-primary-dark'
               }`}
               onClick={handleAddToBag}
             >
-              {isOutOfStock ? 'Out of Stock' : 'Add to Bag'}
+              {isOutOfStock ? 'Out of Stock' : isAddingToBag ? 'Adding...' : 'Add to Bag'}
             </button>
             {addToBagError && (
               <p className="text-sm text-red-600" role="alert">

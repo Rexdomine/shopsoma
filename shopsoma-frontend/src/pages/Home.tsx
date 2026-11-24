@@ -118,19 +118,38 @@ function HomeProductCard({
     return variants[0];
   };
 
+  const activeVariant = resolveVariant();
+  const isOutOfStock =
+    !product.made_to_order &&
+    (activeVariant.is_available === false || (activeVariant.stock ?? 0) <= 0);
+
   const handleAddToBag = (e: React.MouseEvent) => {
     e.preventDefault();
     e.stopPropagation();
 
-    const variant = resolveVariant();
-    addItem({
+    if (isOutOfStock) return;
+
+    const variant = activeVariant;
+    const result = addItem({
       product,
       variant,
       quantity: 1,
     });
 
-    setIsAdded(true);
-    setTimeout(() => setIsAdded(false), 1800);
+    const markAdded = () => {
+      setIsAdded(true);
+      setTimeout(() => setIsAdded(false), 1800);
+    };
+
+    if (result && typeof (result as Promise<boolean>).then === 'function') {
+      void (result as Promise<boolean>).then((added) => {
+        if (added !== false) {
+          markAdded();
+        }
+      });
+    } else if ((result as unknown) !== false) {
+      markAdded();
+    }
   };
 
   const handleImageError = (
@@ -257,14 +276,17 @@ function HomeProductCard({
 
               <button
                 type="button"
+                disabled={isOutOfStock}
                 onClick={handleAddToBag}
                 className={`w-full text-xs font-ui tracking-[0.2em] py-2.5 uppercase transition-colors ${
-                  isAdded
-                    ? 'bg-[#0f4e45] text-white font-medium'
-                    : 'bg-primary text-white hover:bg-primary-dark'
+                  isOutOfStock
+                    ? 'bg-gray-300 text-gray-600 cursor-not-allowed'
+                    : isAdded
+                      ? 'bg-[#0f4e45] text-white font-medium'
+                      : 'bg-primary text-white hover:bg-primary-dark'
                 }`}
               >
-                {isAdded ? 'Added to Bag ✓' : 'Add to Bag'}
+                {isOutOfStock ? 'Out of Stock' : isAdded ? 'Added to Bag ✓' : 'Add to Bag'}
               </button>
             </div>
           </div>

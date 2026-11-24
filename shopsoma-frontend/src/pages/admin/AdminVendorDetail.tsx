@@ -3,6 +3,7 @@ import { useParams, useNavigate } from 'react-router-dom';
 import { ArrowLeft, Store, Mail, Phone, MapPin, Calendar, Package, ShoppingBag, TrendingUp, CheckCircle, AlertCircle, Clock } from 'lucide-react';
 import AdminSidebar from '../../components/admin/AdminSidebar';
 import { adminService } from '../../services/adminService';
+import AdminVendorBrandControls from '../../components/admin/AdminVendorBrandControls';
 
 export default function AdminVendorDetail() {
   const { id } = useParams<{ id: string }>();
@@ -208,6 +209,13 @@ export default function AdminVendorDetail() {
             </div>
           </div>
         </div>
+
+        {/* Storefront & Brand (designer identity shown to shoppers) */}
+        <AdminVendorBrandControls
+          vendor={vendor}
+          onUpdated={(changes) => setVendor((current: any) => (current ? { ...current, ...changes } : current))}
+          onMessage={showMessage}
+        />
 
         {/* Main Content Grid */}
         <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
