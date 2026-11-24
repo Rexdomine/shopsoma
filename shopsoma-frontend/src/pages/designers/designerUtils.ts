@@ -16,7 +16,16 @@ export const filterDesigners = (items: Designer[], query: string, letter: string
   const name = normalizeName(d.business_name);
   return query.trim() ? name.includes(normalizeName(query)) : letter === 'All' || (letter === '#' ? !/^[a-z]/.test(name) : name.startsWith(letter.toLowerCase()));
 });
+export const FEATURED_DESIGNER_LIMIT = 4;
+/**
+ * Admin-curated designers lead. Remaining slots are filled alphabetically,
+ * preferring designers with a published catalogue, so the row matches the
+ * approved four-card layout without inventing or duplicating brands.
+ */
 export const featuredDesigners = (items: Designer[]) => {
   const curated = items.filter(d => d.is_featured_storefront);
-  return (curated.length ? curated : items).slice(0,4);
+  const rest = items.filter(d => !d.is_featured_storefront);
+  const stocked = rest.filter(d => (d.published_products_count ?? 0) > 0);
+  const unstocked = rest.filter(d => !((d.published_products_count ?? 0) > 0));
+  return [...curated, ...stocked, ...unstocked].slice(0, FEATURED_DESIGNER_LIMIT);
 };
