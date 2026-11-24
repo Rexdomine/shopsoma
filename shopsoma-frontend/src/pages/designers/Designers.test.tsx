@@ -110,6 +110,23 @@ describe('public storefront eligibility', () => {
     expect(screen.queryByText('Contemporary Lagos menswear.')).not.toBeInTheDocument();
     expect(screen.getByRole('link', { name: 'All designers' })).toHaveAttribute('href', '/designers');
   });
+  it('fits the full storefront campaign image over a blurred fill instead of cropping it', async () => {
+    vi.mocked(designerService.listDesigners).mockResolvedValue(list);
+    const { container } = storefront('k');
+    await screen.findByTestId('vendor-products');
+    const hero = container.querySelector('.designer-hero');
+    expect(hero).toHaveClass('designer-hero-storefront');
+    expect(hero?.querySelector('img.designer-hero-photo')?.getAttribute('src')).toContain('kester-campaign.jpg');
+    expect(hero?.querySelector('img.designer-hero-backdrop')).toHaveAttribute('aria-hidden', 'true');
+  });
+  it('keeps the curated directory banner full-bleed', async () => {
+    vi.mocked(designerService.listDesigners).mockResolvedValue(list);
+    const { container } = directory();
+    await screen.findByRole('region', { name: 'Featured Designers' });
+    const hero = container.querySelector('.designer-hero');
+    expect(hero).not.toHaveClass('designer-hero-storefront');
+    expect(hero?.querySelector('img.designer-hero-backdrop')).toBeNull();
+  });
   it('does not render products for an unavailable vendor', async () => {
     vi.mocked(designerService.listDesigners).mockResolvedValue(list); storefront('private-vendor');
     expect(await screen.findByRole('heading',{name:'Designer unavailable'})).toBeInTheDocument();
